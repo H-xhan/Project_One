@@ -3,29 +3,25 @@ using UnityEngine;
 
 public class LobbyUIAutoToggle : MonoBehaviour
 {
-    [Tooltip("Host/Join/JoinCode µî ·Îºñ UI ¹­À½")]
+    [Tooltip("Host/Join/JoinCode UI ë¬¶ìŒ")]
     [SerializeField] private GameObject lobbyPanel;
 
-    [Tooltip("Ready UI ¹­À½")]
+    [Tooltip("Ready UI ë¬¶ìŒ(HudPanel ë“±)")]
     [SerializeField] private GameObject readyPanel;
 
-    [Tooltip("¶ó¿îµå »óÅÂ ¸Å´ÏÀú(ºñ¿ì¸é ÀÚµ¿ Å½»ö)")]
+    [Tooltip("ê²Œì„ ìƒíƒœ ë§¤ë‹ˆì €(ë¹„ìš°ë©´ ìë™ íƒìƒ‰)")]
     [SerializeField] private GameStateManager gameStateManager;
 
-    [Tooltip("Ready ½Ã½ºÅÛ(ºñ¿ì¸é ÀÚµ¿ Å½»ö)")]
+    [Tooltip("Ready ì‹œìŠ¤í…œ(ë¹„ìš°ë©´ ìë™ íƒìƒ‰)")]
     [SerializeField] private ReadySystem readySystem;
 
-    [Tooltip("ReadyPanelÀ» º¸¿©ÁÙ ÃÖ¼Ò ÀÎ¿ø")]
+    [Tooltip("ReadyPanelì„ ë³´ì—¬ì¤„ ìµœì†Œ ì¸ì›")]
     [SerializeField] private int minPlayersToShowReady = 2;
 
     private void Awake()
     {
-        if (gameStateManager == null)
-            gameStateManager = FindFirstObjectByType<GameStateManager>();
-
-        if (readySystem == null)
-            readySystem = FindFirstObjectByType<ReadySystem>();
-
+        if (gameStateManager == null) gameStateManager = FindFirstObjectByType<GameStateManager>();
+        if (readySystem == null) readySystem = FindFirstObjectByType<ReadySystem>();
     }
 
     private void Update()
@@ -33,24 +29,28 @@ public class LobbyUIAutoToggle : MonoBehaviour
         var nm = NetworkManager.Singleton;
 
         bool connected = nm != null && nm.IsConnectedClient;
-
-        // ¿¬°áµÇ¸é ·Îºñ UI ÀÚµ¿ ¼û±è
-        if (lobbyPanel != null)
-            lobbyPanel.SetActive(!connected);
-
-        if (readyPanel == null || gameStateManager == null || readySystem == null)
-            return;
+        bool isHost = nm != null && nm.IsHost;
 
         if (!connected)
         {
-            readyPanel.SetActive(false);
+            if (lobbyPanel != null) lobbyPanel.SetActive(true);
+            if (readyPanel != null) readyPanel.SetActive(false);
+            return;
+        }
+
+        if (readyPanel == null || gameStateManager == null || readySystem == null)
+        {
+            if (lobbyPanel != null) lobbyPanel.SetActive(false);
             return;
         }
 
         bool isLobby = gameStateManager.GetState() == GameStateManager.GameState.Lobby;
-        bool enoughPlayers = readySystem.GetConnectedClientCount() >= minPlayersToShowReady;
+        int clientCount = readySystem.GetConnectedClientCount();
+        bool enoughPlayers = clientCount >= minPlayersToShowReady;
 
-        // Lobby »óÅÂ + ÀÎ¿ø 2¸í ÀÌ»óÀÏ ¶§¸¸ Ready UI Ç¥½Ã
+        bool showLobby = !connected || (isHost && isLobby && !enoughPlayers);
+        if (lobbyPanel != null) lobbyPanel.SetActive(showLobby);
+
         readyPanel.SetActive(isLobby && enoughPlayers);
     }
 }

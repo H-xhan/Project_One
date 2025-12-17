@@ -1928,6 +1928,7 @@ GameObject:
   - component: {fileID: 1478549240}
   - component: {fileID: 1478549241}
   - component: {fileID: 1478549242}
+  - component: {fileID: 1478549243}
   m_Layer: 0
   m_Name: NetworkSystems
   m_TagString: Untagged
@@ -2014,6 +2015,22 @@ MonoBehaviour:
     m_InternalValue: 0
   StateTimer:
     m_InternalValue: 0
+--- !u!114 &1478549243
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1478549238}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: b2d4f3b7e6b69184eae172dde829856e, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  ShowTopMostFoldoutHeaderGroup: 1
+  gameStateManager: {fileID: 1478549242}
+  lobbySceneName: Lobby
+  gameSceneName: GamePlay
 --- !u!1 &1661391600
 GameObject:
   m_ObjectHideFlags: 0
