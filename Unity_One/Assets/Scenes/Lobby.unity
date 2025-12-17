@@ -375,8 +375,6 @@ MonoBehaviour:
   m_EditorClassIdentifier: 
   readySystem: {fileID: 1478549241}
   gameStateManager: {fileID: 1478549242}
-  stateText: {fileID: 316919550}
-  timerText: {fileID: 687598196}
   readyText: {fileID: 372378546}
   readyButton: {fileID: 2110143003}
 --- !u!1 &266651576
@@ -671,7 +669,7 @@ GameObject:
   - component: {fileID: 312031326}
   m_Layer: 0
   m_Name: SpawnPoint_0
-  m_TagString: Untagged
+  m_TagString: LobbySpawnPoint
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
   m_StaticEditorFlags: 0
@@ -1989,7 +1987,7 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: 
   ShowTopMostFoldoutHeaderGroup: 1
-  gameStateManager: {fileID: 1478549242}
+  minPlayersToStart: 2
 --- !u!114 &1478549242
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -2008,9 +2006,7 @@ MonoBehaviour:
   playSeconds: 120
   resultsSeconds: 6
   autoReturnToLobby: 1
-  spawnPoints:
-  - {fileID: 312031326}
-  - {fileID: 1661391601}
+  spawnPointTag: SpawnPoint
   StateValue:
     m_InternalValue: 0
   StateTimer:
@@ -2042,7 +2038,7 @@ GameObject:
   - component: {fileID: 1661391601}
   m_Layer: 0
   m_Name: SpawnPoint_1
-  m_TagString: Untagged
+  m_TagString: LobbySpawnPoint
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
   m_StaticEditorFlags: 0
