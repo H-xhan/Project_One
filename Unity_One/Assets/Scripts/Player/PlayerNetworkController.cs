@@ -24,4 +24,10 @@ public class PlayerNetworkController : NetworkBehaviour
         Vector3 dir = new Vector3(move.x, 0f, move.y).normalized;
         transform.position += dir * moveSpeed * Time.deltaTime;
     }
+
+    public override void OnNetworkSpawn()
+    {
+        Debug.Log($"[Player] IsOwner={IsOwner} OwnerClientId={OwnerClientId} LocalClientId={NetworkManager.Singleton.LocalClientId}");
+    }
+
 }
