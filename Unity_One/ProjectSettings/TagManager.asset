@@ -6,11 +6,12 @@ TagManager:
   tags:
   - SpawnPoint
   - LobbySpawnPoint
+  - Ground
   layers:
   - Default
   - TransparentFX
   - Ignore Raycast
-  - 
+  - Ground
   - Water
   - UI
   - 
