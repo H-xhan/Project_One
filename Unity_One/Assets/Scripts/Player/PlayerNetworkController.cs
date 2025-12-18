@@ -2,104 +2,199 @@ using Unity.Netcode;
 using UnityEngine;
 using UnityEngine.InputSystem;
 
+[RequireComponent(typeof(CharacterController))]
 public class PlayerNetworkController : NetworkBehaviour
 {
-    [Tooltip("이동 속도")]
-    [SerializeField] private float moveSpeed = 4.5f;
+    [Header("Move")]
+    [Tooltip("걷기 속도")]
+    [SerializeField] private float walkSpeed = 4.5f;
 
-    [Tooltip("회전 감도(마우스 X)")]
-    [SerializeField] private float yawSensitivity = 5f;
+    [Tooltip("달리기 속도(Shift)")]
+    [SerializeField] private float sprintSpeed = 7.0f;
 
-    [Tooltip("점프 높이(미터)")]
+    [Header("Rotate")]
+    [Tooltip("Yaw 회전 감도(마우스 X)")]
+    [SerializeField] private float yawSensitivity = 180f;
+
+    [Header("Jump/Gravity")]
+    [Tooltip("점프 높이")]
     [SerializeField] private float jumpHeight = 1.4f;
 
-    [Tooltip("중력(양수)")]
+    [Tooltip("중력(양수로 두세요)")]
     [SerializeField] private float gravity = 25f;
 
-    [Tooltip("지면에 붙어있게 만드는 하강 보정값")]
+    [Tooltip("지상에서 수직 속도 고정값(바닥 붙이기용, 음수 권장)")]
     [SerializeField] private float groundedStickVelocity = -2f;
+
+    [Tooltip("코요테 타임(땅 떠난 후 점프 허용 시간)")]
+    [SerializeField] private float coyoteTime = 0.12f;
+
+    [Tooltip("점프 버퍼(점프 입력 선입력 허용 시간)")]
+    [SerializeField] private float jumpBufferTime = 0.12f;
+
+    [Header("Animation")]
+    [Tooltip("애니메이션 드라이버(비우면 자동 탐색)")]
+    [SerializeField] private PlayerAnimDriver animDriver;
+
+    [Header("Cursor")]
+    [Tooltip("스폰 시 커서를 잠그고 숨김")]
+    [SerializeField] private bool lockCursorOnSpawn = true;
 
     private CharacterController _controller;
     private float _verticalVelocity;
-    private bool _missingControllerLogged;
+
+    private float _lastGroundedTime = -999f;
+    private float _lastJumpPressedTime = -999f;
+
+    private bool _cursorLocked;
 
     private void Awake()
     {
         _controller = GetComponent<CharacterController>();
+
+        if (animDriver == null)
+            animDriver = GetComponent<PlayerAnimDriver>();
     }
 
     public override void OnNetworkSpawn()
     {
-        Debug.Log($"[Player] IsOwner={IsOwner} OwnerClientId={OwnerClientId} LocalClientId={NetworkManager.Singleton.LocalClientId}");
+        if (!IsOwner) return;
 
-        if (IsOwner)
-        {
-            Cursor.lockState = CursorLockMode.Locked;
-            Cursor.visible = false;
-        }
+        if (lockCursorOnSpawn)
+            SetCursorLocked(true);
+    }
+
+    private void OnDisable()
+    {
+        if (!IsOwner) return;
+        SetCursorLocked(false);
     }
 
     private void Update()
     {
         if (!IsOwner) return;
 
-        if (_controller == null)
-        {
-            if (!_missingControllerLogged)
-            {
-                _missingControllerLogged = true;
-                Debug.LogError("[Player] CharacterController is missing on the same GameObject.");
-            }
-            return;
-        }
+        HandleCursorToggle();
 
-        RotateByMouse();
+        if (_cursorLocked)
+            RotateByMouseX();
 
-        Vector2 move = ReadMoveInput();
-        Move(move);
+        Vector2 moveInput = ReadMoveInput();
+        bool isSprinting = IsSprintHeld();
+
+        TickGroundedTimers();
+        TickJumpBuffer();
+
+        Move(moveInput, isSprinting);
+        TryConsumeJump();
+        ApplyGravityAndMove(moveInput, isSprinting);
+        PushAnim(moveInput, isSprinting);
     }
 
-    private void RotateByMouse()
+    private void HandleCursorToggle()
+    {
+        if (Keyboard.current == null) return;
+
+        if (Keyboard.current.escapeKey.wasPressedThisFrame)
+            SetCursorLocked(!_cursorLocked);
+    }
+
+    private void SetCursorLocked(bool locked)
+    {
+        _cursorLocked = locked;
+        Cursor.visible = !locked;
+        Cursor.lockState = locked ? CursorLockMode.Locked : CursorLockMode.None;
+    }
+
+    private void RotateByMouseX()
     {
         if (Mouse.current == null) return;
 
         float mouseX = Mouse.current.delta.ReadValue().x;
         float yaw = mouseX * yawSensitivity * Time.deltaTime;
-        transform.Rotate(0f, yaw, 0f, Space.World);
+        transform.Rotate(0f, yaw, 0f);
     }
 
     private Vector2 ReadMoveInput()
     {
-        Vector2 move = Vector2.zero;
+        if (Keyboard.current == null) return Vector2.zero;
 
-        if (Keyboard.current == null) return move;
+        float x = 0f;
+        float y = 0f;
 
-        if (Keyboard.current.wKey.isPressed) move.y += 1f;
-        if (Keyboard.current.sKey.isPressed) move.y -= 1f;
-        if (Keyboard.current.dKey.isPressed) move.x += 1f;
-        if (Keyboard.current.aKey.isPressed) move.x -= 1f;
+        if (Keyboard.current.aKey.isPressed) x -= 1f;
+        if (Keyboard.current.dKey.isPressed) x += 1f;
+        if (Keyboard.current.sKey.isPressed) y -= 1f;
+        if (Keyboard.current.wKey.isPressed) y += 1f;
 
-        return move;
+        Vector2 v = new Vector2(x, y);
+        return (v.sqrMagnitude > 1f) ? v.normalized : v;
     }
 
-    private void Move(Vector2 move)
+    private bool IsSprintHeld()
     {
-        bool grounded = _controller.isGrounded;
+        return Keyboard.current != null && Keyboard.current.leftShiftKey.isPressed;
+    }
 
-        if (grounded && _verticalVelocity < 0f)
+    private void TickGroundedTimers()
+    {
+        if (_controller.isGrounded)
+            _lastGroundedTime = Time.time;
+    }
+
+    private void TickJumpBuffer()
+    {
+        if (Keyboard.current == null) return;
+
+        if (Keyboard.current.spaceKey.wasPressedThisFrame)
+            _lastJumpPressedTime = Time.time;
+    }
+
+    private void Move(Vector2 moveInput, bool isSprinting)
+    {
+        // 수평 이동은 ApplyGravityAndMove에서 같이 처리함 (함수 분리용)
+    }
+
+    private void TryConsumeJump()
+    {
+        bool buffered = (Time.time - _lastJumpPressedTime) <= jumpBufferTime;
+        bool coyote = (Time.time - _lastGroundedTime) <= coyoteTime;
+
+        if (!buffered || !coyote) return;
+
+        _verticalVelocity = Mathf.Sqrt(jumpHeight * 2f * gravity);
+        _lastJumpPressedTime = -999f;
+        _lastGroundedTime = -999f;
+
+        if (animDriver != null)
+            animDriver.PlayJump();
+    }
+
+    private void ApplyGravityAndMove(Vector2 moveInput, bool isSprinting)
+    {
+        if (_controller.isGrounded && _verticalVelocity < 0f)
             _verticalVelocity = groundedStickVelocity;
-
-        if (Keyboard.current != null && Keyboard.current.spaceKey.wasPressedThisFrame && grounded)
-            _verticalVelocity = Mathf.Sqrt(2f * gravity * jumpHeight);
 
         _verticalVelocity -= gravity * Time.deltaTime;
 
-        Vector3 dir = (transform.right * move.x + transform.forward * move.y);
+        Vector3 dir = transform.right * moveInput.x + transform.forward * moveInput.y;
         if (dir.sqrMagnitude > 1f) dir.Normalize();
 
-        Vector3 motion = dir * moveSpeed;
+        float speed = isSprinting ? sprintSpeed : walkSpeed;
+
+        Vector3 motion = dir * speed;
         motion.y = _verticalVelocity;
 
         _controller.Move(motion * Time.deltaTime);
+    }
+
+    private void PushAnim(Vector2 moveInput, bool isSprinting)
+    {
+        if (animDriver == null) return;
+
+        float speed = isSprinting ? sprintSpeed : walkSpeed;
+        float planar = (new Vector3(moveInput.x, 0f, moveInput.y)).magnitude * speed;
+
+        animDriver.SetMoveSpeed(planar, sprintSpeed);
     }
 }

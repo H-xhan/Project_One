@@ -756,9 +756,11 @@ GameObject:
   - component: {fileID: 8661137204490242274}
   - component: {fileID: 1612439857751032971}
   - component: {fileID: 208083172126032556}
+  - component: {fileID: -7485135333025663362}
+  - component: {fileID: 5894038764773081013}
   - component: {fileID: -5573728191954269129}
   m_Layer: 0
-  m_Name: one
+  m_Name: Otter
   m_TagString: Untagged
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
@@ -791,14 +793,19 @@ Animator:
   m_GameObject: {fileID: 4175062438738205596}
   m_Enabled: 1
   m_Avatar: {fileID: 9000000, guid: 5e4b5b832c84b0c4abd45e420a47dd49, type: 3}
-  m_Controller: {fileID: 0}
+  m_Controller: {fileID: 9100000, guid: 4620f4ac30e4b2a449f66acb3c8fc1bf, type: 2}
   m_CullingMode: 1
   m_UpdateMode: 0
   m_ApplyRootMotion: 1
   m_LinearVelocityBlending: 0
   m_StabilizeFeet: 0
   m_AnimatePhysics: 0
-  m_WarningMessage: 
+  m_WarningMessage: "\nBinding warning: Some generic clip(s) animate transforms that
+    are already bound by a Humanoid avatar. These transforms can only be changed
+    by Humanoid clips.\n\tTransform 'metarig'\n\tTransform 'forearm.R'\n\tTransform
+    'shoulder.R'\n\tTransform 'thigh.L'\n\tTransform 'toe.L'\n\tTransform 'upper_arm.L'\n\tTransform
+    'spine.006'\n\tTransform 'shin.R'\n\tTransform 'spine.003'\n\tTransform 'metarig'\n\tand
+    more ...\n\tFrom animation clip 'Walking'"
   m_HasTransformHierarchy: 1
   m_AllowConstantClipSamplingOptimization: 1
   m_KeepAnimatorStateOnDisable: 0
@@ -838,7 +845,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: d5a57f767e5e46a458fc5d3c628d0cbb, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  GlobalObjectIdHash: 957348244
+  GlobalObjectIdHash: 4196699249
   InScenePlacedSourceGlobalObjectIdHash: 4196699249
   DeferredDespawnTick: 0
   Ownership: 1
@@ -911,10 +918,49 @@ MonoBehaviour:
   m_EditorClassIdentifier: 
   ShowTopMostFoldoutHeaderGroup: 1
   moveSpeed: 4.5
+  sprintMultiplier: 1.7
   yawSensitivity: 180
   jumpHeight: 1.4
   gravity: 25
   groundedStickVelocity: -2
+  animDriver: {fileID: 5894038764773081013}
+--- !u!114 &-7485135333025663362
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 4175062438738205596}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: e8d0727d5ae3244e3b569694d3912374, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  ShowTopMostFoldoutHeaderGroup: 1
+  TransitionStateInfoList:
+  - IsCrossFadeExit: 0
+    Layer: 0
+    OriginatingState: -453240694
+    DestinationState: 125937960
+    TransitionDuration: 0.25
+    TriggerNameHash: 125937960
+    TransitionIndex: 0
+  m_Animator: {fileID: 7231427859088972636}
+--- !u!114 &5894038764773081013
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 4175062438738205596}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: fb707085dbe0e1c47b2bf63be3e078e8, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  ShowTopMostFoldoutHeaderGroup: 1
+  animator: {fileID: 7231427859088972636}
+  maxMoveSpeed: 5
 --- !u!143 &-5573728191954269129
 CharacterController:
   m_ObjectHideFlags: 0
