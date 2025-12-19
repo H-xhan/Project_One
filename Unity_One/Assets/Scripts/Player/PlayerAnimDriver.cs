@@ -25,16 +25,15 @@ public class PlayerAnimDriver : NetworkBehaviour
     [Tooltip("피격 Trigger 파라미터 이름")]
     [SerializeField] private string hitReactTrigger = "HitReact";
 
-    [Header("Legacy Fallback")]
-    [Tooltip("기존에 쓰던 약공격 트리거가 있다면 입력 (예: HitSweep). 없으면 비워도 됨")]
-    [SerializeField] private string legacyLightAttackTrigger = "HitSweep";
+    [Tooltip("픽업 Trigger 파라미터 이름")]
+    [SerializeField] private string pickUpTrigger = "PickUp";
 
     private int _speedHash;
     private int _jumpHash;
     private int _lightHash;
     private int _heavyHash;
     private int _hitHash;
-    private int _legacyLightHash;
+    private int _pickUpHash;
 
     private float _lastSentSpeed;
     private float _nextSpeedSendTime;
@@ -49,7 +48,7 @@ public class PlayerAnimDriver : NetworkBehaviour
         _lightHash = SafeHash(lightAttackTrigger);
         _heavyHash = SafeHash(heavyAttackTrigger);
         _hitHash = SafeHash(hitReactTrigger);
-        _legacyLightHash = SafeHash(legacyLightAttackTrigger);
+        _pickUpHash = SafeHash(pickUpTrigger);
     }
 
     private int SafeHash(string paramName)
@@ -77,24 +76,12 @@ public class PlayerAnimDriver : NetworkBehaviour
         animator.SetFloat(hash, value);
     }
 
-    private void SetTriggerIfExists(params int[] candidates)
+    private void SetTriggerIfExists(int hash)
     {
         if (animator == null) return;
-
-        for (int i = 0; i < candidates.Length; i++)
-        {
-            int h = candidates[i];
-            if (h == 0) continue;
-            if (!HasParam(h, AnimatorControllerParameterType.Trigger)) continue;
-
-            animator.SetTrigger(h);
-            return;
-        }
+        if (!HasParam(hash, AnimatorControllerParameterType.Trigger)) return;
+        animator.SetTrigger(hash);
     }
-
-    // --------------------
-    // Public API
-    // --------------------
 
     public void SetMoveSpeed(float currentSpeed)
     {
@@ -102,10 +89,8 @@ public class PlayerAnimDriver : NetworkBehaviour
 
         float v = (maxMoveSpeed <= 0f) ? 0f : Mathf.Clamp01(currentSpeed / maxMoveSpeed);
 
-        // 로컬 즉시 반응
         if (IsOwner) SetFloatIfExists(_speedHash, v);
 
-        // 서버에도 전달해서 NetworkAnimator가 모두에게 전파되게 함
         if (IsServer)
         {
             SetFloatIfExists(_speedHash, v);
@@ -137,21 +122,36 @@ public class PlayerAnimDriver : NetworkBehaviour
         }
     }
 
+    // 좌클릭 메인 공격: Heavy 우선, 없으면 Light
+    public void PlayPrimaryAttack()
+    {
+        if (animator == null) return;
+
+        if (IsOwner)
+        {
+            if (HasParam(_heavyHash, AnimatorControllerParameterType.Trigger)) SetTriggerIfExists(_heavyHash);
+            else SetTriggerIfExists(_lightHash);
+        }
+
+        if (IsServer)
+        {
+            if (HasParam(_heavyHash, AnimatorControllerParameterType.Trigger)) SetTriggerIfExists(_heavyHash);
+            else SetTriggerIfExists(_lightHash);
+        }
+        else if (IsOwner)
+        {
+            PlayPrimaryAttackServerRpc();
+        }
+    }
+
     public void PlayLightAttack()
     {
         if (animator == null) return;
 
-        // AttackLight가 없으면 legacy(HitSweep)로라도 동작
-        if (IsOwner) SetTriggerIfExists(_lightHash, _legacyLightHash);
+        if (IsOwner) SetTriggerIfExists(_lightHash);
 
-        if (IsServer)
-        {
-            SetTriggerIfExists(_lightHash, _legacyLightHash);
-        }
-        else if (IsOwner)
-        {
-            PlayLightAttackServerRpc();
-        }
+        if (IsServer) SetTriggerIfExists(_lightHash);
+        else if (IsOwner) PlayLightAttackServerRpc();
     }
 
     public void PlayHeavyAttack()
@@ -160,48 +160,37 @@ public class PlayerAnimDriver : NetworkBehaviour
 
         if (IsOwner) SetTriggerIfExists(_heavyHash);
 
-        if (IsServer)
-        {
-            SetTriggerIfExists(_heavyHash);
-        }
-        else if (IsOwner)
-        {
-            PlayHeavyAttackServerRpc();
-        }
+        if (IsServer) SetTriggerIfExists(_heavyHash);
+        else if (IsOwner) PlayHeavyAttackServerRpc();
     }
 
-    // 서버에서 “맞은 대상”에게 피격 트리거를 쏘는 용도
+    public void PlayPickUp()
+    {
+        if (animator == null) return;
+
+        if (IsOwner) SetTriggerIfExists(_pickUpHash);
+
+        if (IsServer) SetTriggerIfExists(_pickUpHash);
+        else if (IsOwner) PlayPickUpServerRpc();
+    }
+
     public void ServerPlayHitReact()
     {
         if (!IsServer) return;
         SetTriggerIfExists(_hitHash);
     }
 
-    // --------------------
-    // RPC
-    // --------------------
+    [ServerRpc] private void SetMoveSpeedServerRpc(float normalized01) => SetFloatIfExists(_speedHash, normalized01);
+    [ServerRpc] private void PlayJumpServerRpc() => SetTriggerIfExists(_jumpHash);
 
     [ServerRpc]
-    private void SetMoveSpeedServerRpc(float normalized01)
+    private void PlayPrimaryAttackServerRpc()
     {
-        SetFloatIfExists(_speedHash, normalized01);
+        if (HasParam(_heavyHash, AnimatorControllerParameterType.Trigger)) SetTriggerIfExists(_heavyHash);
+        else SetTriggerIfExists(_lightHash);
     }
 
-    [ServerRpc]
-    private void PlayJumpServerRpc()
-    {
-        SetTriggerIfExists(_jumpHash);
-    }
-
-    [ServerRpc]
-    private void PlayLightAttackServerRpc()
-    {
-        SetTriggerIfExists(_lightHash, _legacyLightHash);
-    }
-
-    [ServerRpc]
-    private void PlayHeavyAttackServerRpc()
-    {
-        SetTriggerIfExists(_heavyHash);
-    }
+    [ServerRpc] private void PlayLightAttackServerRpc() => SetTriggerIfExists(_lightHash);
+    [ServerRpc] private void PlayHeavyAttackServerRpc() => SetTriggerIfExists(_heavyHash);
+    [ServerRpc] private void PlayPickUpServerRpc() => SetTriggerIfExists(_pickUpHash);
 }

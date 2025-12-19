@@ -8,55 +8,32 @@ using UnityEngine.InputSystem;
 public class PlayerNetworkController : NetworkBehaviour
 {
     [Header("Move")]
-    [Tooltip("걷기 속도")]
     [SerializeField] private float walkSpeed = 4.5f;
-
-    [Tooltip("달리기 속도")]
     [SerializeField] private float sprintSpeed = 7f;
 
     [Header("Rotate")]
-    [Tooltip("마우스 Yaw 감도")]
     [SerializeField] private float yawSensitivity = 180f;
-
-    [Tooltip("Input System에서 Mouse.delta를 기존 축값처럼 쓰기 위한 보정(추천 0.08~0.15)")]
     [SerializeField] private float mouseDeltaToAxis = 0.1f;
 
     [Header("Jump/Gravity")]
-    [Tooltip("점프 높이")]
     [SerializeField] private float jumpHeight = 1.4f;
-
-    [Tooltip("중력")]
     [SerializeField] private float gravity = 25f;
-
-    [Tooltip("바닥에 붙는 속도(음수 추천)")]
     [SerializeField] private float groundedStickVelocity = -2f;
-
-    [Tooltip("코요테 타임(초)")]
     [SerializeField] private float coyoteTime = 0.12f;
-
-    [Tooltip("점프 버퍼(초)")]
     [SerializeField] private float jumpBufferTime = 0.12f;
 
     [Header("Animation")]
-    [Tooltip("PlayerAnimDriver 참조")]
     [SerializeField] private PlayerAnimDriver animDriver;
 
     [Header("Cursor")]
-    [Tooltip("스폰 시 커서 잠금")]
     [SerializeField] private bool lockCursorOnSpawn = true;
 
-    [Tooltip("커서 토글 키(현재 Input System 모드에서는 ESC만 지원)")]
-    [SerializeField] private KeyCode cursorToggleKey = KeyCode.Escape;
-
-    [Header("Melee Hit")]
-    [Tooltip("좌클릭(Sweep) 공격 키")]
-    [SerializeField] private int lightAttackMouseButton = 0;
-
-    [Tooltip("우클릭(Heavy) 공격 키")]
-    [SerializeField] private int heavyAttackMouseButton = 1;
-
+    [Header("Attack")]
     [Tooltip("공격 쿨다운(초)")]
     [SerializeField] private float attackCooldown = 0.35f;
+
+    [Tooltip("좌클릭 공격을 Heavy로 취급(넉백/파워)할지")]
+    [SerializeField] private bool primaryAttackIsHeavy = true;
 
     [Tooltip("타격 판정 거리(앞으로)")]
     [SerializeField] private float hitDistance = 1.0f;
@@ -76,13 +53,18 @@ public class PlayerNetworkController : NetworkBehaviour
     [Tooltip("넉백 지속 시간(초)")]
     [SerializeField] private float knockbackDuration = 0.15f;
 
+    [Header("Interact")]
+    [Tooltip("우클릭 상호작용 거리")]
+    [SerializeField] private float interactDistance = 2.0f;
+
+    [Tooltip("우클릭 상호작용 레이어 마스크(아이템 레이어)")]
+    [SerializeField] private LayerMask interactMask;
+
     private CharacterController _controller;
 
     private Vector2 _moveInput;
     private float _verticalVelocity;
-
     private bool _isSprinting;
-    private bool _isGrounded;
 
     private float _lastGroundedTime;
     private float _lastJumpPressedTime;
@@ -114,7 +96,9 @@ public class PlayerNetworkController : NetworkBehaviour
         _moveInput = ReadMoveInput();
         _isSprinting = ReadSprintHeld();
         ReadJumpPressed();
-        ReadAttackPressed();
+
+        ReadPrimaryAttackPressed();   // 좌클릭 = 공격
+        ReadInteractPressed();        // 우클릭 = 픽업(상호작용)
 
         RotateByMouseX();
         ApplyGravityAndMove();
@@ -123,23 +107,12 @@ public class PlayerNetworkController : NetworkBehaviour
 
     private void HandleCursorToggle()
     {
-#if ENABLE_LEGACY_INPUT_MANAGER
-        if (Input.GetKeyDown(cursorToggleKey))
-        {
-            bool locked = Cursor.lockState == CursorLockMode.Locked;
-            SetCursorLocked(!locked);
-        }
-#else
 #if ENABLE_INPUT_SYSTEM
-        // Input System 모드: ESC 토글만 처리 (원하면 Key 매핑 확장 가능)
-        if (cursorToggleKey == KeyCode.Escape &&
-            Keyboard.current != null &&
-            Keyboard.current.escapeKey.wasPressedThisFrame)
+        if (Keyboard.current != null && Keyboard.current.escapeKey.wasPressedThisFrame)
         {
             bool locked = Cursor.lockState == CursorLockMode.Locked;
             SetCursorLocked(!locked);
         }
-#endif
 #endif
     }
 
@@ -151,11 +124,6 @@ public class PlayerNetworkController : NetworkBehaviour
 
     private Vector2 ReadMoveInput()
     {
-#if ENABLE_LEGACY_INPUT_MANAGER
-        float x = Input.GetAxisRaw("Horizontal");
-        float y = Input.GetAxisRaw("Vertical");
-        return Vector2.ClampMagnitude(new Vector2(x, y), 1f);
-#else
 #if ENABLE_INPUT_SYSTEM
         var kb = Keyboard.current;
         if (kb == null) return Vector2.zero;
@@ -172,81 +140,72 @@ public class PlayerNetworkController : NetworkBehaviour
 #else
         return Vector2.zero;
 #endif
-#endif
     }
 
     private bool ReadSprintHeld()
     {
-#if ENABLE_LEGACY_INPUT_MANAGER
-        return Input.GetKey(KeyCode.LeftShift);
-#else
 #if ENABLE_INPUT_SYSTEM
         var kb = Keyboard.current;
         return kb != null && (kb.leftShiftKey.isPressed || kb.rightShiftKey.isPressed);
 #else
         return false;
 #endif
-#endif
     }
 
     private void ReadJumpPressed()
     {
-#if ENABLE_LEGACY_INPUT_MANAGER
-        if (Input.GetKeyDown(KeyCode.Space))
-            _lastJumpPressedTime = Time.time;
-#else
 #if ENABLE_INPUT_SYSTEM
         var kb = Keyboard.current;
         if (kb != null && kb.spaceKey.wasPressedThisFrame)
             _lastJumpPressedTime = Time.time;
 #endif
-#endif
     }
 
-    private void ReadAttackPressed()
+    // 좌클릭 = 공격(Primary)
+    private void ReadPrimaryAttackPressed()
     {
         if (Time.time < _nextAttackTime) return;
 
-#if ENABLE_LEGACY_INPUT_MANAGER
-        bool light = Input.GetMouseButtonDown(lightAttackMouseButton);
-        bool heavy = Input.GetMouseButtonDown(heavyAttackMouseButton);
-#else
 #if ENABLE_INPUT_SYSTEM
         var m = Mouse.current;
-        bool light = (m != null && m.leftButton.wasPressedThisFrame);
-        bool heavy = (m != null && m.rightButton.wasPressedThisFrame);
+        bool pressed = (m != null && m.leftButton.wasPressedThisFrame);
 #else
-        bool light = false;
-        bool heavy = false;
+        bool pressed = false;
 #endif
-#endif
+        if (!pressed) return;
 
-        if (light)
-        {
-            _nextAttackTime = Time.time + attackCooldown;
-            if (animDriver != null) animDriver.PlayLightAttack();
-            AttackServerRpc(false);
-        }
-        else if (heavy)
-        {
-            _nextAttackTime = Time.time + attackCooldown;
-            if (animDriver != null) animDriver.PlayHeavyAttack();
-            AttackServerRpc(true);
-        }
+        _nextAttackTime = Time.time + attackCooldown;
+
+        if (animDriver != null)
+            animDriver.PlayPrimaryAttack();
+
+        AttackServerRpc(primaryAttackIsHeavy);
+    }
+
+    // 우클릭 = 픽업(상호작용) + PickUp 애니 재생
+    private void ReadInteractPressed()
+    {
+#if ENABLE_INPUT_SYSTEM
+        var m = Mouse.current;
+        if (m == null) return;
+
+        if (!m.rightButton.wasPressedThisFrame) return;
+
+        if (animDriver != null)
+            animDriver.PlayPickUp();
+
+        TryInteractServerRpc();
+#endif
     }
 
     private void RotateByMouseX()
     {
         float mouseX = 0f;
 
-#if ENABLE_LEGACY_INPUT_MANAGER
-        mouseX = Input.GetAxis("Mouse X");
-#else
 #if ENABLE_INPUT_SYSTEM
         var m = Mouse.current;
         if (m != null)
-            mouseX = m.delta.ReadValue().x * mouseDeltaToAxis; // delta(px) -> axis 느낌 보정
-#endif
+            mouseX = m.delta.ReadValue().x * mouseDeltaToAxis;
 #endif
 
         float yaw = mouseX * yawSensitivity * Time.deltaTime;
@@ -255,9 +214,9 @@ public class PlayerNetworkController : NetworkBehaviour
 
     private void ApplyGravityAndMove()
     {
-        _isGrounded = _controller.isGrounded;
+        bool grounded = _controller.isGrounded;
 
-        if (_isGrounded)
+        if (grounded)
         {
             _lastGroundedTime = Time.time;
             if (_verticalVelocity < 0f)
@@ -339,24 +298,13 @@ public class PlayerNetworkController : NetworkBehaviour
                 Send = new ClientRpcSendParams { TargetClientIds = new[] { targetClientId } }
             };
 
-
             target.ApplyKnockbackClientRpc(dir * force, knockbackDuration, onlyTargetOwner);
-            target.PlayHitReactClientRpc(onlyTargetOwner);
+
+            // “맞은 사람” 피격 애니는 서버에서 트리거 -> NetworkAnimator가 모두에게 동기화
             if (target.animDriver != null)
                 target.animDriver.ServerPlayHitReact();
         }
     }
-
-    [ClientRpc]
-    private void PlayHitReactClientRpc(ClientRpcParams rpcParams = default)
-    {
-        if (!IsOwner) return;
-
-        // 맞았을 때 애니 (PlayerAnimDriver에 구현돼 있어야 함)
-        if (animDriver != null)
-            animDriver.ServerPlayHitReact();
-    }
-
 
     [ClientRpc]
     private void ApplyKnockbackClientRpc(Vector3 impulse, float duration, ClientRpcParams rpcParams = default)
@@ -367,12 +315,28 @@ public class PlayerNetworkController : NetworkBehaviour
         _externalTimeLeft = Mathf.Max(0.01f, duration);
     }
 
+    // 우클릭 상호작용 (아이템 잡기 로직은 여기 확장)
+    [ServerRpc]
+    private void TryInteractServerRpc(ServerRpcParams rpcParams = default)
+    {
+        Vector3 origin = transform.position + transform.forward * interactDistance;
+
+        Collider[] hits = Physics.OverlapSphere(origin, 0.35f, interactMask, QueryTriggerInteraction.Collide);
+        if (hits == null || hits.Length == 0) return;
+
+        // TODO: Item/Grabbable 찾아서 서버 권한으로 잡기(소유권/부모 세팅 등) 구현
+    }
+
 #if UNITY_EDITOR
     private void OnDrawGizmosSelected()
     {
         Gizmos.color = Color.yellow;
         Vector3 origin = transform.position + transform.forward * hitDistance;
         Gizmos.DrawWireSphere(origin, hitRadius);
+
+        Gizmos.color = Color.cyan;
+        Vector3 iOrigin = transform.position + transform.forward * interactDistance;
+        Gizmos.DrawWireSphere(iOrigin, 0.35f);
     }
 #endif
 }
