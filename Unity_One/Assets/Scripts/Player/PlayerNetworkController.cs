@@ -1,59 +1,97 @@
 using Unity.Netcode;
 using UnityEngine;
-using UnityEngine.InputSystem;
 
-[RequireComponent(typeof(CharacterController))]
 public class PlayerNetworkController : NetworkBehaviour
 {
     [Header("Move")]
     [Tooltip("걷기 속도")]
     [SerializeField] private float walkSpeed = 4.5f;
 
-    [Tooltip("달리기 속도(Shift)")]
-    [SerializeField] private float sprintSpeed = 7.0f;
+    [Tooltip("달리기 속도")]
+    [SerializeField] private float sprintSpeed = 7f;
 
     [Header("Rotate")]
-    [Tooltip("Yaw 회전 감도(마우스 X)")]
+    [Tooltip("마우스 Yaw 감도")]
     [SerializeField] private float yawSensitivity = 180f;
 
     [Header("Jump/Gravity")]
     [Tooltip("점프 높이")]
     [SerializeField] private float jumpHeight = 1.4f;
 
-    [Tooltip("중력(양수로 두세요)")]
+    [Tooltip("중력")]
     [SerializeField] private float gravity = 25f;
 
-    [Tooltip("지상에서 수직 속도 고정값(바닥 붙이기용, 음수 권장)")]
+    [Tooltip("바닥에 붙는 속도(음수 추천)")]
     [SerializeField] private float groundedStickVelocity = -2f;
 
-    [Tooltip("코요테 타임(땅 떠난 후 점프 허용 시간)")]
+    [Tooltip("코요테 타임(초)")]
     [SerializeField] private float coyoteTime = 0.12f;
 
-    [Tooltip("점프 버퍼(점프 입력 선입력 허용 시간)")]
+    [Tooltip("점프 버퍼(초)")]
     [SerializeField] private float jumpBufferTime = 0.12f;
 
     [Header("Animation")]
-    [Tooltip("애니메이션 드라이버(비우면 자동 탐색)")]
+    [Tooltip("PlayerAnimDriver 참조")]
     [SerializeField] private PlayerAnimDriver animDriver;
 
     [Header("Cursor")]
-    [Tooltip("스폰 시 커서를 잠그고 숨김")]
+    [Tooltip("스폰 시 커서 잠금")]
     [SerializeField] private bool lockCursorOnSpawn = true;
 
+    [Tooltip("커서 토글 키")]
+    [SerializeField] private KeyCode cursorToggleKey = KeyCode.Escape;
+
+    [Header("Melee Hit")]
+    [Tooltip("좌클릭(Sweep) 공격 키")]
+    [SerializeField] private int lightAttackMouseButton = 0;
+
+    [Tooltip("우클릭(Heavy) 공격 키")]
+    [SerializeField] private int heavyAttackMouseButton = 1;
+
+    [Tooltip("공격 쿨다운(초)")]
+    [SerializeField] private float attackCooldown = 0.35f;
+
+    [Tooltip("타격 판정 거리(앞으로)")]
+    [SerializeField] private float hitDistance = 1.0f;
+
+    [Tooltip("타격 판정 반지름")]
+    [SerializeField] private float hitRadius = 0.6f;
+
+    [Tooltip("타격 대상 레이어 마스크(예: Player)")]
+    [SerializeField] private LayerMask hitMask;
+
+    [Tooltip("넉백 힘(가벼운 공격)")]
+    [SerializeField] private float knockbackLight = 6f;
+
+    [Tooltip("넉백 힘(강한 공격)")]
+    [SerializeField] private float knockbackHeavy = 10f;
+
+    [Tooltip("넉백 지속 시간(초)")]
+    [SerializeField] private float knockbackDuration = 0.15f;
+
     private CharacterController _controller;
+
+    private Vector2 _moveInput;
     private float _verticalVelocity;
 
-    private float _lastGroundedTime = -999f;
-    private float _lastJumpPressedTime = -999f;
+    private bool _isSprinting;
+    private bool _isGrounded;
 
-    private bool _cursorLocked;
+    private float _lastGroundedTime;
+    private float _lastJumpPressedTime;
 
+    private float _nextAttackTime;
+
+    private Vector3 _externalVelocity;
+    private float _externalTimeLeft;
+
+    private enum PendingAttackType { None, Light, Heavy }
+    private PendingAttackType _pendingAttack = PendingAttackType.None;
+    private float _pendingAttackTime;
+    [SerializeField] private float pendingTimeout = 0.8f;
     private void Awake()
     {
         _controller = GetComponent<CharacterController>();
-
-        if (animDriver == null)
-            animDriver = GetComponent<PlayerAnimDriver>();
     }
 
     public override void OnNetworkSpawn()
@@ -64,137 +102,190 @@ public class PlayerNetworkController : NetworkBehaviour
             SetCursorLocked(true);
     }
 
-    private void OnDisable()
-    {
-        if (!IsOwner) return;
-        SetCursorLocked(false);
-    }
-
     private void Update()
     {
         if (!IsOwner) return;
 
         HandleCursorToggle();
+        ReadMoveInput();
+        ReadSprintInput();
+        ReadJumpInput();
+        ReadAttackInput();
 
-        if (_cursorLocked)
-            RotateByMouseX();
-
-        Vector2 moveInput = ReadMoveInput();
-        bool isSprinting = IsSprintHeld();
-
-        TickGroundedTimers();
-        TickJumpBuffer();
-
-        Move(moveInput, isSprinting);
-        TryConsumeJump();
-        ApplyGravityAndMove(moveInput, isSprinting);
-        PushAnim(moveInput, isSprinting);
+        RotateByMouseX();
+        ApplyGravityAndMove();
+        PushAnim();
     }
 
     private void HandleCursorToggle()
     {
-        if (Keyboard.current == null) return;
-
-        if (Keyboard.current.escapeKey.wasPressedThisFrame)
-            SetCursorLocked(!_cursorLocked);
+        if (Input.GetKeyDown(cursorToggleKey))
+        {
+            bool locked = Cursor.lockState == CursorLockMode.Locked;
+            SetCursorLocked(!locked);
+        }
     }
 
     private void SetCursorLocked(bool locked)
     {
-        _cursorLocked = locked;
-        Cursor.visible = !locked;
         Cursor.lockState = locked ? CursorLockMode.Locked : CursorLockMode.None;
+        Cursor.visible = !locked;
+    }
+
+    private void ReadMoveInput()
+    {
+        float x = Input.GetAxisRaw("Horizontal");
+        float y = Input.GetAxisRaw("Vertical");
+        _moveInput = new Vector2(x, y);
+        _moveInput = Vector2.ClampMagnitude(_moveInput, 1f);
+    }
+
+    private void ReadSprintInput()
+    {
+        _isSprinting = Input.GetKey(KeyCode.LeftShift);
+    }
+
+    private void ReadJumpInput()
+    {
+        if (Input.GetKeyDown(KeyCode.Space))
+            _lastJumpPressedTime = Time.time;
+    }
+
+    private void ReadAttackInput()
+    {
+        if (Time.time < _nextAttackTime) return;
+
+        if (Input.GetMouseButtonDown(lightAttackMouseButton))
+        {
+            _nextAttackTime = Time.time + attackCooldown;
+
+            if (animDriver != null) animDriver.PlayHitSweep();
+            AttackServerRpc(false);
+        }
+        else if (Input.GetMouseButtonDown(heavyAttackMouseButton))
+        {
+            _nextAttackTime = Time.time + attackCooldown;
+
+            if (animDriver != null) animDriver.PlayHeavyAttack();
+            AttackServerRpc(true);
+        }
     }
 
     private void RotateByMouseX()
     {
-        if (Mouse.current == null) return;
-
-        float mouseX = Mouse.current.delta.ReadValue().x;
+        float mouseX = Input.GetAxis("Mouse X");
         float yaw = mouseX * yawSensitivity * Time.deltaTime;
         transform.Rotate(0f, yaw, 0f);
     }
 
-    private Vector2 ReadMoveInput()
+    private void ApplyGravityAndMove()
     {
-        if (Keyboard.current == null) return Vector2.zero;
+        _isGrounded = _controller.isGrounded;
 
-        float x = 0f;
-        float y = 0f;
-
-        if (Keyboard.current.aKey.isPressed) x -= 1f;
-        if (Keyboard.current.dKey.isPressed) x += 1f;
-        if (Keyboard.current.sKey.isPressed) y -= 1f;
-        if (Keyboard.current.wKey.isPressed) y += 1f;
-
-        Vector2 v = new Vector2(x, y);
-        return (v.sqrMagnitude > 1f) ? v.normalized : v;
-    }
-
-    private bool IsSprintHeld()
-    {
-        return Keyboard.current != null && Keyboard.current.leftShiftKey.isPressed;
-    }
-
-    private void TickGroundedTimers()
-    {
-        if (_controller.isGrounded)
+        if (_isGrounded)
+        {
             _lastGroundedTime = Time.time;
-    }
+            if (_verticalVelocity < 0f)
+                _verticalVelocity = groundedStickVelocity;
+        }
+        else
+        {
+            _verticalVelocity -= gravity * Time.deltaTime;
+        }
 
-    private void TickJumpBuffer()
-    {
-        if (Keyboard.current == null) return;
+        bool canCoyote = (Time.time - _lastGroundedTime) <= coyoteTime;
+        bool hasJumpBuffered = (Time.time - _lastJumpPressedTime) <= jumpBufferTime;
 
-        if (Keyboard.current.spaceKey.wasPressedThisFrame)
-            _lastJumpPressedTime = Time.time;
-    }
+        if (hasJumpBuffered && canCoyote)
+        {
+            _lastJumpPressedTime = -999f;
+            _verticalVelocity = Mathf.Sqrt(jumpHeight * 2f * gravity);
 
-    private void Move(Vector2 moveInput, bool isSprinting)
-    {
-        // 수평 이동은 ApplyGravityAndMove에서 같이 처리함 (함수 분리용)
-    }
+            if (animDriver != null) animDriver.PlayJump();
+        }
 
-    private void TryConsumeJump()
-    {
-        bool buffered = (Time.time - _lastJumpPressedTime) <= jumpBufferTime;
-        bool coyote = (Time.time - _lastGroundedTime) <= coyoteTime;
-
-        if (!buffered || !coyote) return;
-
-        _verticalVelocity = Mathf.Sqrt(jumpHeight * 2f * gravity);
-        _lastJumpPressedTime = -999f;
-        _lastGroundedTime = -999f;
-
-        if (animDriver != null)
-            animDriver.PlayJump();
-    }
-
-    private void ApplyGravityAndMove(Vector2 moveInput, bool isSprinting)
-    {
-        if (_controller.isGrounded && _verticalVelocity < 0f)
-            _verticalVelocity = groundedStickVelocity;
-
-        _verticalVelocity -= gravity * Time.deltaTime;
-
-        Vector3 dir = transform.right * moveInput.x + transform.forward * moveInput.y;
+        Vector3 dir = transform.right * _moveInput.x + transform.forward * _moveInput.y;
         if (dir.sqrMagnitude > 1f) dir.Normalize();
 
-        float speed = isSprinting ? sprintSpeed : walkSpeed;
+        float speed = _isSprinting ? sprintSpeed : walkSpeed;
 
         Vector3 motion = dir * speed;
+
+        // knockback
+        if (_externalTimeLeft > 0f)
+        {
+            _externalTimeLeft -= Time.deltaTime;
+            motion += _externalVelocity;
+
+            float t = (_externalTimeLeft <= 0f) ? 0f : (_externalTimeLeft / knockbackDuration);
+            _externalVelocity *= t;
+        }
+
         motion.y = _verticalVelocity;
 
         _controller.Move(motion * Time.deltaTime);
     }
 
-    private void PushAnim(Vector2 moveInput, bool isSprinting)
+    private void PushAnim()
     {
         if (animDriver == null) return;
 
-        float speed = isSprinting ? sprintSpeed : walkSpeed;
-        float planar = (new Vector3(moveInput.x, 0f, moveInput.y)).magnitude * speed;
+        float speed = _isSprinting ? sprintSpeed : walkSpeed;
+        float planar = new Vector3(_moveInput.x, 0f, _moveInput.y).magnitude * speed;
 
-        animDriver.SetMoveSpeed(planar, sprintSpeed);
+        animDriver.SetMoveSpeed(planar);
     }
+
+    [ServerRpc]
+    private void AttackServerRpc(bool isHeavy, ServerRpcParams rpcParams = default)
+    {
+        Vector3 origin = transform.position + transform.forward * hitDistance;
+
+        Collider[] hits = Physics.OverlapSphere(origin, hitRadius, hitMask, QueryTriggerInteraction.Ignore);
+        if (hits == null || hits.Length == 0) return;
+
+        float force = isHeavy ? knockbackHeavy : knockbackLight;
+
+        for (int i = 0; i < hits.Length; i++)
+        {
+            NetworkObject no = hits[i].GetComponentInParent<NetworkObject>();
+            if (no == null) continue;
+            if (no == NetworkObject) continue;
+
+            PlayerNetworkController target = no.GetComponent<PlayerNetworkController>();
+            if (target == null) continue;
+
+            ulong targetClientId = no.OwnerClientId;
+
+            Vector3 dir = (no.transform.position - transform.position);
+            dir.y = 0f;
+            if (dir.sqrMagnitude < 0.0001f) dir = transform.forward;
+            dir.Normalize();
+
+            ClientRpcParams onlyTargetOwner = new ClientRpcParams
+            {
+                Send = new ClientRpcSendParams { TargetClientIds = new[] { targetClientId } }
+            };
+
+            target.ApplyKnockbackClientRpc(dir * force, knockbackDuration, onlyTargetOwner);
+        }
+    }
+
+    [ClientRpc]
+    private void ApplyKnockbackClientRpc(Vector3 impulse, float duration, ClientRpcParams rpcParams = default)
+    {
+        if (!IsOwner) return;
+
+        _externalVelocity = impulse;
+        _externalTimeLeft = Mathf.Max(0.01f, duration);
+    }
+
+#if UNITY_EDITOR
+    private void OnDrawGizmosSelected()
+    {
+        Gizmos.color = Color.yellow;
+        Vector3 origin = transform.position + transform.forward * hitDistance;
+        Gizmos.DrawWireSphere(origin, hitRadius);
+    }
+#endif
 }

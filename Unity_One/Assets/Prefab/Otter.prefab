@@ -761,7 +761,7 @@ GameObject:
   - component: {fileID: -5573728191954269129}
   m_Layer: 0
   m_Name: Otter
-  m_TagString: Untagged
+  m_TagString: Player
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
   m_StaticEditorFlags: 0
@@ -917,13 +917,28 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: 
   ShowTopMostFoldoutHeaderGroup: 1
-  moveSpeed: 4.5
-  sprintMultiplier: 1.7
+  walkSpeed: 4.5
+  sprintSpeed: 7
   yawSensitivity: 180
   jumpHeight: 1.4
   gravity: 25
   groundedStickVelocity: -2
+  coyoteTime: 0.12
+  jumpBufferTime: 0.12
   animDriver: {fileID: 5894038764773081013}
+  lockCursorOnSpawn: 1
+  cursorToggleKey: 27
+  lightAttackMouseButton: 0
+  heavyAttackMouseButton: 1
+  attackCooldown: 0.35
+  hitDistance: 1
+  hitRadius: 0.6
+  hitMask:
+    serializedVersion: 2
+    m_Bits: 64
+  knockbackLight: 6
+  knockbackHeavy: 10
+  knockbackDuration: 0.15
 --- !u!114 &-7485135333025663362
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -961,6 +976,9 @@ MonoBehaviour:
   ShowTopMostFoldoutHeaderGroup: 1
   animator: {fileID: 7231427859088972636}
   maxMoveSpeed: 5
+  speedDamp: 0.08
+  speedSendInterval: 0.08
+  speedChangeThreshold: 0.02
 --- !u!143 &-5573728191954269129
 CharacterController:
   m_ObjectHideFlags: 0
