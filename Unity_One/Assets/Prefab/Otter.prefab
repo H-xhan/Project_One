@@ -759,6 +759,8 @@ GameObject:
   - component: {fileID: -7485135333025663362}
   - component: {fileID: 5894038764773081013}
   - component: {fileID: -5573728191954269129}
+  - component: {fileID: 5555852375470111503}
+  - component: {fileID: -3155677757089960169}
   m_Layer: 0
   m_Name: Otter
   m_TagString: Player
@@ -920,6 +922,7 @@ MonoBehaviour:
   walkSpeed: 4.5
   sprintSpeed: 7
   yawSensitivity: 180
+  mouseDeltaToAxis: 0.1
   jumpHeight: 1.4
   gravity: 25
   groundedStickVelocity: -2
@@ -927,10 +930,8 @@ MonoBehaviour:
   jumpBufferTime: 0.12
   animDriver: {fileID: 5894038764773081013}
   lockCursorOnSpawn: 1
-  cursorToggleKey: 27
-  lightAttackMouseButton: 0
-  heavyAttackMouseButton: 1
   attackCooldown: 0.35
+  primaryAttackIsHeavy: 1
   hitDistance: 1
   hitRadius: 0.6
   hitMask:
@@ -939,6 +940,10 @@ MonoBehaviour:
   knockbackLight: 6
   knockbackHeavy: 10
   knockbackDuration: 0.15
+  interactDistance: 2
+  interactMask:
+    serializedVersion: 2
+    m_Bits: 0
 --- !u!114 &-7485135333025663362
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -960,6 +965,13 @@ MonoBehaviour:
     TransitionDuration: 0.25
     TriggerNameHash: 125937960
     TransitionIndex: 0
+  - IsCrossFadeExit: 0
+    Layer: 0
+    OriginatingState: -453240694
+    DestinationState: -868722252
+    TransitionDuration: 0.05
+    TriggerNameHash: -743040919
+    TransitionIndex: 1
   m_Animator: {fileID: 7231427859088972636}
 --- !u!114 &5894038764773081013
 MonoBehaviour:
@@ -976,9 +988,12 @@ MonoBehaviour:
   ShowTopMostFoldoutHeaderGroup: 1
   animator: {fileID: 7231427859088972636}
   maxMoveSpeed: 5
-  speedDamp: 0.08
-  speedSendInterval: 0.08
-  speedChangeThreshold: 0.02
+  speedParam: Speed
+  jumpTrigger: Jump
+  lightAttackTrigger: AttackLight
+  heavyAttackTrigger: AttackHeavy
+  hitReactTrigger: HitReact
+  pickUpTrigger: PickUp
 --- !u!143 &-5573728191954269129
 CharacterController:
   m_ObjectHideFlags: 0
@@ -1004,6 +1019,40 @@ CharacterController:
   m_SkinWidth: 0.08
   m_MinMoveDistance: 0.001
   m_Center: {x: 0, y: 0.6, z: -0.2}
+--- !u!114 &5555852375470111503
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 4175062438738205596}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: f372853f47123e746bcad9d5bc39839d, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  ShowTopMostFoldoutHeaderGroup: 1
+  itemDatabase: {fileID: 11400000, guid: b95555f275928d04d91ce68344f155cd, type: 2}
+  capacity: 8
+--- !u!114 &-3155677757089960169
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 4175062438738205596}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: a24d75856fefa2941b2a324abefa172b, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  ShowTopMostFoldoutHeaderGroup: 1
+  targetCamera: {fileID: 0}
+  interactDistance: 3
+  pickupMask:
+    serializedVersion: 2
+    m_Bits: 128
+  inventory: {fileID: 0}
 --- !u!1 &4198969407095528377
 GameObject:
   m_ObjectHideFlags: 0
