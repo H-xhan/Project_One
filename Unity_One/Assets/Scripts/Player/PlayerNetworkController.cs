@@ -1,6 +1,10 @@
 using Unity.Netcode;
 using UnityEngine;
 
+#if ENABLE_INPUT_SYSTEM
+using UnityEngine.InputSystem;
+#endif
+
 public class PlayerNetworkController : NetworkBehaviour
 {
     [Header("Move")]
@@ -13,6 +17,9 @@ public class PlayerNetworkController : NetworkBehaviour
     [Header("Rotate")]
     [Tooltip("마우스 Yaw 감도")]
     [SerializeField] private float yawSensitivity = 180f;
+
+    [Tooltip("Input System에서 Mouse.delta를 기존 축값처럼 쓰기 위한 보정(추천 0.08~0.15)")]
+    [SerializeField] private float mouseDeltaToAxis = 0.1f;
 
     [Header("Jump/Gravity")]
     [Tooltip("점프 높이")]
@@ -38,7 +45,7 @@ public class PlayerNetworkController : NetworkBehaviour
     [Tooltip("스폰 시 커서 잠금")]
     [SerializeField] private bool lockCursorOnSpawn = true;
 
-    [Tooltip("커서 토글 키")]
+    [Tooltip("커서 토글 키(현재 Input System 모드에서는 ESC만 지원)")]
     [SerializeField] private KeyCode cursorToggleKey = KeyCode.Escape;
 
     [Header("Melee Hit")]
@@ -85,10 +92,6 @@ public class PlayerNetworkController : NetworkBehaviour
     private Vector3 _externalVelocity;
     private float _externalTimeLeft;
 
-    private enum PendingAttackType { None, Light, Heavy }
-    private PendingAttackType _pendingAttack = PendingAttackType.None;
-    private float _pendingAttackTime;
-    [SerializeField] private float pendingTimeout = 0.8f;
     private void Awake()
     {
         _controller = GetComponent<CharacterController>();
@@ -107,10 +110,11 @@ public class PlayerNetworkController : NetworkBehaviour
         if (!IsOwner) return;
 
         HandleCursorToggle();
-        ReadMoveInput();
-        ReadSprintInput();
-        ReadJumpInput();
-        ReadAttackInput();
+
+        _moveInput = ReadMoveInput();
+        _isSprinting = ReadSprintHeld();
+        ReadJumpPressed();
+        ReadAttackPressed();
 
         RotateByMouseX();
         ApplyGravityAndMove();
@@ -119,11 +123,24 @@ public class PlayerNetworkController : NetworkBehaviour
 
     private void HandleCursorToggle()
     {
+#if ENABLE_LEGACY_INPUT_MANAGER
         if (Input.GetKeyDown(cursorToggleKey))
         {
             bool locked = Cursor.lockState == CursorLockMode.Locked;
             SetCursorLocked(!locked);
         }
+#else
+#if ENABLE_INPUT_SYSTEM
+        // Input System 모드: ESC 토글만 처리 (원하면 Key 매핑 확장 가능)
+        if (cursorToggleKey == KeyCode.Escape &&
+            Keyboard.current != null &&
+            Keyboard.current.escapeKey.wasPressedThisFrame)
+        {
+            bool locked = Cursor.lockState == CursorLockMode.Locked;
+            SetCursorLocked(!locked);
+        }
+#endif
+#endif
     }
 
     private void SetCursorLocked(bool locked)
@@ -132,40 +149,87 @@ public class PlayerNetworkController : NetworkBehaviour
         Cursor.visible = !locked;
     }
 
-    private void ReadMoveInput()
+    private Vector2 ReadMoveInput()
     {
+#if ENABLE_LEGACY_INPUT_MANAGER
         float x = Input.GetAxisRaw("Horizontal");
         float y = Input.GetAxisRaw("Vertical");
-        _moveInput = new Vector2(x, y);
-        _moveInput = Vector2.ClampMagnitude(_moveInput, 1f);
+        return Vector2.ClampMagnitude(new Vector2(x, y), 1f);
+#else
+#if ENABLE_INPUT_SYSTEM
+        var kb = Keyboard.current;
+        if (kb == null) return Vector2.zero;
+
+        float x = 0f;
+        if (kb.aKey.isPressed) x -= 1f;
+        if (kb.dKey.isPressed) x += 1f;
+
+        float y = 0f;
+        if (kb.sKey.isPressed) y -= 1f;
+        if (kb.wKey.isPressed) y += 1f;
+
+        return Vector2.ClampMagnitude(new Vector2(x, y), 1f);
+#else
+        return Vector2.zero;
+#endif
+#endif
     }
 
-    private void ReadSprintInput()
+    private bool ReadSprintHeld()
     {
-        _isSprinting = Input.GetKey(KeyCode.LeftShift);
+#if ENABLE_LEGACY_INPUT_MANAGER
+        return Input.GetKey(KeyCode.LeftShift);
+#else
+#if ENABLE_INPUT_SYSTEM
+        var kb = Keyboard.current;
+        return kb != null && (kb.leftShiftKey.isPressed || kb.rightShiftKey.isPressed);
+#else
+        return false;
+#endif
+#endif
     }
 
-    private void ReadJumpInput()
+    private void ReadJumpPressed()
     {
+#if ENABLE_LEGACY_INPUT_MANAGER
         if (Input.GetKeyDown(KeyCode.Space))
             _lastJumpPressedTime = Time.time;
+#else
+#if ENABLE_INPUT_SYSTEM
+        var kb = Keyboard.current;
+        if (kb != null && kb.spaceKey.wasPressedThisFrame)
+            _lastJumpPressedTime = Time.time;
+#endif
+#endif
     }
 
-    private void ReadAttackInput()
+    private void ReadAttackPressed()
     {
         if (Time.time < _nextAttackTime) return;
 
-        if (Input.GetMouseButtonDown(lightAttackMouseButton))
+#if ENABLE_LEGACY_INPUT_MANAGER
+        bool light = Input.GetMouseButtonDown(lightAttackMouseButton);
+        bool heavy = Input.GetMouseButtonDown(heavyAttackMouseButton);
+#else
+#if ENABLE_INPUT_SYSTEM
+        var m = Mouse.current;
+        bool light = (m != null && m.leftButton.wasPressedThisFrame);
+        bool heavy = (m != null && m.rightButton.wasPressedThisFrame);
+#else
+        bool light = false;
+        bool heavy = false;
+#endif
+#endif
+
+        if (light)
         {
             _nextAttackTime = Time.time + attackCooldown;
-
-            if (animDriver != null) animDriver.PlayHitSweep();
+            if (animDriver != null) animDriver.PlayLightAttack();
             AttackServerRpc(false);
         }
-        else if (Input.GetMouseButtonDown(heavyAttackMouseButton))
+        else if (heavy)
         {
             _nextAttackTime = Time.time + attackCooldown;
-
             if (animDriver != null) animDriver.PlayHeavyAttack();
             AttackServerRpc(true);
         }
@@ -173,7 +237,18 @@ public class PlayerNetworkController : NetworkBehaviour
 
     private void RotateByMouseX()
     {
-        float mouseX = Input.GetAxis("Mouse X");
+        float mouseX = 0f;
+
+#if ENABLE_LEGACY_INPUT_MANAGER
+        mouseX = Input.GetAxis("Mouse X");
+#else
+#if ENABLE_INPUT_SYSTEM
+        var m = Mouse.current;
+        if (m != null)
+            mouseX = m.delta.ReadValue().x * mouseDeltaToAxis; // delta(px) -> axis 느낌 보정
+#endif
+#endif
+
         float yaw = mouseX * yawSensitivity * Time.deltaTime;
         transform.Rotate(0f, yaw, 0f);
     }
@@ -208,10 +283,8 @@ public class PlayerNetworkController : NetworkBehaviour
         if (dir.sqrMagnitude > 1f) dir.Normalize();
 
         float speed = _isSprinting ? sprintSpeed : walkSpeed;
-
         Vector3 motion = dir * speed;
 
-        // knockback
         if (_externalTimeLeft > 0f)
         {
             _externalTimeLeft -= Time.deltaTime;
@@ -222,7 +295,6 @@ public class PlayerNetworkController : NetworkBehaviour
         }
 
         motion.y = _verticalVelocity;
-
         _controller.Move(motion * Time.deltaTime);
     }
 
@@ -267,9 +339,24 @@ public class PlayerNetworkController : NetworkBehaviour
                 Send = new ClientRpcSendParams { TargetClientIds = new[] { targetClientId } }
             };
 
+
             target.ApplyKnockbackClientRpc(dir * force, knockbackDuration, onlyTargetOwner);
+            target.PlayHitReactClientRpc(onlyTargetOwner);
+            if (target.animDriver != null)
+                target.animDriver.ServerPlayHitReact();
         }
     }
+
+    [ClientRpc]
+    private void PlayHitReactClientRpc(ClientRpcParams rpcParams = default)
+    {
+        if (!IsOwner) return;
+
+        // 맞았을 때 애니 (PlayerAnimDriver에 구현돼 있어야 함)
+        if (animDriver != null)
+            animDriver.ServerPlayHitReact();
+    }
+
 
     [ClientRpc]
     private void ApplyKnockbackClientRpc(Vector3 impulse, float duration, ClientRpcParams rpcParams = default)

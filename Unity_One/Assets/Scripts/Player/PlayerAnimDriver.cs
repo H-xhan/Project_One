@@ -6,97 +6,202 @@ public class PlayerAnimDriver : NetworkBehaviour
     [Tooltip("캐릭터 Animator")]
     [SerializeField] private Animator animator;
 
-    [Tooltip("최대 이동 속도(정규화 기준)")]
-    [SerializeField] private float maxMoveSpeed = 5f;
+    [Tooltip("최대 이동 속도(정규화 기준). Speed = currentSpeed / maxMoveSpeed")]
+    [SerializeField] private float maxMoveSpeed = 7f;
 
-    [Tooltip("Speed 파라미터 댐핑(부드럽게)")]
-    [SerializeField] private float speedDamp = 0.08f;
+    [Header("Animator Parameters")]
+    [Tooltip("이동 속도 Float 파라미터 이름")]
+    [SerializeField] private string speedParam = "Speed";
 
-    [Tooltip("Speed 전송 간격(초). 너무 촘촘하면 트래픽 증가")]
-    [SerializeField] private float speedSendInterval = 0.08f;
+    [Tooltip("점프 Trigger 파라미터 이름")]
+    [SerializeField] private string jumpTrigger = "Jump";
 
-    [Tooltip("Speed 값 변화가 이 값보다 작으면 전송 생략")]
-    [SerializeField] private float speedChangeThreshold = 0.02f;
+    [Tooltip("약공격 Trigger 파라미터 이름")]
+    [SerializeField] private string lightAttackTrigger = "AttackLight";
 
-    private static readonly int SpeedHash = Animator.StringToHash("Speed");
-    private static readonly int JumpHash = Animator.StringToHash("Jump");
-    private static readonly int HitSweepHash = Animator.StringToHash("HitSweep");
-    private static readonly int AttackHeavyHash = Animator.StringToHash("AttackHeavy");
+    [Tooltip("강공격 Trigger 파라미터 이름")]
+    [SerializeField] private string heavyAttackTrigger = "AttackHeavy";
+
+    [Tooltip("피격 Trigger 파라미터 이름")]
+    [SerializeField] private string hitReactTrigger = "HitReact";
+
+    [Header("Legacy Fallback")]
+    [Tooltip("기존에 쓰던 약공격 트리거가 있다면 입력 (예: HitSweep). 없으면 비워도 됨")]
+    [SerializeField] private string legacyLightAttackTrigger = "HitSweep";
+
+    private int _speedHash;
+    private int _jumpHash;
+    private int _lightHash;
+    private int _heavyHash;
+    private int _hitHash;
+    private int _legacyLightHash;
 
     private float _lastSentSpeed;
-    private float _nextSendTime;
+    private float _nextSpeedSendTime;
+
+    private void Awake() => CacheHashes();
+    private void OnValidate() => CacheHashes();
+
+    private void CacheHashes()
+    {
+        _speedHash = SafeHash(speedParam);
+        _jumpHash = SafeHash(jumpTrigger);
+        _lightHash = SafeHash(lightAttackTrigger);
+        _heavyHash = SafeHash(heavyAttackTrigger);
+        _hitHash = SafeHash(hitReactTrigger);
+        _legacyLightHash = SafeHash(legacyLightAttackTrigger);
+    }
+
+    private int SafeHash(string paramName)
+    {
+        if (string.IsNullOrWhiteSpace(paramName)) return 0;
+        return Animator.StringToHash(paramName);
+    }
+
+    private bool HasParam(int hash, AnimatorControllerParameterType type)
+    {
+        if (animator == null || hash == 0) return false;
+
+        var ps = animator.parameters;
+        for (int i = 0; i < ps.Length; i++)
+        {
+            if (ps[i].nameHash == hash && ps[i].type == type) return true;
+        }
+        return false;
+    }
+
+    private void SetFloatIfExists(int hash, float value)
+    {
+        if (animator == null) return;
+        if (!HasParam(hash, AnimatorControllerParameterType.Float)) return;
+        animator.SetFloat(hash, value);
+    }
+
+    private void SetTriggerIfExists(params int[] candidates)
+    {
+        if (animator == null) return;
+
+        for (int i = 0; i < candidates.Length; i++)
+        {
+            int h = candidates[i];
+            if (h == 0) continue;
+            if (!HasParam(h, AnimatorControllerParameterType.Trigger)) continue;
+
+            animator.SetTrigger(h);
+            return;
+        }
+    }
+
+    // --------------------
+    // Public API
+    // --------------------
 
     public void SetMoveSpeed(float currentSpeed)
     {
-        if (!IsOwner || animator == null) return;
+        if (animator == null) return;
 
         float v = (maxMoveSpeed <= 0f) ? 0f : Mathf.Clamp01(currentSpeed / maxMoveSpeed);
 
         // 로컬 즉시 반응
-        animator.SetFloat(SpeedHash, v, speedDamp, Time.deltaTime);
+        if (IsOwner) SetFloatIfExists(_speedHash, v);
 
-        // 서버에도 전달 (서버가 세팅 -> NetworkAnimator가 전파)
-        TrySendSpeed(v);
-    }
-
-    public void SetMoveSpeed(float currentSpeed, float referenceMaxSpeed)
-    {
-        if (!IsOwner || animator == null) return;
-
-        if (referenceMaxSpeed > 0f)
-            maxMoveSpeed = referenceMaxSpeed; // sprintSpeed 기준으로 정규화
-
-        SetMoveSpeed(currentSpeed); // 기존 1개짜리 호출
+        // 서버에도 전달해서 NetworkAnimator가 모두에게 전파되게 함
+        if (IsServer)
+        {
+            SetFloatIfExists(_speedHash, v);
+        }
+        else if (IsOwner)
+        {
+            if (Time.time >= _nextSpeedSendTime || Mathf.Abs(v - _lastSentSpeed) >= 0.02f)
+            {
+                _lastSentSpeed = v;
+                _nextSpeedSendTime = Time.time + 0.10f;
+                SetMoveSpeedServerRpc(v);
+            }
+        }
     }
 
     public void PlayJump()
     {
-        if (!IsOwner || animator == null) return;
+        if (animator == null) return;
 
-        animator.SetTrigger(JumpHash);
-        PlayTriggerServerRpc(JumpHash);
+        if (IsOwner) SetTriggerIfExists(_jumpHash);
+
+        if (IsServer)
+        {
+            SetTriggerIfExists(_jumpHash);
+        }
+        else if (IsOwner)
+        {
+            PlayJumpServerRpc();
+        }
+    }
+
+    public void PlayLightAttack()
+    {
+        if (animator == null) return;
+
+        // AttackLight가 없으면 legacy(HitSweep)로라도 동작
+        if (IsOwner) SetTriggerIfExists(_lightHash, _legacyLightHash);
+
+        if (IsServer)
+        {
+            SetTriggerIfExists(_lightHash, _legacyLightHash);
+        }
+        else if (IsOwner)
+        {
+            PlayLightAttackServerRpc();
+        }
     }
 
     public void PlayHeavyAttack()
     {
-        if (!IsOwner || animator == null) return;
+        if (animator == null) return;
 
-        animator.SetTrigger(AttackHeavyHash);
-        PlayTriggerServerRpc(AttackHeavyHash);
+        if (IsOwner) SetTriggerIfExists(_heavyHash);
+
+        if (IsServer)
+        {
+            SetTriggerIfExists(_heavyHash);
+        }
+        else if (IsOwner)
+        {
+            PlayHeavyAttackServerRpc();
+        }
     }
 
-    public void PlayHitSweep()
+    // 서버에서 “맞은 대상”에게 피격 트리거를 쏘는 용도
+    public void ServerPlayHitReact()
     {
-        if (!IsOwner || animator == null) return;
-
-        animator.SetTrigger(HitSweepHash);
-        PlayTriggerServerRpc(HitSweepHash);
+        if (!IsServer) return;
+        SetTriggerIfExists(_hitHash);
     }
 
-    private void TrySendSpeed(float v)
+    // --------------------
+    // RPC
+    // --------------------
+
+    [ServerRpc]
+    private void SetMoveSpeedServerRpc(float normalized01)
     {
-        if (IsServer) return; // Host는 서버에서 직접 전파되므로 RPC 불필요
-
-        if (Time.time < _nextSendTime) return;
-        if (Mathf.Abs(v - _lastSentSpeed) < speedChangeThreshold) return;
-
-        _lastSentSpeed = v;
-        _nextSendTime = Time.time + speedSendInterval;
-
-        SetSpeedServerRpc(v);
+        SetFloatIfExists(_speedHash, normalized01);
     }
 
     [ServerRpc]
-    private void SetSpeedServerRpc(float normalizedSpeed)
+    private void PlayJumpServerRpc()
     {
-        if (animator == null) return;
-        animator.SetFloat(SpeedHash, normalizedSpeed);
+        SetTriggerIfExists(_jumpHash);
     }
 
     [ServerRpc]
-    private void PlayTriggerServerRpc(int triggerHash)
+    private void PlayLightAttackServerRpc()
     {
-        if (animator == null) return;
-        animator.SetTrigger(triggerHash);
+        SetTriggerIfExists(_lightHash, _legacyLightHash);
+    }
+
+    [ServerRpc]
+    private void PlayHeavyAttackServerRpc()
+    {
+        SetTriggerIfExists(_heavyHash);
     }
 }
