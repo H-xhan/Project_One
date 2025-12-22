@@ -65,7 +65,7 @@ public class ThirdPersonCameraFollow : MonoBehaviour
 
     private void TryBindLocalPlayer()
     {
-        var players = Object.FindObjectsByType<PlayerNetworkController>(FindObjectsSortMode.None);
+        var players = Object.FindObjectsByType<PlayerHub>(FindObjectsSortMode.None);
 
         foreach (var p in players)
         {
@@ -76,5 +76,4 @@ public class ThirdPersonCameraFollow : MonoBehaviour
             }
         }
     }
-
 }
