@@ -10,7 +10,7 @@ MonoBehaviour:
   m_Enabled: 1
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: b57d705fdd9215241887519218f7c1da, type: 3}
-  m_Name: Hammer_bs
+  m_Name: ItemDatabase
   m_EditorClassIdentifier: 
   items:
   - {fileID: 11400000, guid: 447ee68a77673b74285d689993565391, type: 2}
