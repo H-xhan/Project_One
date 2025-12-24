@@ -1,127 +1,121 @@
-using Unity.Netcode;
 using UnityEngine;
 
-public sealed class PlayerAnimModule
+public class PlayerAnimModule
 {
     private readonly PlayerHub _hub;
+    private readonly Animator _anim;
 
-    private float _lastSentSpeed;
-    private float _nextSpeedSendTime;
+    private readonly int _speedHash = Animator.StringToHash("Speed");
+    private readonly int _isSprintingHash = Animator.StringToHash("IsSprinting");
+    private readonly int _jumpHash = Animator.StringToHash("Jump");
+    private readonly int _attackLightHash = Animator.StringToHash("AttackLight");
+    private readonly int _attackHeavyHash = Animator.StringToHash("AttackHeavy");
+    private readonly int _pickUpHash = Animator.StringToHash("PickUp");
+
+    private bool _hasSpeed;
+    private bool _hasSprinting;
+    private bool _hasJump;
+    private bool _hasAttackLight;
+    private bool _hasAttackHeavy;
+    private bool _hasPickUp;
+
+    private bool _missingWarned;
 
     public PlayerAnimModule(PlayerHub hub)
     {
         _hub = hub;
+        _anim = hub.Animator;
+        CacheParams();
     }
 
-    public void SetMoveSpeed(float currentSpeed)
+    private void CacheParams()
     {
-        if (_hub.Anim == null) return;
+        if (_anim == null) return;
 
-        float v = (_hub.MaxMoveSpeed <= 0f) ? 0f : Mathf.Clamp01(currentSpeed / _hub.MaxMoveSpeed);
-
-        if (_hub.IsOwner)
-            _hub.Anim.SetFloat(_hub.SpeedHash, v);
-
-        if (_hub.IsServer)
+        foreach (var p in _anim.parameters)
         {
-            _hub.Anim.SetFloat(_hub.SpeedHash, v);
-        }
-        else if (_hub.IsOwner)
-        {
-            if (Time.time >= _nextSpeedSendTime || Mathf.Abs(v - _lastSentSpeed) >= 0.02f)
-            {
-                _lastSentSpeed = v;
-                _nextSpeedSendTime = Time.time + 0.10f;
-                SetMoveSpeedRpc(v);
-            }
+            if (p.nameHash == _speedHash) _hasSpeed = true;
+            else if (p.nameHash == _isSprintingHash) _hasSprinting = true;
+            else if (p.nameHash == _jumpHash) _hasJump = true;
+            else if (p.nameHash == _attackLightHash) _hasAttackLight = true;
+            else if (p.nameHash == _attackHeavyHash) _hasAttackHeavy = true;
+            else if (p.nameHash == _pickUpHash) _hasPickUp = true;
         }
     }
 
-    public void PlayJump()
+    private void WarnMissingOnce()
     {
-        if (_hub.Anim == null) return;
+        if (_missingWarned) return;
+        _missingWarned = true;
 
-        if (_hub.IsOwner)
-            _hub.Anim.SetTrigger(_hub.JumpHash);
+        Debug.LogWarning("[Anim] Animator 파라미터가 일부 없습니다. " +
+                         "필수: Speed(float), IsSprinting(bool), Jump(trigger), AttackLight(trigger), PickUp(trigger) " +
+                         "옵션: AttackHeavy(trigger)");
+    }
 
-        if (_hub.IsServer)
+    public void SetLocomotion(float planarSpeed01, bool isSprinting)
+    {
+        if (_anim == null) return;
+
+        if (!_hasSpeed || !_hasSprinting)
+            WarnMissingOnce();
+
+        if (_hasSpeed)
+            _anim.SetFloat(_speedHash, planarSpeed01);
+
+        if (_hasSprinting)
+            _anim.SetBool(_isSprintingHash, isSprinting);
+    }
+
+    public void TriggerJump()
+    {
+        if (_anim == null) return;
+
+        if (!_hasJump)
         {
-            _hub.Anim.SetTrigger(_hub.JumpHash);
+            WarnMissingOnce();
+            return;
         }
-        else if (_hub.IsOwner)
+
+        _anim.SetTrigger(_jumpHash);
+    }
+
+    public void TriggerAttackLight()
+    {
+        if (_anim == null) return;
+
+        if (!_hasAttackLight)
         {
-            PlayJumpRpc();
+            WarnMissingOnce();
+            return;
         }
+
+        _anim.SetTrigger(_attackLightHash);
     }
 
-    public void PlayPrimaryAttack(bool heavy)
+    public void TriggerAttackHeavy()
     {
-        if (_hub.Anim == null) return;
+        if (_anim == null) return;
 
-        int hash = heavy ? _hub.HeavyHash : _hub.LightHash;
-
-        if (_hub.IsOwner)
-            _hub.Anim.SetTrigger(hash);
-
-        if (_hub.IsServer)
+        if (!_hasAttackHeavy)
         {
-            _hub.Anim.SetTrigger(hash);
+            WarnMissingOnce();
+            return;
         }
-        else if (_hub.IsOwner)
+
+        _anim.SetTrigger(_attackHeavyHash);
+    }
+
+    public void TriggerPickUp()
+    {
+        if (_anim == null) return;
+
+        if (!_hasPickUp)
         {
-            PlayAttackRpc(heavy);
+            WarnMissingOnce();
+            return;
         }
-    }
 
-    public void PlayPickUp()
-    {
-        if (_hub.Anim == null) return;
-
-        if (_hub.IsOwner)
-            _hub.Anim.SetTrigger(_hub.PickUpHash);
-
-        if (_hub.IsServer)
-        {
-            _hub.Anim.SetTrigger(_hub.PickUpHash);
-        }
-        else if (_hub.IsOwner)
-        {
-            PlayPickUpRpc();
-        }
-    }
-
-    public void ServerPlayHitReact()
-    {
-        if (!_hub.IsServer) return;
-        if (_hub.Anim == null) return;
-        _hub.Anim.SetTrigger(_hub.HitHash);
-    }
-
-    [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Owner)]
-    private void SetMoveSpeedRpc(float normalized01)
-    {
-        if (_hub.Anim == null) return;
-        _hub.Anim.SetFloat(_hub.SpeedHash, normalized01);
-    }
-
-    [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Owner)]
-    private void PlayJumpRpc()
-    {
-        if (_hub.Anim == null) return;
-        _hub.Anim.SetTrigger(_hub.JumpHash);
-    }
-
-    [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Owner)]
-    private void PlayAttackRpc(bool heavy)
-    {
-        if (_hub.Anim == null) return;
-        _hub.Anim.SetTrigger(heavy ? _hub.HeavyHash : _hub.LightHash);
-    }
-
-    [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Owner)]
-    private void PlayPickUpRpc()
-    {
-        if (_hub.Anim == null) return;
-        _hub.Anim.SetTrigger(_hub.PickUpHash);
+        _anim.SetTrigger(_pickUpHash);
     }
 }

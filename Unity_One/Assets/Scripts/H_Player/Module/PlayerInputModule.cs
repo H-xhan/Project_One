@@ -1,20 +1,21 @@
 using UnityEngine;
-
-#if ENABLE_INPUT_SYSTEM
 using UnityEngine.InputSystem;
-#endif
 
-public sealed class PlayerInputModule
+public class PlayerInputModule
 {
     private readonly PlayerHub _hub;
 
-    public Vector2 MoveInput { get; private set; }
-    public bool IsSprinting { get; private set; }
-
+    private Vector2 _move;
+    private Vector2 _mouseDelta;
     private bool _jumpPressed;
-    private bool _attackPressed;
+    private bool _primaryAttackPressed;
     private bool _interactPressed;
-    private bool _escapePressed;
+    private bool _cursorTogglePressed;
+    private bool _sprintHeld;
+
+    public Vector2 MoveInput => _move;
+    public Vector2 MouseDelta => _mouseDelta;
+    public bool IsSprinting => _sprintHeld;
 
     public PlayerInputModule(PlayerHub hub)
     {
@@ -23,40 +24,42 @@ public sealed class PlayerInputModule
 
     public void Tick()
     {
-#if ENABLE_INPUT_SYSTEM
-        var kb = Keyboard.current;
-        var ms = Mouse.current;
+        _move = Vector2.zero;
+        _mouseDelta = Vector2.zero;
 
-        MoveInput = ReadMove(kb);
-        IsSprinting = kb != null && (kb.leftShiftKey.isPressed || kb.rightShiftKey.isPressed);
+        if (Keyboard.current != null)
+        {
+            float x = 0f;
+            float y = 0f;
 
-        if (kb != null && kb.spaceKey.wasPressedThisFrame) _jumpPressed = true;
-        if (ms != null && ms.leftButton.wasPressedThisFrame) _attackPressed = true;
-        if (ms != null && ms.rightButton.wasPressedThisFrame) _interactPressed = true;
+            if (Keyboard.current.aKey.isPressed) x -= 1f;
+            if (Keyboard.current.dKey.isPressed) x += 1f;
+            if (Keyboard.current.sKey.isPressed) y -= 1f;
+            if (Keyboard.current.wKey.isPressed) y += 1f;
 
-        if (kb != null && kb.escapeKey.wasPressedThisFrame) _escapePressed = true;
-#else
-        MoveInput = Vector2.zero;
-        IsSprinting = false;
-#endif
+            _move = new Vector2(x, y);
+            if (_move.sqrMagnitude > 1f) _move.Normalize();
+
+            _sprintHeld = Keyboard.current.leftShiftKey.isPressed || Keyboard.current.rightShiftKey.isPressed;
+
+            if (Keyboard.current.spaceKey.wasPressedThisFrame)
+                _jumpPressed = true;
+
+            if (Keyboard.current.escapeKey.wasPressedThisFrame)
+                _cursorTogglePressed = true;
+        }
+
+        if (Mouse.current != null)
+        {
+            _mouseDelta = Mouse.current.delta.ReadValue();
+
+            if (Mouse.current.leftButton.wasPressedThisFrame)
+                _primaryAttackPressed = true;
+
+            if (Mouse.current.rightButton.wasPressedThisFrame)
+                _interactPressed = true;
+        }
     }
-
-#if ENABLE_INPUT_SYSTEM
-    private Vector2 ReadMove(Keyboard kb)
-    {
-        if (kb == null) return Vector2.zero;
-
-        float x = 0f;
-        if (kb.aKey.isPressed) x -= 1f;
-        if (kb.dKey.isPressed) x += 1f;
-
-        float y = 0f;
-        if (kb.sKey.isPressed) y -= 1f;
-        if (kb.wKey.isPressed) y += 1f;
-
-        return Vector2.ClampMagnitude(new Vector2(x, y), 1f);
-    }
-#endif
 
     public bool ConsumeJumpPressed()
     {
@@ -67,8 +70,8 @@ public sealed class PlayerInputModule
 
     public bool ConsumePrimaryAttackPressed()
     {
-        bool v = _attackPressed;
-        _attackPressed = false;
+        bool v = _primaryAttackPressed;
+        _primaryAttackPressed = false;
         return v;
     }
 
@@ -79,10 +82,10 @@ public sealed class PlayerInputModule
         return v;
     }
 
-    public bool ConsumeEscapePressed()
+    public bool ConsumeCursorTogglePressed()
     {
-        bool v = _escapePressed;
-        _escapePressed = false;
+        bool v = _cursorTogglePressed;
+        _cursorTogglePressed = false;
         return v;
     }
 }
