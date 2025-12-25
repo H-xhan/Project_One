@@ -1,27 +1,27 @@
 using Unity.Netcode;
 using UnityEngine;
 
-[RequireComponent(typeof(NetworkObject))]
 public class ItemPickupNetwork : NetworkBehaviour
 {
-    [Header("Data")]
-    [Tooltip("에디터 편의용. 지정하면 itemId에 자동 반영됨.")]
-    [SerializeField] private ItemDataSO itemData;
-
-    [Tooltip("네트워크로 전달/저장되는 아이템 ID")]
+    [Tooltip("아이템 ID (ItemDatabaseSO 기준)")]
     [SerializeField] private int itemId = 0;
 
-    [Tooltip("수량")]
-    [SerializeField] private int amount = 1;
+    [Tooltip("픽업 후 비주얼 숨김 처리")]
+    [SerializeField] private bool hideOncePicked = true;
+
+    [Tooltip("숨길 루트 오브젝트(없으면 자기 자신)")]
+    [SerializeField] private GameObject visualRoot;
 
     public int ItemId => itemId;
-    public int Amount => amount;
 
-    private void OnValidate()
+    public void HideVisual()
     {
-        if (itemData != null)
-            itemId = itemData.itemId;
+        if (!hideOncePicked) return;
 
-        if (amount < 1) amount = 1;
+        GameObject target = (visualRoot != null) ? visualRoot : gameObject;
+        if (target != null)
+        {
+            target.SetActive(false);
+        }
     }
 }

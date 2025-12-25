@@ -14,9 +14,7 @@ MonoBehaviour:
   m_EditorClassIdentifier: 
   itemId: 1
   displayName: "\uBFC5\uB9DD\uCE58"
-  description: 
   icon: {fileID: 0}
-  worldModelPrefab: {fileID: 0}
-  type: 1
+  category: 3
   stackable: 1
   maxStack: 99
