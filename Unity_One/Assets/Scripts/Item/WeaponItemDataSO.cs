@@ -50,6 +50,10 @@ public class WeaponItemDataSO : ItemDataSO
     [FormerlySerializedAs("equippedLocalScale")]
     public Vector3 equippedLocalScale = Vector3.one;
 
+    [Header("Animation")]
+    [Tooltip("애니메이터 파라미터로 보낼 무기 타입 ID (예: 0=맨주먹, 1=망치, 2=검)")]
+    public int weaponAnimID = 0; // [추가] 이거 하나면 됩니다!
+
     protected override void OnValidate()
     {
         base.OnValidate();

@@ -52,10 +52,13 @@ public class PlayerAnimModule : MonoBehaviour
         else if (animator != null) animator.SetTrigger(_jumpHash);
     }
 
-    public void TriggerAttackLight()
+    public void TriggerAttack(int weaponID)
     {
-        if (networkAnimator != null) networkAnimator.SetTrigger(_attackLightHash);
-        else if (animator != null) animator.SetTrigger(_attackLightHash);
+        // 1. "무기 타입"을 먼저 애니메이터에 알려줌 (Int 파라미터 필요)
+        animator.SetInteger("WeaponType", weaponID);
+
+        // 2. 그 다음 "공격해!" 하고 방아쇠를 당김
+        animator.SetTrigger("Attack");
     }
 
     public void TriggerPickUp()

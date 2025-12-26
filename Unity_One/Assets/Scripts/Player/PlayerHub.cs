@@ -152,12 +152,12 @@ public class PlayerHub : NetworkBehaviour
         if (jumpPressed) _jumpPressed = true;
         _sprintHeld = sprintHeld;
     }
-
     [ServerRpc]
     private void AttackServerRpc()
     {
+        // 1. 전투 모듈에게 "공격 시도해!"라고 명령
+        // (이제 전투 모듈이 쿨타임 체크하고 -> 무기 ID 확인하고 -> 애니메이션까지 틀어줍니다)
         if (combatModule != null) combatModule.DoAttack();
-        if (animModule != null) animModule.TriggerAttackLight();
     }
 
     [ServerRpc]
