@@ -87,7 +87,8 @@ public class PlayerHub : NetworkBehaviour
             out bool jumpPressed,
             out bool sprintHeld,
             out bool attackPressed,
-            out bool interactPressed
+            out bool interactPressed,
+            out bool dropPressed
         );
 
         _moveInput = move;
@@ -111,7 +112,26 @@ public class PlayerHub : NetworkBehaviour
 
         // 디버깅용 틱 (레이저 등)
         if (interactModule != null) interactModule.Tick(interactPressed);
+
+        if (dropPressed) DropItemServerRpc();
+
+        if (attackPressed) AttackServerRpc();
+
+        if (interactPressed && interactModule != null)
+        {
+            if (interactModule.TryFindPickupTarget(out NetworkObjectReference target))
+                TryPickupServerRpc(target);
+        }
+
+        if (interactModule != null) interactModule.Tick(interactPressed);
     }
+
+    [ServerRpc]
+    private void DropItemServerRpc()
+    {
+        if (interactModule != null) interactModule.ServerTryDrop();
+    }
+
 
     // [추가] 카메라 상하 회전 함수
     private void HandleCameraRotation(float pitchDelta)

@@ -8,6 +8,8 @@ public enum ItemCategory
     Weapon = 3
 }
 
+
+[CreateAssetMenu(menuName = "Game/Items/General Item", fileName = "NewItemData")]
 public class ItemDataSO : ScriptableObject
 {
     [Header("Identity")]
@@ -35,4 +37,6 @@ public class ItemDataSO : ScriptableObject
         if (maxStack < 1) maxStack = 1;
         if (!stackable) maxStack = 1;
     }
+
+
 }

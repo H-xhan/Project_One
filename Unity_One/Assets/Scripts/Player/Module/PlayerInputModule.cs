@@ -25,13 +25,14 @@ public class PlayerInputModule : MonoBehaviour
     }
 
     public void ReadInputs(
-        out Vector2 move,
-        out float yawDelta,
-        out float pitchDelta, // [추가] 상하 회전값
-        out bool jumpPressed,
-        out bool sprintHeld,
-        out bool attackPressed,
-        out bool interactPressed)
+            out Vector2 move,
+            out float yawDelta,
+            out float pitchDelta,
+            out bool jumpPressed,
+            out bool sprintHeld,
+            out bool attackPressed,
+            out bool interactPressed,
+            out bool dropPressed) // [추가]
     {
         if (allowCursorToggle && Keyboard.current != null && Keyboard.current.escapeKey.wasPressedThisFrame)
             SetCursorLock(!_cursorLocked);
@@ -40,23 +41,23 @@ public class PlayerInputModule : MonoBehaviour
         {
             move = Vector2.zero;
             yawDelta = 0f;
-            pitchDelta = 0f; // [추가]
+            pitchDelta = 0f;
             jumpPressed = false;
             sprintHeld = false;
             attackPressed = false;
             interactPressed = false;
+            dropPressed = false; // [추가]
             return;
         }
 
         move = ReadMove() * moveScale;
-
-        // [수정] 좌우/상하 델타값 분리 계산
         yawDelta = ReadYawDelta();
         pitchDelta = ReadPitchDelta();
 
         var kb = Keyboard.current;
         jumpPressed = kb != null && kb.spaceKey.wasPressedThisFrame;
         sprintHeld = kb != null && kb.leftShiftKey.isPressed;
+        dropPressed = kb != null && kb.gKey.wasPressedThisFrame; // [추가] G키로 버리기
 
         var ms = Mouse.current;
         attackPressed = ms != null && ms.leftButton.wasPressedThisFrame;

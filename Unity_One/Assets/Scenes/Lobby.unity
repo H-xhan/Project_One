@@ -1032,7 +1032,15 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: 
   ShowTopMostFoldoutHeaderGroup: 1
-  hammerPrefab: {fileID: 4582984025718723352, guid: 09a2ee2762476834083711dd68080b6c, type: 3}
+  itemsToSpawn:
+  - name: "\uBFC5\uB9DD\uCE58"
+    prefab: {fileID: 4582984025718723352, guid: 09a2ee2762476834083711dd68080b6c, type: 3}
+    position: {x: 5, y: 0, z: 0}
+    rotation: {x: 0, y: 0, z: 0}
+  - name: "\uBE60\uB530"
+    prefab: {fileID: 1459886359065782981, guid: d29be6a54b6f49146898017ea976affb, type: 3}
+    position: {x: -5, y: 0, z: 0}
+    rotation: {x: 0, y: 0, z: 0}
 --- !u!1 &581500261
 GameObject:
   m_ObjectHideFlags: 0

@@ -7,7 +7,11 @@ public class PlayerCombatModule : NetworkBehaviour
     [SerializeField] private PlayerInteractModule interactModule;
     [SerializeField] private PlayerAnimModule animModule;
 
-    // 쿨타임 체크용
+    [Header("Default Debug")]
+    [Tooltip("무기가 없을 때 기본 공격 범위")]
+    [SerializeField] private float defaultHitRadius = 0.5f;
+    [SerializeField] private float defaultHitDistance = 1.0f;
+
     private float _lastAttackTime;
 
     private void Awake()
@@ -18,10 +22,9 @@ public class PlayerCombatModule : NetworkBehaviour
 
     public void DoAttack()
     {
-        // [수정 1] 무기 데이터 가져오기
         WeaponItemDataSO weaponData = GetCurrentWeaponData();
 
-        // [핵심] 무기가 없으면 공격 아예 안 함! (맨주먹 금지)
+        // 무기가 없으면 공격 안 함
         if (weaponData == null) return;
 
         // 쿨타임 체크
@@ -33,35 +36,44 @@ public class PlayerCombatModule : NetworkBehaviour
 
     private void PerformAttack(WeaponItemDataSO weaponData)
     {
-        // [수정 2] 애니메이션 실행할 때 '어떤 무기인지(ID)'를 같이 보냄
+        // 애니메이션 실행
         TriggerAttackAnimClientRpc(weaponData.weaponAnimID);
 
-        // 공격 판정 (이전과 동일)
+        // 공격 범위 계산
         float radius = weaponData.weapon.hitRadius;
         float distance = weaponData.weapon.hitDistance;
-        float damage = weaponData.weapon.damage;
 
         Vector3 origin = transform.position + Vector3.up * 1.0f;
         Vector3 direction = transform.forward;
 
+        // 충돌 감지 (SphereCast)
         if (Physics.SphereCast(origin, radius, direction, out RaycastHit hit, distance))
         {
             NetworkObject targetNetObj = hit.collider.GetComponentInParent<NetworkObject>();
+
+            // 맞은 게 있고, 그게 나 자신이 아니라면
             if (targetNetObj != null && targetNetObj.OwnerClientId != OwnerClientId)
             {
-                Debug.Log($"⚔️ [타격 성공] {targetNetObj.name}에게 {damage} 데미지!");
-                // IDamageable 등 데미지 처리
+                // [수정] 상대방의 PlayerStatusModule을 찾아서 밀어버리기!
+                var targetStatus = targetNetObj.GetComponent<PlayerStatusModule>();
+
+                if (targetStatus != null)
+                {
+                    // 때리는 힘 계산 (보는 방향으로 10만큼 + 위로 살짝)
+                    Vector3 knockbackForce = transform.forward * 10f + Vector3.up * 2f;
+                    targetStatus.TakeHit(knockbackForce);
+
+                    Debug.Log($"[타격 성공] {targetNetObj.name}를 날려버렸습니다!");
+                }
             }
         }
-    }
+    } // <--- [중요] 아까 이 괄호가 없어서 에러가 났던 겁니다!
 
-    // [수정 3] ID를 받아서 애니메이터에 전달하는 RPC
     [ClientRpc]
     private void TriggerAttackAnimClientRpc(int weaponID)
     {
         if (animModule != null)
         {
-            // "야, 1번 무기(망치)로 때리는 시늉 해!"
             animModule.TriggerAttack(weaponID);
         }
     }
@@ -69,6 +81,7 @@ public class PlayerCombatModule : NetworkBehaviour
     private WeaponItemDataSO GetCurrentWeaponData()
     {
         if (interactModule == null) return null;
+
         if (interactModule.CurrentHeldItem.Value.TryGet(out NetworkObject heldObj))
         {
             var itemPickup = heldObj.GetComponent<ItemPickupNetwork>();
@@ -79,6 +92,4 @@ public class PlayerCombatModule : NetworkBehaviour
         }
         return null;
     }
-
-    // (Gizmos 코드는 그대로 두셔도 됩니다)
 }
