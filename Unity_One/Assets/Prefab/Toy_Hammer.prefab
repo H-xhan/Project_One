@@ -1,5 +1,36 @@
 %YAML 1.1
 %TAG !u! tag:unity3d.com,2011:
+--- !u!1 &9183611453864052479
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 6447761062384169685}
+  m_Layer: 7
+  m_Name: GripPivot
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!4 &6447761062384169685
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 9183611453864052479}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: -0.3}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 3806059675547421090}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
 --- !u!1001 &3700672883657027145
 PrefabInstance:
   m_ObjectHideFlags: 0
@@ -22,11 +53,11 @@ PrefabInstance:
       objectReference: {fileID: 0}
     - target: {fileID: -8679921383154817045, guid: d11051d437e18004298fa6ac051c8c8f, type: 3}
       propertyPath: m_LocalRotation.w
-      value: 1
+      value: 0.7071068
       objectReference: {fileID: 0}
     - target: {fileID: -8679921383154817045, guid: d11051d437e18004298fa6ac051c8c8f, type: 3}
       propertyPath: m_LocalRotation.x
-      value: 0
+      value: -0.7071068
       objectReference: {fileID: 0}
     - target: {fileID: -8679921383154817045, guid: d11051d437e18004298fa6ac051c8c8f, type: 3}
       propertyPath: m_LocalRotation.y
@@ -38,7 +69,7 @@ PrefabInstance:
       objectReference: {fileID: 0}
     - target: {fileID: -8679921383154817045, guid: d11051d437e18004298fa6ac051c8c8f, type: 3}
       propertyPath: m_LocalEulerAnglesHint.x
-      value: 0
+      value: -90
       objectReference: {fileID: 0}
     - target: {fileID: -8679921383154817045, guid: d11051d437e18004298fa6ac051c8c8f, type: 3}
       propertyPath: m_LocalEulerAnglesHint.y
@@ -66,7 +97,10 @@ PrefabInstance:
       objectReference: {fileID: 0}
     m_RemovedComponents: []
     m_RemovedGameObjects: []
-    m_AddedGameObjects: []
+    m_AddedGameObjects:
+    - targetCorrespondingSourceObject: {fileID: -8679921383154817045, guid: d11051d437e18004298fa6ac051c8c8f, type: 3}
+      insertIndex: -1
+      addedObject: {fileID: 6447761062384169685}
     m_AddedComponents:
     - targetCorrespondingSourceObject: {fileID: 919132149155446097, guid: d11051d437e18004298fa6ac051c8c8f, type: 3}
       insertIndex: -1
@@ -78,6 +112,11 @@ PrefabInstance:
       insertIndex: -1
       addedObject: {fileID: 7952153296316314755}
   m_SourcePrefab: {fileID: 100100000, guid: d11051d437e18004298fa6ac051c8c8f, type: 3}
+--- !u!4 &3806059675547421090 stripped
+Transform:
+  m_CorrespondingSourceObject: {fileID: -8679921383154817045, guid: d11051d437e18004298fa6ac051c8c8f, type: 3}
+  m_PrefabInstance: {fileID: 3700672883657027145}
+  m_PrefabAsset: {fileID: 0}
 --- !u!1 &4582984025718723352 stripped
 GameObject:
   m_CorrespondingSourceObject: {fileID: 919132149155446097, guid: d11051d437e18004298fa6ac051c8c8f, type: 3}
@@ -121,9 +160,9 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: 
   ShowTopMostFoldoutHeaderGroup: 1
-  itemData: {fileID: 11400000, guid: 447ee68a77673b74285d689993565391, type: 2}
-  itemId: 1
-  amount: 1
+  itemData: {fileID: 11400000, guid: 6c50c47863786dc40b4a0b2f132d8c5b, type: 2}
+  hideOncePicked: 1
+  visualRoot: {fileID: 4582984025718723352}
 --- !u!136 &7952153296316314755
 CapsuleCollider:
   m_ObjectHideFlags: 0

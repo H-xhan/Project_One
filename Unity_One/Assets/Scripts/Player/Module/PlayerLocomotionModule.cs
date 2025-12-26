@@ -1,12 +1,16 @@
 using UnityEngine;
 
-// [삭제됨] [RequireComponent(typeof(CharacterController))]  <-- 이 줄이 범인이었습니다!
 public class PlayerLocomotionModule : MonoBehaviour
 {
-    [Header("Move")]
+    [Header("Move Settings")]
     [SerializeField] private float walkSpeed = 4f;
     [SerializeField] private float sprintSpeed = 7f;
-    [SerializeField] private float acceleration = 10f;
+
+    [Tooltip("출발할 때 얼마나 빨리 최고 속도에 도달하는지")]
+    [SerializeField] private float acceleration = 15f; // [수정] 기존 10 -> 15 (좀 더 빠르게 출발)
+
+    [Tooltip("멈출 때 얼마나 빨리 정지하는지 (높을수록 칼브레이크)")]
+    [SerializeField] private float deceleration = 30f; // [추가] 멈출 때는 2배 더 강력하게!
 
     [Header("Jump/Gravity")]
     [SerializeField] private float jumpHeight = 1.5f;
@@ -17,15 +21,14 @@ public class PlayerLocomotionModule : MonoBehaviour
     [SerializeField] private float yawScale = 1f;
 
     private CharacterController _cc;
-    private Vector3 _planarVelocity;
-    private float _verticalVelocity;
+    private Vector3 _planarVelocity; // 수평 속도 (X, Z)
+    private float _verticalVelocity; // 수직 속도 (Y)
 
     public bool IsGrounded => _cc != null && _cc.isGrounded;
     public float PlanarSpeed => new Vector2(_planarVelocity.x, _planarVelocity.z).magnitude;
 
     private void Awake()
     {
-        // 부모에서 찾으니까 RequireComponent 없어도 됩니다.
         _cc = GetComponentInParent<CharacterController>();
     }
 
@@ -33,16 +36,16 @@ public class PlayerLocomotionModule : MonoBehaviour
     {
         if (_cc == null) return false;
         bool didJump = false;
-
         float dt = Time.deltaTime;
 
+        // 1. 회전 처리 (마우스)
         if (Mathf.Abs(yawDelta) > 0.001f)
             _cc.transform.Rotate(0f, yawDelta * yawScale, 0f);
 
+        // 2. 점프 및 중력 처리
         if (IsGrounded)
         {
-            if (_verticalVelocity < 0f)
-                _verticalVelocity = stickToGroundForce;
+            if (_verticalVelocity < 0f) _verticalVelocity = stickToGroundForce; // 바닥 밀착
 
             if (jumpPressed)
             {
@@ -50,22 +53,37 @@ public class PlayerLocomotionModule : MonoBehaviour
                 didJump = true;
             }
         }
-
         _verticalVelocity += gravity * dt;
 
+        // 3. 이동 속도 계산 (핵심 수정!)
         float targetSpeed = sprintHeld ? sprintSpeed : walkSpeed;
+
+        // 입력이 없으면 목표 속도는 0
         if (moveInput.sqrMagnitude == 0) targetSpeed = 0;
 
-        Vector3 desired = (_cc.transform.right * moveInput.x + _cc.transform.forward * moveInput.y);
-        if (desired.sqrMagnitude > 1f) desired.Normalize();
-        desired *= targetSpeed;
+        // 목표 방향 벡터 계산
+        Vector3 inputDir = (_cc.transform.right * moveInput.x + _cc.transform.forward * moveInput.y);
+        if (inputDir.sqrMagnitude > 1f) inputDir.Normalize();
 
-        _planarVelocity = Vector3.Lerp(_planarVelocity, desired, 1f - Mathf.Exp(-acceleration * dt));
+        Vector3 desiredVelocity = inputDir * targetSpeed;
 
-        Vector3 motion = _planarVelocity;
-        motion.y = _verticalVelocity;
+        // [핵심] 입력이 있으면 '가속도', 입력이 없으면(멈출 때) '감속도' 적용
+        float currentAccel = (moveInput.sqrMagnitude > 0) ? acceleration : deceleration;
 
-        _cc.Move(motion * dt);
+        // 부드러운 속도 변화 (Lerp)
+        _planarVelocity = Vector3.Lerp(_planarVelocity, desiredVelocity, 1f - Mathf.Exp(-currentAccel * dt));
+
+        // 속도가 아주 미세하게 남았을 때 완벽하게 0으로 만들기 (떨림 방지)
+        if (targetSpeed == 0 && _planarVelocity.sqrMagnitude < 0.01f)
+        {
+            _planarVelocity = Vector3.zero;
+        }
+
+        // 4. 최종 이동 적용
+        Vector3 finalMotion = _planarVelocity;
+        finalMotion.y = _verticalVelocity;
+
+        _cc.Move(finalMotion * dt);
 
         return didJump;
     }
