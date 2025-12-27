@@ -42,10 +42,26 @@ public class PlayerHub : NetworkBehaviour
 
     public override void OnNetworkSpawn()
     {
-        base.OnNetworkSpawn();
-        ResolveRefs();
-        ApplyOwnerVisuals();
-        if (!IsOwner && inputModule != null) inputModule.enabled = false;
+        base.OnNetworkSpawn(); // 습관적으로 넣어주면 좋습니다.
+
+        // 1. [소리/화면 문제 해결]
+        // "이 캐릭터가 내 거면 놔두고, 남의 거면 눈과 귀를 막아라"
+        if (!IsOwner)
+        {
+            var cam = GetComponentInChildren<Camera>();
+            if (cam != null) cam.enabled = false;
+
+            var listener = GetComponentInChildren<AudioListener>();
+            if (listener != null) listener.enabled = false;
+        }
+
+        // 2. [공중 부양 문제 해결]
+        // "서버야, 캐릭터 소환할 때 제발 겹치지 않게 랜덤한 위치에 놔줘"
+        if (IsServer)
+        {
+            // X축으로 -3 ~ 3 사이 아무 데나, 높이는 1m
+            transform.position = new Vector3(Random.Range(-3f, 3f), 1f, 0f);
+        }
     }
 
     [ContextMenu("Auto Find Modules")]
