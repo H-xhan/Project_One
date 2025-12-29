@@ -8,9 +8,6 @@ public class PlayerCombatModule : NetworkBehaviour
     [SerializeField] private PlayerAnimModule animModule;
 
     [Header("Default Debug")]
-    [Tooltip("무기가 없을 때 기본 공격 범위")]
-    [SerializeField] private float defaultHitRadius = 0.5f;
-    [SerializeField] private float defaultHitDistance = 1.0f;
 
     private float _lastAttackTime;
 

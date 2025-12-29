@@ -10,7 +10,6 @@ public class PlayerStatusModule : NetworkBehaviour
 
     [Header("Coin Settings")]
     [SerializeField] private GameObject coinPrefab; // 떨어뜨릴 코인 프리팹
-    [SerializeField] private float recoverTime = 3.0f; // 넘어지고 일어나는 시간
 
     private Rigidbody[] _ragdollRbs;
     private Collider[] _ragdollColls;
@@ -35,7 +34,7 @@ public class PlayerStatusModule : NetworkBehaviour
         TakeHitServerRpc(hitForce);
     }
 
-    [ServerRpc(RequireOwnership = false)]
+    [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Everyone)]
     private void TakeHitServerRpc(Vector3 hitForce)
     {
         // 모든 클라이언트에게 랙돌 켜라고 명령
@@ -96,19 +95,19 @@ public class PlayerStatusModule : NetworkBehaviour
         yield return new WaitForSeconds(1.0f); // 잠시 숨 고르기
 
         // 4. 상황에 맞는 기상 애니메이션 실행
-        ToggleRagdoll(false);
+        ToggleRagdoll(false); // 물리 끄고 애니메이션 ON
 
         if (animator != null)
         {
             if (isFaceUp)
             {
-                animator.SetTrigger("StandUp"); // 등 대고 일어나기 (기존)
+                // 하늘 보고 누웠다 -> 등으로 일어나기
+                animator.SetTrigger("StandUpBack");
             }
             else
             {
-                // 엎드려 일어나는 애니메이션이 있다면 "StandUpFront" 실행
-                // 없으면 그냥 "StandUp" 실행 (약간 어색할 수 있음)
-                animator.SetTrigger("StandUp");
+                // 땅 보고 엎드렸다 -> 배로 일어나기
+                animator.SetTrigger("StandUpFront");
             }
         }
 
