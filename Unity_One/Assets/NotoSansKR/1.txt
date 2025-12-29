@@ -1,0 +1,126 @@
+🎨 0단계: 캔버스(Canvas) 설정 (도화지 준비)
+Hierarchy(계층) 창 우클릭 ➡ UI ➡ Canvas 클릭.
+
+새로 생긴 Canvas를 클릭하고 Inspector(속성) 창을 보세요.
+
+Canvas Scaler 컴포넌트에서:
+
+UI Scale Mode를 Scale With Screen Size로 변경.
+
+Reference Resolution을 1920 x 1080으로 설정. (이렇게 해야 화면 크기가 바뀌어도 UI가 안 깨집니다.)
+
+📜 1단계: 방 목록이 들어갈 '스크롤 뷰' 만들기
+방이 100개가 되면 스크롤을 내려야 하니까, 목록 상자를 먼저 만듭니다.
+
+Canvas 우클릭 ➡ UI ➡ Scroll View 생성.
+
+이름을 **LobbyScrollView**로 바꾸세요.
+
+화면 가운데 큼직하게 크기를 키우세요.
+
+[중요] LobbyScrollView 왼쪽 화살표(▶)를 눌러서 계층을 펼치세요.
+
+LobbyScrollView ➡ Viewport ➡ Content 라는 녀석을 찾으세요.
+
+Content 오브젝트를 클릭하고, Inspector 창에서 Add Component 클릭.
+
+Vertical Layout Group 검색해서 추가.
+
+(기능: 자식들을 세로로 예쁘게 줄 세워줌)
+
+Control Child Size의 Width를 체크하세요. (가로폭 꽉 차게)
+
+Content Size Fitter 검색해서 추가.
+
+Vertical Fit을 Preferred Size로 변경.
+
+(기능: 목록이 늘어나면 스크롤 영역도 같이 길어지게 함)
+
+🎫 2단계: 방 목록 아이템(Template) 만들기
+목록에 들어갈 "한 줄짜리 디자인"을 만듭니다.
+
+아까 찾은 Content 오브젝트 우클릭 ➡ UI ➡ Image 생성.
+
+이름을 **LobbyItemTemplate**으로 바꾸세요.
+
+색상은 흰색 말고 약간 회색으로 해서 눈에 띄게 하세요.
+
+LobbyItemTemplate 안에 내용물을 넣습니다. (우클릭 ➡ UI ➡ Text - TextMeshPro 등)
+
+Text (TMP) 1개: 이름 RoomNameText (방 제목 표시용)
+
+Text (TMP) 1개: 이름 PlayerCountText (1/4 표시용)
+
+Button (TMP) 1개: 이름 JoinButton (참가 버튼)
+
+[스크립트 연결]
+
+**LobbyItemTemplate**을 클릭.
+
+작성해둔 LobbyListSingleUI.cs 스크립트를 드래그해서 넣으세요.
+
+스크립트 칸에 빈칸이 3개 보이죠?
+
+Lobby Name Text 칸에 ➡ 아까 만든 RoomNameText 드래그.
+
+Players Text 칸에 ➡ 아까 만든 PlayerCountText 드래그.
+
+Join Button 칸에 ➡ 아까 만든 JoinButton 드래그.
+
+[숨기기]
+
+이 템플릿은 "복사 원본"이라서 게임 시작하자마자 보이면 안 됩니다.
+
+Inspector 창 맨 위, 이름 옆의 체크박스를 해제해서 꺼두세요(Inactive).
+⌨️ 3단계: 방 만들기 / 참가하기 입력창 만들기
+이제 목록 상자 밖(위나 아래)에 입력 UI를 만듭니다. Canvas 우클릭해서 만드세요.
+
+방 만들기 세트
+
+UI ➡ Input Field - TextMeshPro 생성. (이름: CreateRoomInput)
+
+UI ➡ Button - TextMeshPro 생성. (이름: CreateButton)
+
+버튼 텍스트를 "방 만들기"로 바꾸세요.
+
+코드 참가 세트
+
+UI ➡ Input Field - TextMeshPro 생성. (이름: CodeJoinInput)
+
+UI ➡ Button - TextMeshPro 생성. (이름: CodeJoinButton)
+
+버튼 텍스트를 "코드로 참가"로 바꾸세요.
+
+새로고침 버튼 (선택)
+
+UI ➡ Button 생성. (이름: RefreshButton)
+
+🧠 4단계: LobbyUI 매니저 연결 (최종 합체!)
+이제 화면에 깔아둔 그림들과 LobbyUI.cs 코드를 연결할 차례입니다.
+
+Hierarchy 창에서 빈 공간 우클릭 ➡ Create Empty.
+
+이름을 **LobbyUIManager**라고 지으세요. (Canvas 안에 있어도 되고 밖에 있어도 됨)
+
+여기에 LobbyUI.cs 스크립트를 드래그해서 붙이세요.
+
+Inspector 창의 빈칸 채우기 (드래그 앤 드롭):
+
+Create Lobby Button: ➡ 3단계에서 만든 CreateButton
+
+Join Code Button: ➡ 3단계에서 만든 CodeJoinButton
+
+Create Input: ➡ 3단계에서 만든 CreateRoomInput
+
+Code Input: ➡ 3단계에서 만든 CodeJoinInput
+
+Container: ➡ 1단계에서 만든 Scroll View 안의 Content (중요! Viewport 말고 Content 넣어야 함)
+
+Lobby Single Template: ➡ 2단계에서 만들고 꺼둔 LobbyItemTemplate
+
+Refresh Button: ➡ 3단계에서 만든 RefreshButton
+
+✅ 체크리스트 (완성 확인)
+CreateRoomInput에 "테스트방"이라고 적고 [방 만들기] 버튼 누르면 로그가 뜨나요?
+
+다른 폰이나 유니티 창을 하나 더 켜서 [새로고침]을 누르면 목록에 "테스트방" 줄이 생기나요?

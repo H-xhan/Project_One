@@ -49,7 +49,7 @@ public class PlayerHub : NetworkBehaviour
 
         if (!IsOwner && inputModule != null) inputModule.enabled = false;
 
-        // 1. [소리/화면 끄기]
+        // 소리/화면 끄기 (내 거 아니면)
         if (!IsOwner)
         {
             var cam = GetComponentInChildren<Camera>();
@@ -58,34 +58,41 @@ public class PlayerHub : NetworkBehaviour
             if (listener != null) listener.enabled = false;
         }
 
-        // 2. [위치 잡기] 서버에서만 실행
-        if (IsServer)
-        {
-            // 그냥 옮기지 말고, 코루틴(시간차 실행)에게 맡깁니다.
-            StartCoroutine(SpawnPosRoutine());
-        }
+        // [핵심 해결책]
+        // 서버뿐만 아니라 클라이언트도! 
+        // 일단 태어나자마자 안전한 "자기 자리"로 이동시킵니다.
+        // 그래야 (0,0,0)에서 겹쳐서 튕겨 나가는 걸 막을 수 있습니다.
+        StartCoroutine(SpawnPosRoutine());
     }
 
-    // [새로 추가] 안전하게 위치를 옮겨주는 함수
     private IEnumerator SpawnPosRoutine()
     {
         var cc = GetComponent<CharacterController>();
 
-        // 1. 물리 끄기
+        // 1. 이동 중 물리 충돌 방지를 위해 잠시 끄기
         if (cc != null) cc.enabled = false;
+        yield return null; // 1프레임 대기
 
-        // 2. 한 프레임 쉬기 (물리 엔진이 "아 꺼졌구나" 인식할 시간 줌)
-        yield return null;
+        // 2. 내 번호(ID)에 맞는 스폰 포인트 찾기
+        // (Hierarchy에 있는 "SpawnPoint_0", "SpawnPoint_1"을 찾습니다)
+        string pointName = $"SpawnPoint_{OwnerClientId}";
+        GameObject spawnPoint = GameObject.Find(pointName);
 
-        // 3. 위치 이동 (겹치지 않게 배치)
-        // Y값을 2.0f로 조금 더 높여서 안전하게 낙하하도록 함
-        float xPos = (OwnerClientId % 2 == 0) ? -2f : 2f;
-        transform.position = new Vector3(xPos, 2.0f, 0f);
+        if (spawnPoint != null)
+        {
+            // 스폰 포인트가 있으면 거기로 이동!
+            transform.position = spawnPoint.transform.position;
+            transform.rotation = spawnPoint.transform.rotation;
+        }
+        else
+        {
+            // 만약 스폰 포인트가 없으면 기존처럼 계산해서 이동 (비상용)
+            float xPos = (OwnerClientId % 2 == 0) ? -2f : 2f;
+            transform.position = new Vector3(xPos, 2.0f, 0f);
+        }
 
-        // 4. 한 프레임 더 쉬기 (이동한 위치 정착)
-        yield return null;
-
-        // 5. 물리 다시 켜기
+        // 3. 위치 잡았으니 물리 다시 켜기
+        yield return null; // 1프레임 더 대기 (안정화)
         if (cc != null) cc.enabled = true;
     }
 

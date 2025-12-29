@@ -1653,8 +1653,6 @@ MonoBehaviour:
   ShowTopMostFoldoutHeaderGroup: 1
   interactModule: {fileID: 5891605903882672687}
   animModule: {fileID: 2882960682518766762}
-  defaultHitRadius: 0.5
-  defaultHitDistance: 1
 --- !u!114 &2428065915232083517
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -1726,7 +1724,6 @@ MonoBehaviour:
   animator: {fileID: 7231427859088972636}
   hipsBone: {fileID: 9215555232004550344}
   coinPrefab: {fileID: 8318734578456762395, guid: aa2f23a2833ae41409b138ee8f7e1856, type: 3}
-  recoverTime: 5
 --- !u!1 &4978170651065539345
 GameObject:
   m_ObjectHideFlags: 0
@@ -2486,7 +2483,7 @@ AudioListener:
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 6608600813087838500}
-  m_Enabled: 1
+  m_Enabled: 0
 --- !u!114 &382158380312074532
 MonoBehaviour:
   m_ObjectHideFlags: 0
