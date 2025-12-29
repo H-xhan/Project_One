@@ -1,3 +1,4 @@
+using System.Collections;
 using Unity.Netcode;
 using UnityEngine;
 
@@ -42,42 +43,50 @@ public class PlayerHub : NetworkBehaviour
 
     public override void OnNetworkSpawn()
     {
-        base.OnNetworkSpawn(); // [수정] 이건 맨 처음에 한 번만!
-
+        base.OnNetworkSpawn();
         ResolveRefs();
         ApplyOwnerVisuals();
 
         if (!IsOwner && inputModule != null) inputModule.enabled = false;
 
-        // 1. [소리/화면 문제 해결]
+        // 1. [소리/화면 끄기]
         if (!IsOwner)
         {
             var cam = GetComponentInChildren<Camera>();
             if (cam != null) cam.enabled = false;
-
             var listener = GetComponentInChildren<AudioListener>();
             if (listener != null) listener.enabled = false;
         }
 
-        // 2. [공중 부양 & 겹침 해결]
-        // 서버가 위치를 지정해줍니다.
+        // 2. [위치 잡기] 서버에서만 실행
         if (IsServer)
         {
-            // [핵심] 캐릭터 컨트롤러가 있으면, 켜져 있는 동안엔 강제 이동이 안 됩니다.
-            // 그래서 "잠깐 껐다가 옮기고 다시 켜야" 합니다.
-            var cc = GetComponent<CharacterController>();
-            if (cc != null) cc.enabled = false; // 1. 끄기
-
-            // 3. [스폰 위치 전략]
-            // 랜덤도 좋지만, 플레이어 번호(ClientId)에 따라 자리를 정해주면 절대 안 겹칩니다.
-            // 예: 0번 플레이어는 (-2, 1, 0), 1번 플레이어는 (2, 1, 0)
-            float xPos = (OwnerClientId % 2 == 0) ? -2f : 2f;
-            // (사람이 더 많아지면 배열을 쓰는 게 좋지만, 지금은 1:1이니까 이렇게 간단히!)
-
-            transform.position = new Vector3(xPos, 1f, 0f);
-
-            if (cc != null) cc.enabled = true; // 2. 다시 켜기 (중요!)
+            // 그냥 옮기지 말고, 코루틴(시간차 실행)에게 맡깁니다.
+            StartCoroutine(SpawnPosRoutine());
         }
+    }
+
+    // [새로 추가] 안전하게 위치를 옮겨주는 함수
+    private IEnumerator SpawnPosRoutine()
+    {
+        var cc = GetComponent<CharacterController>();
+
+        // 1. 물리 끄기
+        if (cc != null) cc.enabled = false;
+
+        // 2. 한 프레임 쉬기 (물리 엔진이 "아 꺼졌구나" 인식할 시간 줌)
+        yield return null;
+
+        // 3. 위치 이동 (겹치지 않게 배치)
+        // Y값을 2.0f로 조금 더 높여서 안전하게 낙하하도록 함
+        float xPos = (OwnerClientId % 2 == 0) ? -2f : 2f;
+        transform.position = new Vector3(xPos, 2.0f, 0f);
+
+        // 4. 한 프레임 더 쉬기 (이동한 위치 정착)
+        yield return null;
+
+        // 5. 물리 다시 켜기
+        if (cc != null) cc.enabled = true;
     }
 
     [ContextMenu("Auto Find Modules")]
@@ -182,7 +191,11 @@ public class PlayerHub : NetworkBehaviour
 
     private void TickServer()
     {
-        // [주의] 점프 여부를 받아옴
+        // [추가] 캐릭터 컨트롤러가 꺼져 있으면(스폰 중이면) 움직임 로직을 멈춘다!
+        // 이걸 넣으면 빨간 에러가 싹 사라집니다.
+        if (CharacterController == null || !CharacterController.enabled) return;
+
+        // --- (아래는 원래 있던 코드 그대로) ---
         bool jumped = false;
         if (locomotionModule != null)
             jumped = locomotionModule.TickServer(_moveInput, _yawDelta, _jumpPressed, _sprintHeld);
