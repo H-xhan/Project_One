@@ -42,10 +42,14 @@ public class PlayerHub : NetworkBehaviour
 
     public override void OnNetworkSpawn()
     {
-        base.OnNetworkSpawn(); // 습관적으로 넣어주면 좋습니다.
+        base.OnNetworkSpawn(); // [수정] 이건 맨 처음에 한 번만!
+
+        ResolveRefs();
+        ApplyOwnerVisuals();
+
+        if (!IsOwner && inputModule != null) inputModule.enabled = false;
 
         // 1. [소리/화면 문제 해결]
-        // "이 캐릭터가 내 거면 놔두고, 남의 거면 눈과 귀를 막아라"
         if (!IsOwner)
         {
             var cam = GetComponentInChildren<Camera>();
@@ -55,12 +59,24 @@ public class PlayerHub : NetworkBehaviour
             if (listener != null) listener.enabled = false;
         }
 
-        // 2. [공중 부양 문제 해결]
-        // "서버야, 캐릭터 소환할 때 제발 겹치지 않게 랜덤한 위치에 놔줘"
+        // 2. [공중 부양 & 겹침 해결]
+        // 서버가 위치를 지정해줍니다.
         if (IsServer)
         {
-            // X축으로 -3 ~ 3 사이 아무 데나, 높이는 1m
-            transform.position = new Vector3(Random.Range(-3f, 3f), 1f, 0f);
+            // [핵심] 캐릭터 컨트롤러가 있으면, 켜져 있는 동안엔 강제 이동이 안 됩니다.
+            // 그래서 "잠깐 껐다가 옮기고 다시 켜야" 합니다.
+            var cc = GetComponent<CharacterController>();
+            if (cc != null) cc.enabled = false; // 1. 끄기
+
+            // 3. [스폰 위치 전략]
+            // 랜덤도 좋지만, 플레이어 번호(ClientId)에 따라 자리를 정해주면 절대 안 겹칩니다.
+            // 예: 0번 플레이어는 (-2, 1, 0), 1번 플레이어는 (2, 1, 0)
+            float xPos = (OwnerClientId % 2 == 0) ? -2f : 2f;
+            // (사람이 더 많아지면 배열을 쓰는 게 좋지만, 지금은 1:1이니까 이렇게 간단히!)
+
+            transform.position = new Vector3(xPos, 1f, 0f);
+
+            if (cc != null) cc.enabled = true; // 2. 다시 켜기 (중요!)
         }
     }
 
