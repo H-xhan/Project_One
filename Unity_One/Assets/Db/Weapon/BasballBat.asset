@@ -20,8 +20,8 @@ MonoBehaviour:
   maxStack: 1
   weapon:
     cooldown: 0.6
-    hitDistance: 1.2
-    hitRadius: 0.8
+    hitDistance: 3
+    hitRadius: 2.5
     damage: 10
   equippedModelPrefab: {fileID: 0}
   hand: 0

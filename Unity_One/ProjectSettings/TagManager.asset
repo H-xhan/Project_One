@@ -7,6 +7,8 @@ TagManager:
   - SpawnPoint
   - LobbySpawnPoint
   - Ground
+  - Item
+  - AI
   layers:
   - Default
   - TransparentFX

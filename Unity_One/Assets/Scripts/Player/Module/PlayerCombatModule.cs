@@ -33,38 +33,54 @@ public class PlayerCombatModule : NetworkBehaviour
 
     private void PerformAttack(WeaponItemDataSO weaponData)
     {
-        // 애니메이션 실행
+        // 1. 애니메이션 실행
         TriggerAttackAnimClientRpc(weaponData.weaponAnimID);
 
-        // 공격 범위 계산
-        float radius = weaponData.weapon.hitRadius;
-        float distance = weaponData.weapon.hitDistance;
+        // 2. 공격 범위 설정 (데이터 사용)
+        float range = weaponData.weapon.hitDistance; // 사거리 (예: 2m)
+        float radius = weaponData.weapon.hitRadius;  // 공격 범위 (예: 1m)
 
-        Vector3 origin = transform.position + Vector3.up * 1.0f;
-        Vector3 direction = transform.forward;
+        // [핵심 변경] "발사"하지 않고, 내 앞에 "공격 지대"를 생성합니다.
+        // 내 위치에서 '사거리의 절반'만큼 앞으로 간 곳을 중심으로 잡습니다.
+        Vector3 attackCenter = transform.position + (transform.forward * (range * 0.5f));
 
-        // 충돌 감지 (SphereCast)
-        if (Physics.SphereCast(origin, radius, direction, out RaycastHit hit, distance))
+        // 사거리와 공격 범위를 모두 커버하도록 넉넉하게 반지름을 잡습니다.
+        float finalRadius = Mathf.Max(range * 0.5f, radius);
+
+        // 디버그용: 몇 명이나 걸렸는지 로그 찍기
+        Collider[] hits = Physics.OverlapSphere(attackCenter, finalRadius);
+
+        Debug.Log($"[공격 판정] 위치: {attackCenter}, 크기: {finalRadius}, 감지된 수: {hits.Length}");
+
+        foreach (Collider col in hits)
         {
-            NetworkObject targetNetObj = hit.collider.GetComponentInParent<NetworkObject>();
+            Debug.Log($"감지된 물체: {col.name} (부모: {col.transform.root.name})");
+            // 1. 나 자신은 때리지 않기
+            if (col.transform.root == transform.root) continue;
 
-            // 맞은 게 있고, 그게 나 자신이 아니라면
+            // 2. [PvP] 플레이어 타격
+            NetworkObject targetNetObj = col.GetComponentInParent<NetworkObject>();
             if (targetNetObj != null && targetNetObj.OwnerClientId != OwnerClientId)
             {
-                // [수정] 상대방의 PlayerStatusModule을 찾아서 밀어버리기!
                 var targetStatus = targetNetObj.GetComponent<PlayerStatusModule>();
-
                 if (targetStatus != null)
                 {
-                    // 때리는 힘 계산 (보는 방향으로 10만큼 + 위로 살짝)
                     Vector3 knockbackForce = transform.forward * 10f + Vector3.up * 2f;
                     targetStatus.TakeHit(knockbackForce);
-
-                    Debug.Log($"[타격 성공] {targetNetObj.name}를 날려버렸습니다!");
+                    Debug.Log($"[PvP] {targetNetObj.name} 타격 성공!");
                 }
             }
+
+            // 3. [PvE] 봇 타격 (이제 겹쳐 있어도 무조건 맞습니다!)
+            var dummyStatus = col.GetComponentInParent<TestDummyStatus>();
+            if (dummyStatus != null)
+            {
+                Vector3 knockbackForce = transform.forward * 15f + Vector3.up * 3f;
+                dummyStatus.TakeHit(knockbackForce);
+                Debug.Log($"🤖 [PvE] 봇({col.name}) 타격 성공! 뻥!");
+            }
         }
-    } // <--- [중요] 아까 이 괄호가 없어서 에러가 났던 겁니다!
+    }
 
     [ClientRpc]
     private void TriggerAttackAnimClientRpc(int weaponID)
