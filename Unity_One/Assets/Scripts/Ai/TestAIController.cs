@@ -24,6 +24,11 @@ public class TestAIController : MonoBehaviour
 
     void Update()
     {
+        //랙돌 상태이거나 에이전트가 꺼져 있으면 아래 로직(SetDestination)을 실행하지 않음
+        if (_agent == null || !_agent.enabled || !_agent.isOnNavMesh)
+        {
+            return;
+        }
         if (_targetPlayer == null)
         {
             FindTarget();

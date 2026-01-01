@@ -4,40 +4,85 @@ using UnityEngine;
 
 public class PlayerStatusModule : NetworkBehaviour
 {
-    [Header("Ragdoll Settings")]
+    [Header("References")]
+    [Tooltip("Animator (비어있으면 자동 탐색)")]
     [SerializeField] private Animator animator;
-    [SerializeField] private Transform hipsBone; // [중요] 랙돌의 중심(Pelvis/Hips) 뼈를 연결하세요
+
+    [Tooltip("Ragdoll 기준 뼈(보통 Hips/Pelvis). 반드시 연결 권장")]
+    [SerializeField] private Transform hipsBone;
+
+    [Tooltip("CharacterController (비어있으면 자동 탐색)")]
+    [SerializeField] private CharacterController characterController;
+
+    [Tooltip("메인 콜라이더(루트). 없으면 자동 탐색")]
+    [SerializeField] private Collider mainCollider;
+
+    [Header("Ragdoll Tuning")]
+    [Tooltip("랙돌 최소 유지 시간(초)")]
+    [SerializeField] private float minRagdollTime = 0.2f;
+
+    [Tooltip("랙돌 최대 유지 시간(초)")]
+    [SerializeField] private float maxRagdollTime = 5.0f;
+
+    [Tooltip("멈췄다고 판단하는 속도 기준")]
+    [SerializeField] private float settleSpeed = 0.15f;
+
+    [Tooltip("랙돌 중 선형 감쇠(Drag)")]
+    [SerializeField] private float ragdollLinearDamping = 1.0f;
+
+    [Tooltip("랙돌 중 각 감쇠(Angular Drag)")]
+    [SerializeField] private float ragdollAngularDamping = 5.0f;
+
+    [Tooltip("기상 시 루트 XZ를 hips 위치로 스냅(서버만)")]
+    [SerializeField] private bool snapRootXZToHipsOnRecover = true;
 
     [Header("Coin Settings")]
-    [SerializeField] private GameObject coinPrefab; // 떨어뜨릴 코인 프리팹
+    [Tooltip("코인 프리팹(드랍용). NetworkObject 포함 필요")]
+    [SerializeField] private GameObject coinPrefab;
 
     private Rigidbody[] _ragdollRbs;
     private Collider[] _ragdollColls;
-    private bool _isRagdoll = false;
+    private bool _isRagdoll;
+
+    public bool IsRagdoll => _isRagdoll;
 
     private void Awake()
     {
-        // 내 몸에 있는 모든 랙돌 부품 찾아오기
-        _ragdollRbs = GetComponentsInChildren<Rigidbody>();
-        _ragdollColls = GetComponentsInChildren<Collider>();
+        if (animator == null) animator = GetComponentInChildren<Animator>(true);
+        if (characterController == null) characterController = GetComponentInParent<CharacterController>();
+        if (mainCollider == null)
+        {
+            // 루트(플레이어 본체)에 붙은 콜라이더를 우선 찾기
+            var rootNo = GetComponentInParent<NetworkObject>();
+            if (rootNo != null) mainCollider = rootNo.GetComponent<Collider>();
+            if (mainCollider == null) mainCollider = GetComponentInParent<Collider>();
+        }
 
-        // 시작할 때는 랙돌 끄기 (애니메이션 모드)
-        ToggleRagdoll(false);
+        Transform searchRoot = hipsBone != null ? hipsBone.root : transform;
+
+        _ragdollRbs = searchRoot.GetComponentsInChildren<Rigidbody>(true);
+        _ragdollColls = searchRoot.GetComponentsInChildren<Collider>(true);
+
+        SetRagdollState(false);
     }
 
-    // 외부(CombatModule)에서 때릴 때 호출하는 함수
     public void TakeHit(Vector3 hitForce)
     {
-        if (_isRagdoll) return; // 이미 넘어져 있으면 패스
+        if (_isRagdoll) return;
 
-        // 서버에게 "나 맞았어! 랙돌 켜줘!" 요청
-        TakeHitServerRpc(hitForce);
+        if (IsServer)
+        {
+            ToggleRagdollClientRpc(hitForce);
+        }
+        else
+        {
+            TakeHitServerRpc(hitForce);
+        }
     }
 
     [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Everyone)]
     private void TakeHitServerRpc(Vector3 hitForce)
     {
-        // 모든 클라이언트에게 랙돌 켜라고 명령
         ToggleRagdollClientRpc(hitForce);
     }
 
@@ -50,109 +95,118 @@ public class PlayerStatusModule : NetworkBehaviour
     private IEnumerator RagdollRoutine(Vector3 hitForce)
     {
         _isRagdoll = true;
-        ToggleRagdoll(true);
+        SetRagdollState(true);
 
-        // 1. 날리기
         Rigidbody hipsRb = null;
-        if (hipsBone != null && hipsBone.TryGetComponent(out hipsRb))
+        if (hipsBone != null) hipsBone.TryGetComponent(out hipsRb);
+
+        if (hipsRb != null)
         {
             hipsRb.AddForce(hitForce, ForceMode.Impulse);
         }
 
-        // 2. 멈출 때까지 기다리기 (속도 체크)
-        float safetyTimer = 0f;
-        yield return new WaitForSeconds(0.2f); // 최소 0.2초는 날아가게 둠
+        float timer = 0f;
+        yield return new WaitForSeconds(minRagdollTime);
 
-        while (safetyTimer < 5.0f)
+        while (timer < maxRagdollTime)
         {
-            safetyTimer += Time.deltaTime;
-            // 속도가 거의 0이 되면 멈춘 것으로 간주
-            if (hipsRb != null && hipsRb.linearVelocity.magnitude < 0.1f)
-            {
+            timer += Time.deltaTime;
+
+            if (hipsRb != null && hipsRb.linearVelocity.magnitude < settleSpeed)
                 break;
-            }
+
             yield return null;
         }
 
-        // 3. [핵심] 자세 판별하기 (앞? 뒤?)
-        bool isFaceUp = CheckFaceUp(); // 하늘을 보고 있나?
+        bool isFaceUp = CheckFaceUp();
 
-        if (IsServer) // 코인 생성 권한은 서버에만
+        if (IsServer && isFaceUp)
         {
-            if (isFaceUp)
-            {
-                // 등 대고 누웠으면 코인 드랍! (대성공)
-                SpawnCoin();
-            }
-            else
-            {
-                // 엎드렸을 때도 주고 싶으면 여기에 SpawnCoin(); 추가하면 됩니다.
-                // 지금은 "꽝" 느낌으로 로그만 띄웁니다.
-                Debug.Log("엎어져서 코인이 안 나옵니다! (꽝)");
-            }
+            SpawnCoin();
         }
 
-        yield return new WaitForSeconds(1.0f); // 잠시 숨 고르기
+        if (IsServer && snapRootXZToHipsOnRecover && hipsBone != null)
+        {
+            Vector3 p = transform.position;
+            p.x = hipsBone.position.x;
+            p.z = hipsBone.position.z;
+            transform.position = p;
+        }
 
-        // 4. 상황에 맞는 기상 애니메이션 실행
-        ToggleRagdoll(false); // 물리 끄고 애니메이션 ON
+        SetRagdollState(false);
 
         if (animator != null)
         {
-            if (isFaceUp)
-            {
-                // 하늘 보고 누웠다 -> 등으로 일어나기
-                animator.SetTrigger("StandUpBack");
-            }
-            else
-            {
-                // 땅 보고 엎드렸다 -> 배로 일어나기
-                animator.SetTrigger("StandUpFront");
-            }
+            animator.ResetTrigger("StandUpBack");
+            animator.ResetTrigger("StandUpFront");
+
+            if (isFaceUp) animator.SetTrigger("StandUpBack");
+            else animator.SetTrigger("StandUpFront");
         }
 
         _isRagdoll = false;
     }
 
-    // 앞/뒤 판별 함수 (업그레이드)
+    private void SetRagdollState(bool state)
+    {
+        if (animator != null) animator.enabled = !state;
+
+        if (characterController != null) characterController.enabled = !state;
+        if (mainCollider != null) mainCollider.enabled = !state;
+
+        for (int i = 0; i < _ragdollRbs.Length; i++)
+        {
+            var rb = _ragdollRbs[i];
+            if (rb == null) continue;
+
+            if (rb.transform == transform) continue;
+
+            rb.isKinematic = !state;
+
+            if (state)
+            {
+                rb.linearDamping = ragdollLinearDamping;
+                rb.angularDamping = ragdollAngularDamping;
+            }
+            else
+            {
+                // [수정] Kinematic이 아닐 때(물리가 켜졌을 때)만 속도를 건드립니다.
+                // 이 체크가 없으면 게임 시작 시 Is Kinematic 상태인 플레이어에게 
+                // 속도를 주려다 경고 로그가 대량으로 발생합니다.
+                if (!rb.isKinematic)
+                {
+                    rb.linearVelocity = Vector3.zero;
+                    rb.angularVelocity = Vector3.zero;
+                }
+            }
+        }
+
+        for (int i = 0; i < _ragdollColls.Length; i++)
+        {
+            var col = _ragdollColls[i];
+            if (col == null) continue;
+
+            if (mainCollider != null && col == mainCollider) continue;
+            if (characterController != null && col.transform == characterController.transform) continue;
+
+            col.enabled = state;
+        }
+    }
+
     private bool CheckFaceUp()
     {
         if (hipsBone == null) return false;
 
-        // Hips의 앞쪽(Forward)이 하늘(Up)과 같은 방향이면 "하늘을 보고 누운 것"
         float dot = Vector3.Dot(hipsBone.forward, Vector3.up);
-        return dot > 0.0f; // 양수면 하늘, 음수면 땅을 봄
-    }
-    private void ToggleRagdoll(bool state)
-    {
-        // 애니메이터가 켜지면 물리가 꺼지고, 애니메이터가 꺼지면 물리가 켜짐
-        if (animator != null) animator.enabled = !state;
-
-        foreach (var rb in _ragdollRbs)
-        {
-            rb.isKinematic = !state; // 랙돌일 때는 Kinematic 끄기(물리 적용)
-        }
-    }
-
-    // 등이 땅에 닿았는지 판별하는 로직
-    private bool CheckBackOnGround()
-    {
-        if (hipsBone == null) return false;
-
-        // Hips(골반)의 앞쪽(Forward) 벡터가 하늘(Up)을 보고 있으면 누운 것!
-        // (캐릭터 뼈대마다 축이 다를 수 있으니 테스트 필요: 보통 Forward나 Up을 씀)
-        float dot = Vector3.Dot(hipsBone.forward, Vector3.up);
-
-        // 0.5 이상이면 하늘을 꽤 정면으로 보고 있다는 뜻
-        return dot > 0.5f;
+        return dot > 0.0f;
     }
 
     private void SpawnCoin()
     {
         if (coinPrefab == null) return;
-        Debug.Log("코인 드랍! (등이 닿았다!)");
 
-        GameObject coin = Instantiate(coinPrefab, transform.position + Vector3.up, Quaternion.identity);
-        coin.GetComponent<NetworkObject>().Spawn();
+        var coin = Instantiate(coinPrefab, transform.position + Vector3.up, Quaternion.identity);
+        var no = coin.GetComponent<NetworkObject>();
+        if (no != null) no.Spawn();
     }
 }
