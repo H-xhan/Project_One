@@ -1343,12 +1343,12 @@ CharacterController:
   m_Enabled: 1
   serializedVersion: 3
   m_Height: 1
-  m_Radius: 0.75
+  m_Radius: 0.3
   m_SlopeLimit: 45
   m_StepOffset: 0.3
   m_SkinWidth: 0.08
   m_MinMoveDistance: 0.001
-  m_Center: {x: 0, y: 0.3, z: -0.2}
+  m_Center: {x: 0, y: 0.3, z: 0}
 --- !u!114 &2108072501216592944
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -1652,6 +1652,10 @@ MonoBehaviour:
   ShowTopMostFoldoutHeaderGroup: 1
   interactModule: {fileID: 5891605903882672687}
   animModule: {fileID: 2882960682518766762}
+  pveKnockbackForce: 45
+  pveUpwardForce: 10
+  attackForwardOffset: 1.5
+  hitDelay: 0.55
 --- !u!114 &2428065915232083517
 MonoBehaviour:
   m_ObjectHideFlags: 0
