@@ -1,6 +1,7 @@
 using System.Collections;
 using UnityEngine;
 using UnityEngine.AI;
+using Unity.Netcode;
 
 public class TestDummyStatus : MonoBehaviour
 {
@@ -9,8 +10,12 @@ public class TestDummyStatus : MonoBehaviour
     [SerializeField] private Transform hipsBone;
 
     [Header("Physics Tuning")]
-    [SerializeField] private float forceMultiplier = 8.0f;  // 힘 증폭 배율
-    [SerializeField] private float bonusUpwardForce = 20.0f; // [상향] 공중 부양 힘
+    [SerializeField] private float forceMultiplier = 8.0f;
+    [SerializeField] private float bonusUpwardForce = 20.0f;
+
+    [Header("Reward Settings")]
+    [SerializeField] private GameObject coinPrefab;
+    [SerializeField] private int coinCount = 3;
 
     private Rigidbody[] _ragdollRbs;
     private Rigidbody _mainRb;
@@ -18,6 +23,7 @@ public class TestDummyStatus : MonoBehaviour
     private TestAIController _aiController;
     private CapsuleCollider _mainCollider;
     private bool _isRagdoll = false;
+    private int _originalLayer;
 
     private void Awake()
     {
@@ -26,6 +32,7 @@ public class TestDummyStatus : MonoBehaviour
         _agent = GetComponent<NavMeshAgent>();
         _aiController = GetComponent<TestAIController>();
         _mainCollider = GetComponent<CapsuleCollider>();
+        _originalLayer = gameObject.layer;
 
         ToggleRagdoll(false);
     }
@@ -39,82 +46,96 @@ public class TestDummyStatus : MonoBehaviour
     private IEnumerator RagdollRoutine(Vector3 hitForce)
     {
         _isRagdoll = true;
+        GameObject player = GameObject.FindWithTag("Player");
 
-        // 1. AI 기능 차단
-        if (_agent != null && _agent.enabled && _agent.isOnNavMesh)
-        {
-            _agent.ResetPath();
-            _agent.velocity = Vector3.zero;
-            _agent.isStopped = true;
-            _agent.enabled = false;
-        }
+        // 1. 유령 상태 및 AI 정지
+        if (player != null) SetCollisionWithPlayer(player, true);
+        if (_agent != null) _agent.enabled = false;
         if (_aiController != null) _aiController.enabled = false;
-
-        // 2. [투명벽 해결 핵심] 본체 콜라이더를 끄고 레이어를 충돌 무시용(2번)으로 바꿈
         if (_mainCollider != null) _mainCollider.enabled = false;
-        int originalLayer = gameObject.layer;
-        SetLayerRecursive(gameObject, 2); // 2번은 보통 Ignore Raycast 레이어
 
-        // 3. 물리 켜기
-        if (_mainRb != null)
-        {
-            _mainRb.isKinematic = false;
-            _mainRb.useGravity = true;
-        }
+        SetLayerRecursive(gameObject, 2);
+
+        // 2. 물리 켜기 (Kinematic 해제)
         ToggleRagdoll(true);
+        if (_mainRb != null) _mainRb.isKinematic = false;
 
-        // 물리 엔진 동기화 대기
+        // 한 프레임 대기하여 물리 엔진이 활성화되도록 함
         yield return new WaitForFixedUpdate();
 
-        // 4. 충격 적용
+        SpawnCoins(); // 코인 드랍
+
+        // 3. 넉백 적용 (경고 로그 방지를 위해 속도 대입 대신 힘 추가 위주로 처리)
         if (hipsBone != null && hipsBone.TryGetComponent(out Rigidbody hipsRb))
         {
-            hipsRb.linearVelocity = Vector3.zero;
-            if (_mainRb != null) _mainRb.linearVelocity = Vector3.zero;
-
-            // 위로 더 확실히 띄워서 플레이어 머리 위로 보냅니다.
+            // 물리 엔진이 완전히 켜진 상태에서만 힘을 가함
             Vector3 finalForce = (hitForce * forceMultiplier) + (Vector3.up * bonusUpwardForce);
             hipsRb.AddForce(finalForce, ForceMode.Impulse);
-            if (_mainRb != null) _mainRb.AddForce(finalForce, ForceMode.Impulse);
-
-            hipsRb.AddTorque(Random.insideUnitSphere * 30f, ForceMode.Impulse);
+            hipsRb.AddTorque(Random.insideUnitSphere * 10f, ForceMode.Impulse);
         }
 
-        // 5. 날아가는 동안 대기 (3초)
+        // 4. 비행 및 낙하 대기 (3초)
         yield return new WaitForSeconds(3.0f);
 
-        // 6. 복구 로직
+        // 5. 지면 안착 및 복구 위치 잡기
         if (hipsBone != null)
         {
             Vector3 targetPos = hipsBone.position;
-            if (Physics.Raycast(targetPos + Vector3.up, Vector3.down, out RaycastHit hit, 5f))
+            if (NavMesh.SamplePosition(targetPos, out NavMeshHit navHit, 5.0f, NavMesh.AllAreas))
             {
-                targetPos.y = hit.point.y;
+                transform.position = navHit.position + Vector3.up * 0.05f;
             }
-            transform.position = targetPos;
         }
 
-        // 레이어 원복 및 물리 끄기
-        SetLayerRecursive(gameObject, originalLayer);
+        // 6. 물리 끄기 및 기상 준비
         ToggleRagdoll(false);
         if (_mainRb != null) _mainRb.isKinematic = true;
-        _isRagdoll = false;
 
         if (animator != null) animator.SetTrigger("StandUpFront");
 
-        yield return new WaitForSeconds(1.5f);
+        // 7. 기상 완료 대기 (3초)
+        yield return new WaitForSeconds(3.0f);
 
-        // 7. [복구] 다시 본체 콜라이더를 켜서 서로 부딪히게 만듦
+        // 8. 상태 복구
+        SetLayerRecursive(gameObject, _originalLayer);
         if (_mainCollider != null) _mainCollider.enabled = true;
 
-        if (_agent != null) { _agent.enabled = true; _agent.Warp(transform.position); }
+        // 9. 투명벽 방지 거리 체크
+        if (player != null)
+        {
+            float safeDistance = 1.0f;
+            while (Vector3.Distance(transform.position, player.transform.position) < safeDistance)
+            {
+                yield return new WaitForSeconds(0.1f);
+            }
+            SetCollisionWithPlayer(player, false);
+        }
+
+        // 10. AI 지능 가동
+        if (_agent != null)
+        {
+            _agent.enabled = true;
+            _agent.Warp(transform.position);
+        }
         if (_aiController != null) _aiController.enabled = true;
+
+        _isRagdoll = false;
+    }
+
+    private void SetCollisionWithPlayer(GameObject player, bool ignore)
+    {
+        Collider[] playerColls = player.GetComponentsInChildren<Collider>();
+        Collider[] myColls = GetComponentsInChildren<Collider>();
+        foreach (var pCol in playerColls)
+        {
+            foreach (var myCol in myColls)
+                if (pCol != null && myCol != null) Physics.IgnoreCollision(pCol, myCol, ignore);
+        }
     }
 
     private void ToggleRagdoll(bool state)
     {
         if (animator != null) animator.enabled = !state;
-
         foreach (var rb in _ragdollRbs)
         {
             if (rb.transform == transform) continue;
@@ -122,13 +143,23 @@ public class TestDummyStatus : MonoBehaviour
         }
     }
 
-    // 레이어를 자식까지 한꺼번에 바꾸는 헬퍼 함수
     private void SetLayerRecursive(GameObject obj, int newLayer)
     {
         obj.layer = newLayer;
-        foreach (Transform child in obj.transform)
+        foreach (Transform child in obj.transform) SetLayerRecursive(child.gameObject, newLayer);
+    }
+
+    private void SpawnCoins()
+    {
+        if (coinPrefab == null) return;
+        for (int i = 0; i < coinCount; i++)
         {
-            SetLayerRecursive(child.gameObject, newLayer);
+            GameObject coin = Instantiate(coinPrefab, transform.position + Vector3.up, Quaternion.identity);
+            var networkObj = coin.GetComponent<NetworkObject>();
+            if (networkObj != null) networkObj.Spawn();
+
+            if (coin.TryGetComponent(out Rigidbody rb))
+                rb.AddForce((Random.insideUnitSphere + Vector3.up) * 5f, ForceMode.Impulse);
         }
     }
 }

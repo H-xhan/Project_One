@@ -22,7 +22,7 @@ PrefabInstance:
       objectReference: {fileID: 0}
     - target: {fileID: -8679921383154817045, guid: 5e4b5b832c84b0c4abd45e420a47dd49, type: 3}
       propertyPath: m_LocalPosition.z
-      value: 10
+      value: 0
       objectReference: {fileID: 0}
     - target: {fileID: -8679921383154817045, guid: 5e4b5b832c84b0c4abd45e420a47dd49, type: 3}
       propertyPath: m_LocalRotation.w
@@ -894,19 +894,19 @@ NavMeshAgent:
   m_GameObject: {fileID: 5029577393704582892}
   m_Enabled: 1
   m_AgentTypeID: 0
-  m_Radius: 0.2
+  m_Radius: 0.1
   m_Speed: 3.5
   m_Acceleration: 8
-  avoidancePriority: 50
+  avoidancePriority: 99
   m_AngularSpeed: 120
   m_StoppingDistance: 0
   m_AutoTraverseOffMeshLink: 1
   m_AutoBraking: 1
   m_AutoRepath: 1
-  m_Height: 2
+  m_Height: 1
   m_BaseOffset: 0
   m_WalkableMask: 4294967295
-  m_ObstacleAvoidanceType: 4
+  m_ObstacleAvoidanceType: 0
 --- !u!114 &5701007412626800347
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -941,10 +941,10 @@ CapsuleCollider:
   m_ProvidesContacts: 0
   m_Enabled: 1
   serializedVersion: 2
-  m_Radius: 0.7
+  m_Radius: 0.1
   m_Height: 1
   m_Direction: 1
-  m_Center: {x: 0, y: 0.7, z: 0.1}
+  m_Center: {x: 0, y: 0.5, z: 0.1}
 --- !u!54 &1391424225980853154
 Rigidbody:
   m_ObjectHideFlags: 0
@@ -988,6 +988,8 @@ MonoBehaviour:
   hipsBone: {fileID: 277062083597962168}
   forceMultiplier: 5
   bonusUpwardForce: 10
+  coinPrefab: {fileID: 8318734578456762395, guid: aa2f23a2833ae41409b138ee8f7e1856, type: 3}
+  coinCount: 3
 --- !u!1 &5078323953229954761 stripped
 GameObject:
   m_CorrespondingSourceObject: {fileID: -8109829993498575500, guid: 5e4b5b832c84b0c4abd45e420a47dd49, type: 3}
