@@ -195,7 +195,7 @@ MonoBehaviour:
   NetworkConfig:
     ProtocolVersion: 0
     NetworkTransport: {fileID: 73569430}
-    PlayerPrefab: {fileID: 4175062438738205596, guid: 62f7c70999fb80b43869b45b2c9c2f7c, type: 3}
+    PlayerPrefab: {fileID: 5339340507742051071, guid: 7b2d57d853f5a174c9f17c11039cb32e, type: 3}
     Prefabs:
       NetworkPrefabsLists:
       - {fileID: 11400000, guid: 16b5814ffe97a6b4da242f8b8f14b62e, type: 2}
@@ -1099,7 +1099,7 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: 
   ShowTopMostFoldoutHeaderGroup: 1
-  characterPrefab: {fileID: 4175062438738205596, guid: 62f7c70999fb80b43869b45b2c9c2f7c, type: 3}
+  characterPrefab: {fileID: 5339340507742051071, guid: 7b2d57d853f5a174c9f17c11039cb32e, type: 3}
 --- !u!4 &1993564567
 Transform:
   m_ObjectHideFlags: 0
