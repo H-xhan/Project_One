@@ -1,120 +1,66 @@
-using System.Collections;
 using Unity.Netcode;
 using UnityEngine;
 
 public class PlayerCombatModule : NetworkBehaviour
 {
-    [Header("Modules")]
-    [SerializeField] private PlayerInteractModule interactModule;
-    [SerializeField] private PlayerAnimModule animModule;
+    [Header("Attack Origin")]
+    [Tooltip("공격 원점/방향 기준. Module(자식)이 아니라 PlayerRoot(부모)를 넣는 걸 추천")]
+    [SerializeField] private Transform attackOrigin;
 
-    [Header("Combat Settings (Inspector 조절 가능)")]
-    [Tooltip("AI를 밀어내는 수평 힘")]
-    [SerializeField] private float pveKnockbackForce = 45f;
-
-    [Tooltip("AI를 띄워올리는 수직 힘")]
-    [SerializeField] private float pveUpwardForce = 10f;
-
-    [Tooltip("공격 판정 중심점이 내 몸에서 얼마나 앞에 생길지 (투명벽 방지용)")]
-    [SerializeField] private float attackForwardOffset = 1.5f;
-
-    [Header("Timing Settings")]
-    [Tooltip("클릭 후 실제 타격 판정이 일어날 때까지의 지연 시간 (초)")]
-    [SerializeField] private float hitDelay = 0.25f; // 보통 0.2~0.3초 사이가 적당합니다.
-
-    private float _lastAttackTime;
+    [Header("Hit Settings")]
+    [SerializeField] private float hitForce = 15f;
+    [SerializeField] private float upwardForce = 3f;
+    [SerializeField] private float hitRadius = 1.2f;
+    [SerializeField] private float hitDistance = 1.5f;
+    [SerializeField] private LayerMask targetMask;
 
     private void Awake()
     {
-        if (interactModule == null) interactModule = GetComponent<PlayerInteractModule>();
-        if (animModule == null) animModule = GetComponent<PlayerAnimModule>();
+        if (attackOrigin == null)
+            attackOrigin = transform.root; // Module이 자식이어도 Root로 고정
     }
 
-    public void DoAttack()
+    // 로컬 입력에서 호출(= Owner만)
+    // 실제 판정은 PlayerHub의 AttackServerRpc -> DoAttackServer()로 서버에서 처리됨
+    public void TryAttack()
     {
-        WeaponItemDataSO weaponData = GetCurrentWeaponData();
-
-        // 무기가 없으면 공격 안 함
-        if (weaponData == null) return;
-
-        // 쿨타임 체크
-        if (Time.time < _lastAttackTime + weaponData.weapon.cooldown) return;
-
-        _lastAttackTime = Time.time;
-
-        // 1. [수정] 애니메이션을 먼저 즉시 실행합니다.
-        TriggerAttackAnimClientRpc(weaponData.weaponAnimID);
-
-        // 2. [수정] 휘두르는 동작에 맞춰 시간차를 두고 판정을 실행합니다.
-        StartCoroutine(AttackRoutine(weaponData));
+        if (!IsOwner) return;
+        // 여기서는 아무 RPC도 안 보냄 (Hub가 이미 ServerRpc를 보내고 있으니까)
     }
 
-    private IEnumerator AttackRoutine(WeaponItemDataSO weaponData)
+    // 서버에서만 호출되어야 함 (PlayerHub.AttackServerRpc에서 호출)
+    public void DoAttackServer()
     {
-        // 인스펙터에서 설정한 hitDelay만큼 기다립니다.
-        yield return new WaitForSeconds(hitDelay);
+        if (!IsServer) return;
 
-        // 실제 때리는 로직 실행
-        PerformAttack(weaponData);
-    }
+        Vector3 origin = attackOrigin.position + attackOrigin.forward * hitDistance;
+        Collider[] hits = Physics.OverlapSphere(origin, hitRadius, targetMask, QueryTriggerInteraction.Ignore);
 
-    private void PerformAttack(WeaponItemDataSO weaponData)
-    {
-        // 공격 범위 설정
-        Vector3 attackCenter = transform.position + (transform.forward * attackForwardOffset);
-        float finalRadius = 1.2f;
-
-        // 공격 판정 실행
-        Collider[] hits = Physics.OverlapSphere(attackCenter, finalRadius);
-
-        foreach (Collider col in hits)
+        for (int i = 0; i < hits.Length; i++)
         {
-            if (col.transform.root == transform.root) continue;
+            var hit = hits[i];
 
-            // [PvP] 플레이어 타격
-            NetworkObject targetNetObj = col.GetComponentInParent<NetworkObject>();
-            if (targetNetObj != null && targetNetObj.OwnerClientId != OwnerClientId)
-            {
-                var targetStatus = targetNetObj.GetComponent<PlayerStatusModule>();
-                if (targetStatus != null)
-                {
-                    Vector3 knockbackForce = transform.forward * 10f + Vector3.up * 2f;
-                    targetStatus.TakeHit(knockbackForce);
-                }
-            }
+            // 자기 자신 제외 (Root 기준)
+            if (hit.transform.root == attackOrigin.root)
+                continue;
 
-            // [PvE] 봇 타격 (수달이 홈런!)
-            var dummyStatus = col.GetComponentInParent<TestDummyStatus>();
-            if (dummyStatus != null)
-            {
-                Vector3 knockbackForce = transform.forward * pveKnockbackForce + Vector3.up * pveUpwardForce;
-                dummyStatus.TakeHit(knockbackForce);
-                Debug.Log($"[PvE] 봇({col.name}) 타격 성공! 파워 {pveKnockbackForce} 적용!");
-            }
+            // 자식 콜라이더 대비해서 상위에서 Status 찾기
+            var status = hit.GetComponentInParent<PlayerStatusModule>();
+            if (status == null)
+                continue;
+
+            Vector3 dir = hit.transform.position - attackOrigin.position;
+            dir.y = 0f;
+
+            if (dir.sqrMagnitude < 0.0001f)
+                dir = attackOrigin.forward;
+            else
+                dir = dir.normalized;
+
+            Vector3 impulse = dir * hitForce + Vector3.up * upwardForce;
+
+            // 서버에서만 물리 넉백 적용
+            status.ApplyKnockbackServer(impulse);
         }
-    }
-
-    [ClientRpc]
-    private void TriggerAttackAnimClientRpc(int weaponID)
-    {
-        if (animModule != null)
-        {
-            animModule.TriggerAttack(weaponID);
-        }
-    }
-
-    private WeaponItemDataSO GetCurrentWeaponData()
-    {
-        if (interactModule == null) return null;
-
-        if (interactModule.CurrentHeldItem.Value.TryGet(out NetworkObject heldObj))
-        {
-            var itemPickup = heldObj.GetComponent<ItemPickupNetwork>();
-            if (itemPickup != null && itemPickup.itemData is WeaponItemDataSO weaponData)
-            {
-                return weaponData;
-            }
-        }
-        return null;
     }
 }

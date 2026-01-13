@@ -158,20 +158,9 @@ public class PlayerHub : NetworkBehaviour
                 TryPickupServerRpc(target);
         }
 
-        // 디버깅용 틱 (레이저 등)
         if (interactModule != null) interactModule.Tick(interactPressed);
 
         if (dropPressed) DropItemServerRpc();
-
-        if (attackPressed) AttackServerRpc();
-
-        if (interactPressed && interactModule != null)
-        {
-            if (interactModule.TryFindPickupTarget(out NetworkObjectReference target))
-                TryPickupServerRpc(target);
-        }
-
-        if (interactModule != null) interactModule.Tick(interactPressed);
     }
 
     [ServerRpc]
@@ -227,10 +216,10 @@ public class PlayerHub : NetworkBehaviour
     [ServerRpc]
     private void AttackServerRpc()
     {
-        // 1. 전투 모듈에게 "공격 시도해!"라고 명령
-        // (이제 전투 모듈이 쿨타임 체크하고 -> 무기 ID 확인하고 -> 애니메이션까지 틀어줍니다)
-        if (combatModule != null) combatModule.DoAttack();
+        if (combatModule != null)
+            combatModule.DoAttackServer();
     }
+
 
     [ServerRpc]
     private void TryPickupServerRpc(NetworkObjectReference target)
