@@ -1199,7 +1199,7 @@ MonoBehaviour:
   ShowTopMostFoldoutHeaderGroup: 1
   gameStateManager: {fileID: 1478549242}
   lobbySceneName: RoomLobby
-  gameSceneName: PlayTest
+  gameSceneName: InGame
 --- !u!1 &1661391600
 GameObject:
   m_ObjectHideFlags: 0
