@@ -4,102 +4,71 @@ using UnityEngine.UI;
 
 public class DevTestUI : MonoBehaviour
 {
-    [Header("UI")]
-    [SerializeField, Tooltip("호스트가 만든 Join Code를 표시할 입력창(TMP). 읽기 전용으로 쓰세요")]
-    private TMP_InputField createRoomCodeOutput;
+    [Header("UI Refs")]
+    [Tooltip("Host 생성된 JoinCode를 표시할 InputField")]
+    [SerializeField] private TMP_InputField createRoomInput;
 
-    [SerializeField, Tooltip("참가할 Join Code를 입력하는 입력창(TMP)")]
-    private TMP_InputField joinCodeInput;
+    [Tooltip("JoinCode를 입력할 InputField")]
+    [SerializeField] private TMP_InputField codeJoinInput;
 
-    [SerializeField, Tooltip("호스트 버튼")]
-    private Button hostButton;
+    [Tooltip("Host 버튼")]
+    [SerializeField] private Button createButton;
 
-    [SerializeField, Tooltip("조인 버튼")]
-    private Button joinButton;
+    [Tooltip("Join 버튼")]
+    [SerializeField] private Button joinButton;
 
-    [SerializeField, Tooltip("상태 텍스트(TMP). 없어도 됨")]
-    private TMP_Text statusText;
-
-    [Header("Relay")]
-    [SerializeField, Tooltip("호스트 생성 시 최대 접속자 수(호스트 제외)")]
-    private int maxConnections = 3;
+    [Header("Options")]
+    [Tooltip("Host 생성 시 최대 접속자 수")]
+    [SerializeField] private int maxConnections = 4;
 
     private void Awake()
     {
-        if (createRoomCodeOutput != null)
-        {
-            createRoomCodeOutput.readOnly = true;
-            createRoomCodeOutput.interactable = true; // 복사 가능하게
-        }
-
-        if (hostButton != null) hostButton.onClick.AddListener(Host);
-        if (joinButton != null) joinButton.onClick.AddListener(Join);
+        if (createButton != null) createButton.onClick.AddListener(OnClickHost);
+        if (joinButton != null) joinButton.onClick.AddListener(OnClickJoin);
     }
 
-    public async void Host()
+    private async void OnClickHost()
     {
         if (RelayManager.Instance == null)
         {
-            SetStatus("RelayManager 없음");
+            Debug.LogError("[DevTestUI] RelayManager.Instance가 없습니다.");
             return;
         }
-
-        SetInteract(false);
-        SetStatus("호스트 생성 중...");
 
         string code = await RelayManager.Instance.CreateRelay(maxConnections);
-
         if (string.IsNullOrEmpty(code))
         {
-            SetStatus("호스트 생성 실패");
-            SetInteract(true);
+            Debug.LogError("[DevTestUI] Host 생성 실패");
             return;
         }
 
-        if (createRoomCodeOutput != null)
-            createRoomCodeOutput.text = code;
+        if (createRoomInput != null)
+        {
+            createRoomInput.text = code;
+        }
 
-        GUIUtility.systemCopyBuffer = code; // 자동 복사
-        SetStatus($"호스트 생성 완료: {code} (자동 복사됨)");
-        SetInteract(true);
+        GUIUtility.systemCopyBuffer = code;
+        Debug.Log($"[DevTestUI] 호스트 생성 완료: {code} (자동 복사됨)");
     }
 
-    public async void Join()
+    private async void OnClickJoin()
     {
         if (RelayManager.Instance == null)
         {
-            SetStatus("RelayManager 없음");
+            Debug.LogError("[DevTestUI] RelayManager.Instance가 없습니다.");
             return;
         }
 
-        string code = joinCodeInput != null ? joinCodeInput.text.Trim() : "";
-        code = code.ToUpperInvariant();
+        string code = codeJoinInput != null ? codeJoinInput.text : "";
+        code = code.Trim();
 
         if (string.IsNullOrEmpty(code))
         {
-            SetStatus("코드를 입력해줘");
+            Debug.LogWarning("[DevTestUI] JoinCode가 비어있습니다.");
             return;
         }
 
-        SetInteract(false);
-        SetStatus("참가 시도 중...");
-
         bool ok = await RelayManager.Instance.JoinRelayAsync(code);
-
-        SetStatus(ok ? "참가 성공" : "참가 실패 (코드/네트워크 확인)");
-        SetInteract(true);
-    }
-
-    private void SetInteract(bool on)
-    {
-        if (hostButton != null) hostButton.interactable = on;
-        if (joinButton != null) joinButton.interactable = on;
-        if (joinCodeInput != null) joinCodeInput.interactable = on;
-    }
-
-    private void SetStatus(string msg)
-    {
-        if (statusText != null) statusText.text = msg;
-        Debug.Log($"[DevTestUI] {msg}");
+        Debug.Log(ok ? "[DevTestUI] Join 성공" : "[DevTestUI] Join 실패");
     }
 }

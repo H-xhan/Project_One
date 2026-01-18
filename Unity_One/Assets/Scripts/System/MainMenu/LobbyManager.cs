@@ -135,7 +135,7 @@ public class LobbyManager : MonoBehaviour
             {
                 string joinCode = joinCodeData.Value;
                 Debug.Log($"접속 코드 발견: {joinCode}");
-                RelayManager.Instance.JoinRelay(joinCode);
+                await RelayManager.Instance.JoinRelayAsync(joinCode);
             }
             else
             {
@@ -170,7 +170,7 @@ public class LobbyManager : MonoBehaviour
             if (lobby.Data.TryGetValue("JoinCode", out DataObject joinCodeData))
             {
                 string joinCode = joinCodeData.Value;
-                RelayManager.Instance.JoinRelay(joinCode);
+                await RelayManager.Instance.JoinRelayAsync(joinCode);
             }
         }
         catch (LobbyServiceException e)
