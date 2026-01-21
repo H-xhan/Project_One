@@ -11,14 +11,27 @@ public class PlayerHub : NetworkBehaviour
     [Tooltip("로컬 소유자만 활성화할 AudioListener")]
     [SerializeField] private AudioListener audioListener;
 
-    [Header("Camera Settings")] // [추가] 카메라 각도 제한 설정
+    [Header("Camera Settings")]
     [Tooltip("위로 올려다보는 최대 각도")]
     [SerializeField] private float topClamp = 70f;
+
     [Tooltip("아래로 내려다보는 최소 각도")]
     [SerializeField] private float bottomClamp = -40f;
 
-    // 현재 카메라의 상하 각도를 저장할 변수
     private float _cameraPitchVelocity;
+
+    [Header("Attack Buffer Settings")]
+    [Tooltip("Animator에서 공격 애니가 재생되는 State의 이름(Short Name). 예: Attack")]
+    [SerializeField] private string attackStateName = "Attack";
+
+    [Tooltip("공격 중 입력 버퍼 허용 여부")]
+    [SerializeField] private bool allowAttackBuffer = true;
+
+    [Tooltip("버퍼 입력 유효 시간(초). 이 시간 안에 들어온 입력만 다음 공격으로 이어짐. 0이면 무제한")]
+    [SerializeField] private float attackBufferWindow = 0.35f;
+
+    [Tooltip("공격 상태 감지 최대 대기 시간(초). 상태명이 다르거나 전이가 꼬였을 때 무한 대기 방지")]
+    [SerializeField] private float attackStateTimeout = 2.0f;
 
     [Header("Modules (자동 연결됨)")]
     [SerializeField] private PlayerInputModule inputModule;
@@ -35,9 +48,15 @@ public class PlayerHub : NetworkBehaviour
 
     private Vector2 _moveInput;
     private float _yawDelta;
-    private float _pitchDelta; // [추가]
+    private float _pitchDelta;
     private bool _jumpPressed;
     private bool _sprintHeld;
+
+    // Attack buffer runtime
+    private bool _attackLockedServer;
+    private bool _attackBufferedServer;
+    private float _attackBufferedAtServer;
+    private Coroutine _attackLockRoutine;
 
     private void Awake() { ResolveRefs(); }
 
@@ -49,19 +68,15 @@ public class PlayerHub : NetworkBehaviour
 
         if (!IsOwner && inputModule != null) inputModule.enabled = false;
 
-        // 소리/화면 끄기 (내 거 아니면)
         if (!IsOwner)
         {
             var cam = GetComponentInChildren<Camera>();
             if (cam != null) cam.enabled = false;
+
             var listener = GetComponentInChildren<AudioListener>();
             if (listener != null) listener.enabled = false;
         }
 
-        // [핵심 해결책]
-        // 서버뿐만 아니라 클라이언트도! 
-        // 일단 태어나자마자 안전한 "자기 자리"로 이동시킵니다.
-        // 그래야 (0,0,0)에서 겹쳐서 튕겨 나가는 걸 막을 수 있습니다.
         StartCoroutine(SpawnPosRoutine());
     }
 
@@ -69,37 +84,36 @@ public class PlayerHub : NetworkBehaviour
     {
         var cc = GetComponent<CharacterController>();
 
-        // 1. 이동 중 물리 충돌 방지를 위해 잠시 끄기
         if (cc != null) cc.enabled = false;
-        yield return null; // 1프레임 대기
+        yield return null;
 
-        // 2. 내 번호(ID)에 맞는 스폰 포인트 찾기
-        // (Hierarchy에 있는 "SpawnPoint_0", "SpawnPoint_1"을 찾습니다)
         string pointName = $"SpawnPoint_{OwnerClientId}";
         GameObject spawnPoint = GameObject.Find(pointName);
 
         if (spawnPoint != null)
         {
-            // 스폰 포인트가 있으면 거기로 이동!
             transform.position = spawnPoint.transform.position;
             transform.rotation = spawnPoint.transform.rotation;
         }
         else
         {
-            // 만약 스폰 포인트가 없으면 기존처럼 계산해서 이동 (비상용)
             float xPos = (OwnerClientId % 2 == 0) ? -2f : 2f;
             transform.position = new Vector3(xPos, 2.0f, 0f);
         }
 
-        // 3. 위치 잡았으니 물리 다시 켜기
-        yield return null; // 1프레임 더 대기 (안정화)
+        yield return null;
         if (cc != null) cc.enabled = true;
     }
 
     [ContextMenu("Auto Find Modules")]
     private void ResolveRefs()
     {
-        if (cameraRoot == null) { var cam = GetComponentInChildren<Camera>(true); if (cam != null) cameraRoot = cam.gameObject; }
+        if (cameraRoot == null)
+        {
+            var cam = GetComponentInChildren<Camera>(true);
+            if (cam != null) cameraRoot = cam.gameObject;
+        }
+
         if (audioListener == null) audioListener = GetComponentInChildren<AudioListener>(true);
 
         if (inputModule == null) inputModule = GetComponentInChildren<PlayerInputModule>(true);
@@ -127,11 +141,10 @@ public class PlayerHub : NetworkBehaviour
     {
         if (inputModule == null) return;
 
-        // [수정] 입력 받을 때 pitchDelta(상하)도 같이 받음
         inputModule.ReadInputs(
             out Vector2 move,
             out float yawDelta,
-            out float pitchDelta, // [추가]
+            out float pitchDelta,
             out bool jumpPressed,
             out bool sprintHeld,
             out bool attackPressed,
@@ -141,11 +154,11 @@ public class PlayerHub : NetworkBehaviour
 
         _moveInput = move;
         _yawDelta = yawDelta;
-        _pitchDelta = pitchDelta; // [추가]
+        _pitchDelta = pitchDelta;
+
         if (jumpPressed) _jumpPressed = true;
         _sprintHeld = sprintHeld;
 
-        // [핵심] 카메라 상하 회전 처리 (클라이언트 시각 효과이므로 즉시 적용)
         HandleCameraRotation(_pitchDelta);
 
         SubmitInputServerRpc(_moveInput, _yawDelta, _jumpPressed, _sprintHeld);
@@ -169,29 +182,19 @@ public class PlayerHub : NetworkBehaviour
         if (interactModule != null) interactModule.ServerTryDrop();
     }
 
-
-    // [추가] 카메라 상하 회전 함수
     private void HandleCameraRotation(float pitchDelta)
     {
         if (cameraRoot == null) return;
 
-        // 마우스 Y값 누적 (일반적으로 위로 올리면 -각도가 되어야 고개가 들림)
         _cameraPitchVelocity -= pitchDelta;
-
-        // 각도 제한 (너무 꺾이지 않게)
         _cameraPitchVelocity = Mathf.Clamp(_cameraPitchVelocity, bottomClamp, topClamp);
-
-        // CameraRoot의 로컬 회전만 변경 (몸통은 안 돌고 목만 끄덕거림)
         cameraRoot.transform.localRotation = Quaternion.Euler(_cameraPitchVelocity, 0f, 0f);
     }
 
     private void TickServer()
     {
-        // [추가] 캐릭터 컨트롤러가 꺼져 있으면(스폰 중이면) 움직임 로직을 멈춘다!
-        // 이걸 넣으면 빨간 에러가 싹 사라집니다.
         if (CharacterController == null || !CharacterController.enabled) return;
 
-        // --- (아래는 원래 있던 코드 그대로) ---
         bool jumped = false;
         if (locomotionModule != null)
             jumped = locomotionModule.TickServer(_moveInput, _yawDelta, _jumpPressed, _sprintHeld);
@@ -209,23 +212,122 @@ public class PlayerHub : NetworkBehaviour
     private void SubmitInputServerRpc(Vector2 move, float yawDelta, bool jumpPressed, bool sprintHeld)
     {
         _moveInput = move;
-        _yawDelta = yawDelta; // 좌우 회전은 서버가 처리 (캐릭터 몸통)
+        _yawDelta = yawDelta;
         if (jumpPressed) _jumpPressed = true;
         _sprintHeld = sprintHeld;
     }
-    [ServerRpc]
+
+    [Rpc(SendTo.Server)]
     private void AttackServerRpc()
     {
-        if (combatModule != null)
-            combatModule.DoAttackServer();
+        // 공격 중이면 버퍼에 저장하고 종료
+        if (_attackLockedServer)
+        {
+            if (allowAttackBuffer)
+            {
+                _attackBufferedServer = true;
+                _attackBufferedAtServer = Time.time;
+            }
+            return;
+        }
+
+        StartAttackServerInternal();
     }
 
+    private void StartAttackServerInternal()
+    {
+        _attackLockedServer = true;
+
+        int weaponAnimId = 0;
+        if (interactModule != null)
+            weaponAnimId = interactModule.GetCurrentWeaponAnimID();
+
+        if (animModule != null)
+            animModule.TriggerAttack(weaponAnimId);
+
+        if (combatModule != null)
+            combatModule.DoAttackServer();
+
+        if (_attackLockRoutine != null) StopCoroutine(_attackLockRoutine);
+        _attackLockRoutine = StartCoroutine(ServerAttackLockRoutine());
+    }
+
+    private IEnumerator ServerAttackLockRoutine()
+    {
+        Animator anim = Animator;
+        if (anim == null)
+        {
+            ReleaseAttackLockAndConsumeBuffer();
+            yield break;
+        }
+
+        int attackHash = Animator.StringToHash(attackStateName);
+
+        float startTime = Time.time;
+        bool enteredAttack = false;
+
+        // 1) 공격 상태로 "진입"을 기다림
+        while (Time.time - startTime < attackStateTimeout)
+        {
+            var info = anim.GetCurrentAnimatorStateInfo(0);
+            if (info.shortNameHash == attackHash)
+            {
+                enteredAttack = true;
+                break;
+            }
+            yield return null;
+        }
+
+        // 2) 공격 상태에서 "이탈"을 기다림
+        if (enteredAttack)
+        {
+            while (Time.time - startTime < attackStateTimeout)
+            {
+                var info = anim.GetCurrentAnimatorStateInfo(0);
+                if (info.shortNameHash != attackHash)
+                    break;
+
+                yield return null;
+            }
+        }
+
+        ReleaseAttackLockAndConsumeBuffer();
+    }
+
+    private void ReleaseAttackLockAndConsumeBuffer()
+    {
+        _attackLockedServer = false;
+
+        if (!_attackBufferedServer)
+            return;
+
+        // 버퍼 유효시간 체크
+        if (attackBufferWindow > 0f)
+        {
+            if (Time.time - _attackBufferedAtServer > attackBufferWindow)
+            {
+                _attackBufferedServer = false;
+                return;
+            }
+        }
+
+        _attackBufferedServer = false;
+        StartAttackServerInternal();
+    }
+
+    [ClientRpc]
+    private void AttackClientRpc(int weaponID)
+    {
+        if (animModule != null)
+            animModule.TriggerAttack(weaponID);
+    }
 
     [ServerRpc]
     private void TryPickupServerRpc(NetworkObjectReference target)
     {
         if (interactModule == null) return;
         if (!interactModule.ServerTryPickup(target)) return;
+
         if (animModule != null) animModule.TriggerPickUp();
     }
 

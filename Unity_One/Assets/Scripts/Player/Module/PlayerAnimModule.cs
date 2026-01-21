@@ -1,51 +1,65 @@
-using Unity.Netcode.Components; // [필수]
+using Unity.Netcode.Components;
 using UnityEngine;
 
 public class PlayerAnimModule : MonoBehaviour
 {
     [Header("Animator")]
+    [Tooltip("플레이어 Animator 컴포넌트")]
     [SerializeField] private Animator animator;
-    [SerializeField] private NetworkAnimator networkAnimator; // [추가] 네트워크 동기화용
+
+    [Tooltip("Netcode용 NetworkAnimator(트리거/파라미터 동기화)")]
+    [SerializeField] private NetworkAnimator networkAnimator;
+
+    [Tooltip("속도 계산에 사용할 CharacterController(없으면 자동 탐색)")]
+    [SerializeField] private CharacterController characterController;
 
     [Header("Params")]
+    [Tooltip("이동 BlendTree에 사용하는 Float 파라미터 이름")]
     [SerializeField] private string speedParam = "Speed";
-    [SerializeField] private string sprintParam = "IsSprinting";
+
+    [Tooltip("지면 판정 Bool 파라미터 이름")]
     [SerializeField] private string groundedParam = "IsGrounded";
 
     [Header("Triggers")]
+    [Tooltip("점프 Trigger 파라미터 이름")]
     [SerializeField] private string jumpTrigger = "Jump";
-    [SerializeField] private string attackLightTrigger = "AttackLight";
+
+    [Tooltip("줍기 Trigger 파라미터 이름")]
     [SerializeField] private string pickUpTrigger = "PickUp";
 
     private int _speedHash;
-    private int _sprintHash;
     private int _groundHash;
     private int _jumpHash;
-    private int _attackLightHash;
     private int _pickUpHash;
 
     private void Awake()
     {
         if (animator == null) animator = GetComponentInParent<Animator>();
-        // [추가] 부모에 있는 NetworkAnimator 찾기
         if (networkAnimator == null) networkAnimator = GetComponentInParent<NetworkAnimator>();
+        if (characterController == null) characterController = GetComponentInParent<CharacterController>();
 
         _speedHash = Animator.StringToHash(speedParam);
-        _sprintHash = Animator.StringToHash(sprintParam);
         _groundHash = Animator.StringToHash(groundedParam);
         _jumpHash = Animator.StringToHash(jumpTrigger);
-        _attackLightHash = Animator.StringToHash(attackLightTrigger);
         _pickUpHash = Animator.StringToHash(pickUpTrigger);
     }
 
     public void TickServer(PlayerLocomotionModule locomotion)
     {
         if (animator == null || locomotion == null) return;
-        animator.SetFloat(_speedHash, locomotion.PlanarSpeed);
+
+        float planarSpeed = locomotion.PlanarSpeed;
+
+        if (planarSpeed <= 0.001f && characterController != null)
+        {
+            Vector3 v = characterController.velocity;
+            planarSpeed = new Vector2(v.x, v.z).magnitude;
+        }
+
+        animator.SetFloat(_speedHash, planarSpeed);
         animator.SetBool(_groundHash, locomotion.IsGrounded);
     }
 
-    // [핵심] 일반 Animator 대신 NetworkAnimator를 통해 트리거 발동 (동기화)
     public void TriggerJump()
     {
         if (networkAnimator != null) networkAnimator.SetTrigger(_jumpHash);
@@ -54,10 +68,9 @@ public class PlayerAnimModule : MonoBehaviour
 
     public void TriggerAttack(int weaponID)
     {
-        // 1. "무기 타입"을 먼저 애니메이터에 알려줌 (Int 파라미터 필요)
-        animator.SetInteger("WeaponType", weaponID);
+        if (animator == null) return;
 
-        // 2. 그 다음 "공격해!" 하고 방아쇠를 당김
+        animator.SetInteger("WeaponType", weaponID);
         animator.SetTrigger("Attack");
     }
 

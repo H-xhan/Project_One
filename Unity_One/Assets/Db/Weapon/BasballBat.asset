@@ -25,7 +25,7 @@ MonoBehaviour:
     damage: 10
   equippedModelPrefab: {fileID: 0}
   hand: 0
-  equippedLocalPosition: {x: 0.001, y: 0.0005, z: 0}
+  equippedLocalPosition: {x: 3.03, y: 0.0005, z: 0}
   equippedLocalEulerAngles: {x: 30, y: 85, z: 0}
   equippedLocalScale: {x: 1, y: 1, z: 1}
   weaponAnimID: 1

@@ -51,11 +51,10 @@ MonoBehaviour:
   m_EditorClassIdentifier: 
   animator: {fileID: 1707666485735594559}
   networkAnimator: {fileID: 7740102240635983405}
+  characterController: {fileID: 0}
   speedParam: Speed
-  sprintParam: IsSprinting
   groundedParam: IsGrounded
   jumpTrigger: Jump
-  attackLightTrigger: AttackLight
   pickUpTrigger: PickUp
 --- !u!114 &5562244057572314665
 MonoBehaviour:
@@ -108,7 +107,7 @@ MonoBehaviour:
   m_EditorClassIdentifier: 
   ShowTopMostFoldoutHeaderGroup: 1
   ownerCamera: {fileID: 6243455456359158414}
-  pickupDistance: 20
+  pickupDistance: 40
   pickupMask:
     serializedVersion: 2
     m_Bits: 191
@@ -1554,6 +1553,10 @@ MonoBehaviour:
   audioListener: {fileID: 0}
   topClamp: 70
   bottomClamp: -40
+  attackStateName: Attack
+  allowAttackBuffer: 1
+  attackBufferWindow: 0.2
+  attackStateTimeout: 1
   inputModule: {fileID: 8598645012782326681}
   locomotionModule: {fileID: 7163163093271237374}
   animModule: {fileID: 6032066017176849164}
