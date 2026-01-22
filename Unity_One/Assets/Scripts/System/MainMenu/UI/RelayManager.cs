@@ -3,6 +3,7 @@ using Unity.Netcode;
 using Unity.Netcode.Transports.UTP;
 using Unity.Services.Authentication;
 using Unity.Services.Core;
+using Unity.Services.Core.Environments;
 using Unity.Services.Relay;
 using Unity.Services.Relay.Models;
 using UnityEngine;
@@ -12,6 +13,9 @@ public class RelayManager : MonoBehaviour
     public static RelayManager Instance { get; private set; }
 
     [Header("옵션")]
+    [Tooltip("UGS Environment 이름 (두 PC에서 반드시 동일해야 합니다. 예: production, dev)")]
+    [SerializeField] private string environmentName = "production";
+
     [Tooltip("Relay 연결에 DTLS(보안) 사용 여부")]
     [SerializeField] private bool useDtls = true;
 
@@ -97,6 +101,17 @@ public class RelayManager : MonoBehaviour
         bool ok = await EnsureServicesInitialized();
         if (!ok) return false;
 
+        // 입력 정규화 (공백/줄바꿈 때문에 404 나는 경우 방지)
+        joinCode = (joinCode ?? "").Trim().ToUpperInvariant();
+        Debug.Log($"[Relay] TryJoin code='{joinCode}' len={joinCode.Length}");
+
+        // 보통 JoinCode는 6자리입니다. 다르면 일단 입력 문제로 처리합니다.
+        if (joinCode.Length != 6)
+        {
+            Debug.LogWarning($"[Relay] Invalid join code format: '{joinCode}'");
+            return false;
+        }
+
         try
         {
             JoinAllocation joinAllocation = await RelayService.Instance.JoinAllocationAsync(joinCode);
@@ -138,13 +153,23 @@ public class RelayManager : MonoBehaviour
         try
         {
             if (UnityServices.State != ServicesInitializationState.Initialized)
-                await UnityServices.InitializeAsync();
+            {
+                var options = new InitializationOptions();
+
+                if (!string.IsNullOrWhiteSpace(environmentName))
+                    options.SetEnvironmentName(environmentName.Trim());
+
+                await UnityServices.InitializeAsync(options);
+            }
 
             if (!AuthenticationService.Instance.IsSignedIn)
                 await AuthenticationService.Instance.SignInAnonymouslyAsync();
 
             _servicesInitialized = true;
+
+            Debug.Log($"[UGS] Initialized. cloudProjectId={Application.cloudProjectId}, env={environmentName}");
             Debug.Log("[Relay] Services Initialized");
+
             return true;
         }
         catch (System.Exception e)
@@ -176,7 +201,6 @@ public class RelayManager : MonoBehaviour
     {
         var transport = NetworkManager.Singleton.GetComponent<UnityTransport>();
 
-        // host는 HostConnectionData가 따로 없어서 ConnectionData를 같이 넣습니다.
         transport.SetRelayServerData(
             allocation.RelayServer.IpV4,
             (ushort)allocation.RelayServer.Port,
