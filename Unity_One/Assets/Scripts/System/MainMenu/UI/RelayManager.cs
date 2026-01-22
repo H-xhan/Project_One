@@ -156,14 +156,28 @@ public class RelayManager : MonoBehaviour
             {
                 var options = new InitializationOptions();
 
+                // 1. 환경 설정 적용
                 if (!string.IsNullOrWhiteSpace(environmentName))
                     options.SetEnvironmentName(environmentName.Trim());
+
+                // 2. [중요 수정] 로컬 테스트 시 ID 충돌 방지를 위한 프로필 설정
+                // 에디터나 개발 빌드일 때만 작동하여, 배포 시에는 영향을 주지 않도록 함
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+                // 실행할 때마다 혹은 인스턴스마다 다른 프로필을 쓰도록 랜덤성을 부여하거나 고유값을 씀
+                // 여기서는 간단히 랜덤 숫자를 붙여 매번 새로운 유저로 인식되게 함
+                string profileName = "DevProfile_" + Random.Range(0, 100000);
+                options.SetProfile(profileName);
+                Debug.Log($"[UGS] Local Profile Set: {profileName}");
+#endif
 
                 await UnityServices.InitializeAsync(options);
             }
 
             if (!AuthenticationService.Instance.IsSignedIn)
                 await AuthenticationService.Instance.SignInAnonymouslyAsync();
+
+            // 디버깅용: 접속한 Player ID 확인
+            Debug.Log($"[UGS] Signed In. PlayerID: {AuthenticationService.Instance.PlayerId}");
 
             _servicesInitialized = true;
 
