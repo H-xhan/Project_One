@@ -1,5 +1,12 @@
 fileFormatVersion: 2
 guid: 713b0decb881dff45b9e38f04997f59f
+AssetOrigin:
+  serializedVersion: 1
+  productId: 62560
+  packageName: Action Adventure Motion Pack - Haon SD
+  packageVersion: 2025.0
+  assetPath: Assets/Haons SD series Pack/Animation/Action Adventure(Adv)/CarryHandOn_Run.fbx
+  uploadId: 782914
 ModelImporter:
   serializedVersion: 22200
   internalIDToNameTable:
@@ -671,7 +678,7 @@ ModelImporter:
     animationImportWarnings: "\nClip 'Take 001' has import animation warnings that
       might lower retargeting quality:\nNote: Activate translation DOF on avatar
       to improve retargeting quality.\n\t'Spine' has translation animation that will
-      be discarded.\n\t'Eye_L' has translation animation that will be discarded.\n"
+      be discarded.\n"
     animationRetargetingWarnings: 
     animationDoRetargetingWarnings: 0
     importAnimatedCustomProperties: 0
@@ -851,7 +858,7 @@ ModelImporter:
     sortHierarchyByName: 1
     importPhysicalCameras: 1
     importVisibility: 0
-    importBlendShapes: 1
+    importBlendShapes: 0
     importCameras: 0
     importLights: 0
     nodeNameCollisionStrategy: 0
@@ -1296,8 +1303,7 @@ ModelImporter:
     - name: Eye_00_R_Cover
       parentName: Eye_00_R
       position: {x: 0.0000000011920929, y: 0, z: 0}
-      rotation: {x: -0.00000071525557, y: 0.00000023841883, z: -0.00000030852954,
-        w: 1}
+      rotation: {x: -0.00000071525557, y: 0.00000023841883, z: -0.00000030852954, w: 1}
       scale: {x: 1, y: 1, z: 1}
     - name: Eye_L
       parentName: Head
@@ -1362,8 +1368,7 @@ ModelImporter:
     - name: Prop_L
       parentName: Hand_L
       position: {x: -0.000000019073486, y: -0.000000038146972, z: 0.000000009536743}
-      rotation: {x: -0.000000050291423, y: -0.000000016763803, z: -0.000000059604645,
-        w: 1}
+      rotation: {x: -0.000000050291423, y: -0.000000016763803, z: -0.000000059604645, w: 1}
       scale: {x: 1, y: 1, z: 0.9999999}
     - name: Finger_L_Ring_Proximal
       parentName: Hand_L
@@ -1458,8 +1463,7 @@ ModelImporter:
     - name: Prop_R
       parentName: Hand_R
       position: {x: 0.000000019073486, y: -0.000000038146972, z: 0}
-      rotation: {x: -0.00000009965152, y: -0.000000036321563, z: -0.00000010430811,
-        w: 1}
+      rotation: {x: -0.00000009965152, y: -0.000000036321563, z: -0.00000010430811, w: 1}
       scale: {x: 1.0000002, y: 1, z: 1.0000001}
     - name: Finger_R_Ring_Proximal
       parentName: Hand_R
@@ -1613,8 +1617,7 @@ ModelImporter:
     hasTranslationDoF: 0
     hasExtraRoot: 1
     skeletonHasParents: 1
-  lastHumanDescriptionAvatarSource: {fileID: 9000000, guid: 41950de12c96f384998c9021c2cd0061,
-    type: 3}
+  lastHumanDescriptionAvatarSource: {fileID: 9000000, guid: 41950de12c96f384998c9021c2cd0061, type: 3}
   autoGenerateAvatarMappingIfUnspecified: 1
   animationType: 3
   humanoidOversampling: 1
@@ -1626,10 +1629,3 @@ ModelImporter:
   userData: 
   assetBundleName: 
   assetBundleVariant: 
-AssetOrigin:
-  serializedVersion: 1
-  productId: 62560
-  packageName: Action Adventure Motion Pack - Haon SD
-  packageVersion: 2025.0
-  assetPath: Assets/Haons SD series Pack/Animation/Action Adventure(Adv)/CarryHandOn_Run.fbx
-  uploadId: 782914

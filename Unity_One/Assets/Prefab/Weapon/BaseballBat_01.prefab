@@ -14,9 +14,9 @@ GameObject:
   - component: {fileID: 6871416691853386135}
   - component: {fileID: 3616304597970440968}
   - component: {fileID: 2569600659769686163}
-  m_Layer: 0
+  m_Layer: 9
   m_Name: BaseballBat_01
-  m_TagString: Untagged
+  m_TagString: Item
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
   m_StaticEditorFlags: 0
@@ -96,7 +96,7 @@ MeshCollider:
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 1459886359065782981}
-  m_Material: {fileID: 0}
+  m_Material: {fileID: 13400000, guid: 0ead3a42af497ea40813ae71cac5a35c, type: 2}
   m_IncludeLayers:
     serializedVersion: 2
     m_Bits: 0

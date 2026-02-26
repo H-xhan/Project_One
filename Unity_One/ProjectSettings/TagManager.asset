@@ -5,10 +5,10 @@ TagManager:
   serializedVersion: 3
   tags:
   - SpawnPoint
-  - LobbySpawnPoint
   - Ground
   - Item
   - AI
+  - GameSpawnPoint
   layers:
   - Default
   - TransparentFX
@@ -19,7 +19,7 @@ TagManager:
   - Player
   - Pickup
   - Enemy
-  - 
+  - Grabbable
   - 
   - 
   - 

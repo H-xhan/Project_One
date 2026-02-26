@@ -1,10 +1,11 @@
-using System.Collections.Generic; // [필수] 리스트 사용을 위해 필요
+using System.Collections;
+using System.Collections.Generic;
 using Unity.Netcode;
 using UnityEngine;
+using UnityEngine.SceneManagement;
 
 public class ItemSpawner : NetworkBehaviour
 {
-    // 인스펙터에서 아이템별로 설정을 잡기 위한 껍데기(클래스)
     [System.Serializable]
     public class SpawnEntry
     {
@@ -21,32 +22,120 @@ public class ItemSpawner : NetworkBehaviour
         public Vector3 rotation;
     }
 
+    [Header("Spawn Settings")]
+    [Tooltip("비워두면 어떤 씬에서도 스폰. 특정 씬에서만 스폰하려면 씬 이름 입력 (예: InGame)")]
+    [SerializeField] private string spawnOnlyInSceneName = "";
+
+    [Tooltip("같은 씬 로드 사이클에서 중복 스폰을 막음")]
+    [SerializeField] private bool preventDuplicateSpawnPerScene = true;
+
     [Header("Spawn List")]
     [Tooltip("여기에서 + 버튼을 눌러 아이템을 추가하세요")]
     [SerializeField] private List<SpawnEntry> itemsToSpawn = new List<SpawnEntry>();
 
+    private int _lastSpawnedSceneHandle = int.MinValue;
+    private bool _subscribed;
+    private Coroutine _initRoutine;
+
+    private void Start()
+    {
+        if (_initRoutine == null)
+            _initRoutine = StartCoroutine(ServerInitRoutine());
+    }
+
     public override void OnNetworkSpawn()
     {
-        // 서버만 물건을 배달(소환)할 수 있습니다.
-        if (!IsServer) return;
+        if (!IsServerNow()) return;
 
-        foreach (var entry in itemsToSpawn)
+        HookSceneEventsOnce();
+        TrySpawnForActiveSceneServer();
+    }
+
+    private IEnumerator ServerInitRoutine()
+    {
+        while (NetworkManager.Singleton == null || !NetworkManager.Singleton.IsListening)
+            yield return null;
+
+        if (!IsServerNow()) yield break;
+
+        HookSceneEventsOnce();
+        TrySpawnForActiveSceneServer();
+    }
+
+    private bool IsServerNow()
+    {
+        return NetworkManager.Singleton != null && NetworkManager.Singleton.IsServer;
+    }
+
+    private void HookSceneEventsOnce()
+    {
+        if (_subscribed) return;
+        if (NetworkManager.Singleton == null) return;
+        if (NetworkManager.Singleton.SceneManager == null) return;
+
+        NetworkManager.Singleton.SceneManager.OnLoadEventCompleted += OnLoadEventCompletedServer;
+        _subscribed = true;
+    }
+
+    public override void OnDestroy()
+    {
+        if (_subscribed)
         {
-            if (entry.prefab == null) continue;
+            if (NetworkManager.Singleton != null && NetworkManager.Singleton.SceneManager != null)
+            {
+                NetworkManager.Singleton.SceneManager.OnLoadEventCompleted -= OnLoadEventCompletedServer;
+            }
+            _subscribed = false;
+        }
+
+        base.OnDestroy();
+    }
+
+    private void OnLoadEventCompletedServer(string sceneName, LoadSceneMode mode, List<ulong> clientsCompleted, List<ulong> clientsTimedOut)
+    {
+        if (!IsServerNow()) return;
+        TrySpawnForActiveSceneServer();
+    }
+
+    private void TrySpawnForActiveSceneServer()
+    {
+        if (!IsServerNow()) return;
+
+        string activeSceneName = SceneManager.GetActiveScene().name;
+
+        if (!string.IsNullOrEmpty(spawnOnlyInSceneName) && activeSceneName != spawnOnlyInSceneName)
+            return;
+
+        int handle = SceneManager.GetActiveScene().handle;
+
+        if (preventDuplicateSpawnPerScene && handle == _lastSpawnedSceneHandle)
+            return;
+
+        _lastSpawnedSceneHandle = handle;
+
+        SpawnAllServer(activeSceneName);
+    }
+
+    private void SpawnAllServer(string sceneName)
+    {
+        for (int i = 0; i < itemsToSpawn.Count; i++)
+        {
+            var entry = itemsToSpawn[i];
+            if (entry == null || entry.prefab == null) continue;
 
             SpawnItem(entry);
         }
+
+        Debug.Log($"[ItemSpawner] SpawnAll 완료 (Scene: {sceneName}) Count={itemsToSpawn.Count}");
     }
 
     private void SpawnItem(SpawnEntry entry)
     {
-        // 1. 회전값 변환 (Vector3 -> Quaternion)
         Quaternion rot = Quaternion.Euler(entry.rotation);
-
-        // 2. 아이템 생성 (Instantiate)
         GameObject newItem = Instantiate(entry.prefab, entry.position, rot);
 
-        // 3. 네트워크 등록 (Spawn) - 이게 제일 중요!
+        SceneManager.MoveGameObjectToScene(newItem, SceneManager.GetActiveScene());
+
         NetworkObject netObj = newItem.GetComponent<NetworkObject>();
         if (netObj != null)
         {
@@ -59,15 +148,13 @@ public class ItemSpawner : NetworkBehaviour
         }
     }
 
-    // [보너스] 씬 뷰에서 소환될 위치를 미리 보여주는 기능
     private void OnDrawGizmosSelected()
     {
         Gizmos.color = Color.cyan;
         foreach (var entry in itemsToSpawn)
         {
-            // 아이템이 생길 위치에 동그라미 그리기
             Gizmos.DrawWireSphere(entry.position, 0.5f);
-            Gizmos.DrawRay(entry.position, Vector3.up * 1f); // 기둥 표시
+            Gizmos.DrawRay(entry.position, Vector3.up * 1f);
         }
     }
 }

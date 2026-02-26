@@ -52,17 +52,20 @@ public class PlayerHub : NetworkBehaviour
     private bool _jumpPressed;
     private bool _sprintHeld;
 
-    // Attack buffer runtime
     private bool _attackLockedServer;
     private bool _attackBufferedServer;
     private float _attackBufferedAtServer;
     private Coroutine _attackLockRoutine;
 
-    private void Awake() { ResolveRefs(); }
+    private void Awake()
+    {
+        ResolveRefs();
+    }
 
     public override void OnNetworkSpawn()
     {
         base.OnNetworkSpawn();
+
         ResolveRefs();
         ApplyOwnerVisuals();
 
@@ -164,15 +167,18 @@ public class PlayerHub : NetworkBehaviour
         SubmitInputServerRpc(_moveInput, _yawDelta, _jumpPressed, _sprintHeld);
 
         if (attackPressed) AttackServerRpc();
-
         if (interactPressed && interactModule != null)
         {
-            if (interactModule.TryFindPickupTarget(out NetworkObjectReference target))
-                TryPickupServerRpc(target);
+            if (interactModule.HasHeldItem())
+            {
+                DropItemServerRpc();
+            }
+            else
+            {
+                if (interactModule.TryFindPickupTarget(out NetworkObjectReference target))
+                    TryPickupServerRpc(target);
+            }
         }
-
-        if (interactModule != null) interactModule.Tick(interactPressed);
-
         if (dropPressed) DropItemServerRpc();
     }
 
@@ -220,7 +226,6 @@ public class PlayerHub : NetworkBehaviour
     [Rpc(SendTo.Server)]
     private void AttackServerRpc()
     {
-        // 공격 중이면 버퍼에 저장하고 종료
         if (_attackLockedServer)
         {
             if (allowAttackBuffer)
@@ -266,7 +271,6 @@ public class PlayerHub : NetworkBehaviour
         float startTime = Time.time;
         bool enteredAttack = false;
 
-        // 1) 공격 상태로 "진입"을 기다림
         while (Time.time - startTime < attackStateTimeout)
         {
             var info = anim.GetCurrentAnimatorStateInfo(0);
@@ -278,7 +282,6 @@ public class PlayerHub : NetworkBehaviour
             yield return null;
         }
 
-        // 2) 공격 상태에서 "이탈"을 기다림
         if (enteredAttack)
         {
             while (Time.time - startTime < attackStateTimeout)
@@ -301,7 +304,6 @@ public class PlayerHub : NetworkBehaviour
         if (!_attackBufferedServer)
             return;
 
-        // 버퍼 유효시간 체크
         if (attackBufferWindow > 0f)
         {
             if (Time.time - _attackBufferedAtServer > attackBufferWindow)
@@ -332,6 +334,9 @@ public class PlayerHub : NetworkBehaviour
     }
 
 #if UNITY_EDITOR
-    private void OnValidate() { ResolveRefs(); }
+    private void OnValidate()
+    {
+        ResolveRefs();
+    }
 #endif
 }

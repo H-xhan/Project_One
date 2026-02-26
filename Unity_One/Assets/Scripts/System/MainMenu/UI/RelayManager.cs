@@ -1,9 +1,10 @@
+using System;
+using System.Threading;
 using System.Threading.Tasks;
 using Unity.Netcode;
 using Unity.Netcode.Transports.UTP;
 using Unity.Services.Authentication;
 using Unity.Services.Core;
-using Unity.Services.Core.Environments;
 using Unity.Services.Relay;
 using Unity.Services.Relay.Models;
 using UnityEngine;
@@ -12,236 +13,216 @@ public class RelayManager : MonoBehaviour
 {
     public static RelayManager Instance { get; private set; }
 
-    [Header("옵션")]
-    [Tooltip("UGS Environment 이름 (두 PC에서 반드시 동일해야 합니다. 예: production, dev)")]
-    [SerializeField] private string environmentName = "production";
-
-    [Tooltip("Relay 연결에 DTLS(보안) 사용 여부")]
-    [SerializeField] private bool useDtls = true;
+    [Header("Relay 설정")]
+    [SerializeField, Tooltip("Join 후 실제 연결(OnClientConnected)까지 기다리는 최대 시간(초)")]
+    private float joinConnectTimeoutSec = 8f;
 
     private bool _servicesInitialized;
+    private TaskCompletionSource<bool> _clientConnectedTcs;
 
     private void Awake()
     {
-        if (Instance == null)
-        {
-            Instance = this;
-            DontDestroyOnLoad(gameObject);
-        }
-        else
+        if (Instance != null && Instance != this)
         {
             Destroy(gameObject);
+            return;
+        }
+
+        Instance = this;
+        DontDestroyOnLoad(gameObject);
+
+        HookNetcodeCallbacks();
+    }
+
+    private void HookNetcodeCallbacks()
+    {
+        if (NetworkManager.Singleton == null) return;
+
+        NetworkManager.Singleton.OnClientConnectedCallback -= OnClientConnected;
+        NetworkManager.Singleton.OnClientConnectedCallback += OnClientConnected;
+
+        NetworkManager.Singleton.OnClientDisconnectCallback -= OnClientDisconnected;
+        NetworkManager.Singleton.OnClientDisconnectCallback += OnClientDisconnected;
+
+        NetworkManager.Singleton.OnTransportFailure -= OnTransportFailure;
+        NetworkManager.Singleton.OnTransportFailure += OnTransportFailure;
+    }
+
+    private void OnClientConnected(ulong clientId)
+    {
+        Debug.Log($"[Relay] OnClientConnected: {clientId}");
+
+        if (NetworkManager.Singleton != null && NetworkManager.Singleton.LocalClientId == clientId)
+        {
+            _clientConnectedTcs?.TrySetResult(true);
         }
     }
 
-    // LobbyManager(기존 코드) 호환용 오버로드
-    public Task<string> CreateRelay(int maxConnections)
+    private void OnClientDisconnected(ulong clientId)
     {
-        return CreateRelay(maxConnections, true);
+        Debug.LogWarning($"[Relay] OnClientDisconnected: {clientId}");
+        _clientConnectedTcs?.TrySetResult(false);
     }
 
-    // DevTestUI 등에서 사용
-    public async Task<string> CreateRelay(int maxConnections, bool autoStartHost)
+    private void OnTransportFailure()
     {
-        if (!ValidateNetworkManager()) return null;
-
-        if (NetworkManager.Singleton.IsListening)
+        Debug.LogError("[Relay] OnTransportFailure: transport failed. NetworkManager will shutdown.");
+        if (NetworkManager.Singleton != null && NetworkManager.Singleton.IsListening)
         {
-            Debug.LogWarning("[Relay] Cannot start Host while network is already running");
-            return null;
-        }
-
-        bool ok = await EnsureServicesInitialized();
-        if (!ok) return null;
-
-        try
-        {
-            Allocation allocation = await RelayService.Instance.CreateAllocationAsync(maxConnections);
-            string joinCode = await RelayService.Instance.GetJoinCodeAsync(allocation.AllocationId);
-
-            ApplyRelayToTransport(allocation);
-            Debug.Log($"[Relay] Host Prepared. Code: {joinCode}");
-
-            if (autoStartHost)
-            {
-                bool started = NetworkManager.Singleton.StartHost();
-                if (!started)
-                {
-                    Debug.LogError("[Relay] StartHost failed");
-                    return null;
-                }
-
-                Debug.Log($"[Relay] Host Started. Code: {joinCode}");
-            }
-
-            return joinCode;
-        }
-        catch (System.Exception e)
-        {
-            Debug.LogError($"[Relay] CreateRelay failed: {e}");
-            return null;
+            NetworkManager.Singleton.Shutdown();
         }
     }
 
-    public async Task<bool> JoinRelayAsync(string joinCode)
+    private bool TryGetNet(out NetworkManager nm, out UnityTransport utp)
     {
-        return await JoinRelayAsync(joinCode, true);
-    }
-
-    public async Task<bool> JoinRelayAsync(string joinCode, bool autoStartClient)
-    {
-        if (!ValidateNetworkManager()) return false;
-
-        if (NetworkManager.Singleton.IsListening)
+        nm = NetworkManager.Singleton;
+        if (nm == null)
         {
-            Debug.LogWarning("[Relay] Cannot start Client while network is already running");
+            Debug.LogError("[Relay] NetworkManager.Singleton is null");
+            utp = null;
             return false;
         }
 
-        bool ok = await EnsureServicesInitialized();
-        if (!ok) return false;
-
-        // 입력 정규화 (공백/줄바꿈 때문에 404 나는 경우 방지)
-        joinCode = (joinCode ?? "").Trim().ToUpperInvariant();
-        Debug.Log($"[Relay] TryJoin code='{joinCode}' len={joinCode.Length}");
-
-        // 보통 JoinCode는 6자리입니다. 다르면 일단 입력 문제로 처리합니다.
-        if (joinCode.Length != 6)
+        utp = nm.NetworkConfig.NetworkTransport as UnityTransport;
+        if (utp == null)
         {
-            Debug.LogWarning($"[Relay] Invalid join code format: '{joinCode}'");
-            return false;
-        }
-
-        try
-        {
-            JoinAllocation joinAllocation = await RelayService.Instance.JoinAllocationAsync(joinCode);
-
-            ApplyRelayToTransport(joinAllocation);
-            Debug.Log("[Relay] Client Join Prepared");
-
-            if (autoStartClient)
-            {
-                bool started = NetworkManager.Singleton.StartClient();
-                if (!started)
-                {
-                    Debug.LogError("[Relay] StartClient failed");
-                    return false;
-                }
-
-                Debug.Log("[Relay] Client Started");
-            }
-
-            return true;
-        }
-        catch (System.Exception e)
-        {
-            Debug.LogError($"[Relay] JoinRelay failed: {e}");
-            return false;
-        }
-    }
-
-    // 기존 코드에서 async void로 호출하던 부분 호환용
-    public async void JoinRelay(string joinCode)
-    {
-        await JoinRelayAsync(joinCode, true);
-    }
-
-    private async Task<bool> EnsureServicesInitialized()
-    {
-        if (_servicesInitialized) return true;
-
-        try
-        {
-            if (UnityServices.State != ServicesInitializationState.Initialized)
-            {
-                var options = new InitializationOptions();
-
-                // 1. 환경 설정 적용
-                if (!string.IsNullOrWhiteSpace(environmentName))
-                    options.SetEnvironmentName(environmentName.Trim());
-
-                // 2. [중요 수정] 로컬 테스트 시 ID 충돌 방지를 위한 프로필 설정
-                // 에디터나 개발 빌드일 때만 작동하여, 배포 시에는 영향을 주지 않도록 함
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
-                // 실행할 때마다 혹은 인스턴스마다 다른 프로필을 쓰도록 랜덤성을 부여하거나 고유값을 씀
-                // 여기서는 간단히 랜덤 숫자를 붙여 매번 새로운 유저로 인식되게 함
-                string profileName = "DevProfile_" + Random.Range(0, 100000);
-                options.SetProfile(profileName);
-                Debug.Log($"[UGS] Local Profile Set: {profileName}");
-#endif
-
-                await UnityServices.InitializeAsync(options);
-            }
-
-            if (!AuthenticationService.Instance.IsSignedIn)
-                await AuthenticationService.Instance.SignInAnonymouslyAsync();
-
-            // 디버깅용: 접속한 Player ID 확인
-            Debug.Log($"[UGS] Signed In. PlayerID: {AuthenticationService.Instance.PlayerId}");
-
-            _servicesInitialized = true;
-
-            Debug.Log($"[UGS] Initialized. cloudProjectId={Application.cloudProjectId}, env={environmentName}");
-            Debug.Log("[Relay] Services Initialized");
-
-            return true;
-        }
-        catch (System.Exception e)
-        {
-            Debug.LogError($"[Relay] Services Init failed: {e}");
-            return false;
-        }
-    }
-
-    private bool ValidateNetworkManager()
-    {
-        if (NetworkManager.Singleton == null)
-        {
-            Debug.LogError("[Relay] NetworkManager.Singleton not found in scene");
-            return false;
-        }
-
-        var transport = NetworkManager.Singleton.GetComponent<UnityTransport>();
-        if (transport == null)
-        {
-            Debug.LogError("[Relay] UnityTransport not found on NetworkManager");
+            Debug.LogError("[Relay] NetworkTransport is not UnityTransport");
             return false;
         }
 
         return true;
     }
 
-    private void ApplyRelayToTransport(Allocation allocation)
+    public async Task EnsureServicesInitialized()
     {
-        var transport = NetworkManager.Singleton.GetComponent<UnityTransport>();
+        if (_servicesInitialized) return;
 
-        transport.SetRelayServerData(
-            allocation.RelayServer.IpV4,
-            (ushort)allocation.RelayServer.Port,
-            allocation.AllocationIdBytes,
-            allocation.Key,
-            allocation.ConnectionData,
-            allocation.ConnectionData,
-            useDtls
-        );
+        await UnityServices.InitializeAsync();
 
-        Debug.Log("[Relay] Transport configured for Host");
+        if (!AuthenticationService.Instance.IsSignedIn)
+        {
+            await AuthenticationService.Instance.SignInAnonymouslyAsync();
+            Debug.Log($"[Relay] Signed In. PlayerID={AuthenticationService.Instance.PlayerId}");
+        }
+
+        _servicesInitialized = true;
+        HookNetcodeCallbacks();
+
+        Debug.Log("[Relay] Services Initialized");
     }
 
-    private void ApplyRelayToTransport(JoinAllocation joinAllocation)
+    public async Task<string> CreateRelay(int maxConnections)
     {
-        var transport = NetworkManager.Singleton.GetComponent<UnityTransport>();
+        try
+        {
+            await EnsureServicesInitialized();
 
-        transport.SetRelayServerData(
-            joinAllocation.RelayServer.IpV4,
-            (ushort)joinAllocation.RelayServer.Port,
-            joinAllocation.AllocationIdBytes,
-            joinAllocation.Key,
-            joinAllocation.ConnectionData,
-            joinAllocation.HostConnectionData,
-            useDtls
-        );
+            if (!TryGetNet(out var nm, out var utp))
+                return string.Empty;
 
-        Debug.Log("[Relay] Transport configured for Client");
+            if (nm.IsListening)
+            {
+                Debug.LogWarning("[Relay] CreateRelay called but Network already running.");
+                return string.Empty;
+            }
+
+            int mc = Mathf.Max(1, maxConnections);
+
+            Allocation alloc = await RelayService.Instance.CreateAllocationAsync(mc);
+            string joinCode = await RelayService.Instance.GetJoinCodeAsync(alloc.AllocationId);
+
+            // UDP 고정 (DTLS 사용 안 함)
+            utp.SetRelayServerData(
+                alloc.RelayServer.IpV4,
+                (ushort)alloc.RelayServer.Port,
+                alloc.AllocationIdBytes,
+                alloc.Key,
+                alloc.ConnectionData,
+                alloc.ConnectionData,
+                false
+            );
+
+            Debug.Log($"[Relay] Host Prepared. Code={joinCode} (UDP)");
+
+            bool ok = nm.StartHost();
+            Debug.Log($"[Relay] StartHost={ok}");
+
+            return ok ? joinCode : string.Empty;
+        }
+        catch (Exception e)
+        {
+            Debug.LogError($"[Relay] CreateRelay failed: {e}");
+            return string.Empty;
+        }
+    }
+
+    // 기존 코드 호환용(유지)
+    public async Task<bool> JoinRelayAsync(string joinCode)
+    {
+        return await JoinRelay(joinCode);
+    }
+
+    public async Task<bool> JoinRelay(string joinCode)
+    {
+        try
+        {
+            await EnsureServicesInitialized();
+
+            if (!TryGetNet(out var nm, out var utp))
+                return false;
+
+            if (nm.IsListening)
+            {
+                Debug.LogWarning("[Relay] JoinRelay called but Network already running.");
+                return false;
+            }
+
+            string code = (joinCode ?? string.Empty).Trim().ToUpper();
+            if (code.Length < 6)
+            {
+                Debug.LogWarning("[Relay] Join code invalid.");
+                return false;
+            }
+
+            JoinAllocation joinAlloc = await RelayService.Instance.JoinAllocationAsync(code);
+
+            // UDP 고정 (DTLS 사용 안 함)
+            utp.SetRelayServerData(
+                joinAlloc.RelayServer.IpV4,
+                (ushort)joinAlloc.RelayServer.Port,
+                joinAlloc.AllocationIdBytes,
+                joinAlloc.Key,
+                joinAlloc.ConnectionData,
+                joinAlloc.HostConnectionData,
+                false
+            );
+
+            Debug.Log($"[Relay] Join Prepared. Code={code} (UDP)");
+
+            _clientConnectedTcs = new TaskCompletionSource<bool>();
+
+            bool startOk = nm.StartClient();
+            Debug.Log($"[Relay] StartClient={startOk}");
+            if (!startOk) return false;
+
+            using (var cts = new CancellationTokenSource(TimeSpan.FromSeconds(joinConnectTimeoutSec)))
+            {
+                cts.Token.Register(() => _clientConnectedTcs.TrySetResult(false));
+                bool connected = await _clientConnectedTcs.Task;
+                Debug.Log($"[Relay] Client Connected Result={connected}");
+                return connected;
+            }
+        }
+        catch (Exception e)
+        {
+            Debug.LogError($"[Relay] JoinRelay failed: {e}");
+            return false;
+        }
+    }
+
+    // 공통 루트: 코드로 참가(목록 참가도 결국 여기로 들어오게 통일)
+    public async Task<bool> JoinViaCode(string joinCode)
+    {
+        return await JoinRelay(joinCode);
     }
 }

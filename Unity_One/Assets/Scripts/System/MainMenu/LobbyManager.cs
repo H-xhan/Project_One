@@ -1,18 +1,23 @@
 using System.Collections.Generic;
 using System.Threading.Tasks;
+using Unity.Netcode;
 using Unity.Services.Authentication;
 using Unity.Services.Core;
 using Unity.Services.Lobbies;
 using Unity.Services.Lobbies.Models;
 using UnityEngine;
+using UnityEngine.SceneManagement;
 
 public class LobbyManager : MonoBehaviour
 {
     public static LobbyManager Instance { get; private set; }
 
-    private Lobby _hostLobby; // [중요] 이 변수는 여기에 있어야 합니다!
+    [Header("Scene Flow")]
+    [Tooltip("Host 방 생성 완료 후 자동 이동할 씬 이름")]
+    [SerializeField] private string roomLobbySceneName = "RoomLobby";
+
+    private Lobby _hostLobby;
     private float _heartbeatTimer;
-    private float _lobbyUpdateTimer;
 
     private void Awake()
     {
@@ -47,14 +52,14 @@ public class LobbyManager : MonoBehaviour
         HandleLobbyHeartbeat();
     }
 
-    // [기능 1] 방 만들기
+    // 방 만들기 (Host)
     public async void CreateLobby(string lobbyName, int maxPlayers)
     {
         try
         {
-            // Relay 코드 먼저 만들기
+            // Relay 코드 먼저 만들기 (StartHost까지 여기서 처리됨)
             string joinCode = await RelayManager.Instance.CreateRelay(maxPlayers);
-            if (joinCode == null) return;
+            if (string.IsNullOrEmpty(joinCode)) return;
 
             CreateLobbyOptions options = new CreateLobbyOptions
             {
@@ -66,7 +71,6 @@ public class LobbyManager : MonoBehaviour
                         { "PlayerName", new PlayerDataObject(PlayerDataObject.VisibilityOptions.Member, "HostPlayer") }
                     }
                 },
-                // Relay 코드를 로비 데이터에 숨김
                 Data = new Dictionary<string, DataObject>
                 {
                     { "JoinCode", new DataObject(DataObject.VisibilityOptions.Member, joinCode) }
@@ -76,7 +80,10 @@ public class LobbyManager : MonoBehaviour
             Lobby lobby = await LobbyService.Instance.CreateLobbyAsync(lobbyName, maxPlayers, options);
             _hostLobby = lobby;
 
-            Debug.Log($"방 생성 완료! 코드: {lobby.LobbyCode}");
+            Debug.Log($"방 생성 완료! LobbyCode: {lobby.LobbyCode}, RelayJoinCode: {joinCode}");
+
+            // Host 생성 성공 -> RoomLobby로 즉시 이동
+            TryLoadRoomLobbyForHost();
         }
         catch (LobbyServiceException e)
         {
@@ -84,7 +91,37 @@ public class LobbyManager : MonoBehaviour
         }
     }
 
-    // [기능 2] 방 목록 가져오기
+    private void TryLoadRoomLobbyForHost()
+    {
+        var nm = NetworkManager.Singleton;
+        if (nm == null)
+        {
+            Debug.LogWarning("[Lobby] NetworkManager가 없어 일반 SceneManager로 로드합니다.");
+            SceneManager.LoadScene(roomLobbySceneName);
+            return;
+        }
+
+        if (!nm.IsHost)
+        {
+            Debug.LogWarning("[Lobby] Host가 아니라서 RoomLobby 로드를 건너뜁니다.");
+            return;
+        }
+
+        if (SceneManager.GetActiveScene().name == roomLobbySceneName)
+            return;
+
+        if (nm.SceneManager != null)
+        {
+            nm.SceneManager.LoadScene(roomLobbySceneName, LoadSceneMode.Single);
+        }
+        else
+        {
+            Debug.LogWarning("[Lobby] Netcode SceneManager가 없어 일반 SceneManager로 로드합니다. (씬 동기화 안 될 수 있음)");
+            SceneManager.LoadScene(roomLobbySceneName);
+        }
+    }
+
+    // 방 목록 가져오기
     public async Task<List<Lobby>> GetLobbies()
     {
         try
@@ -112,7 +149,7 @@ public class LobbyManager : MonoBehaviour
         }
     }
 
-    // [기능 3] 방 ID로 입장 (여기에 코드가 있어야 _hostLobby를 찾을 수 있습니다!)
+    // 목록에서 선택한 LobbyId로 입장
     public async void JoinLobbyById(string lobbyId)
     {
         try
@@ -131,16 +168,7 @@ public class LobbyManager : MonoBehaviour
             Lobby lobby = await LobbyService.Instance.JoinLobbyByIdAsync(lobbyId, options);
             _hostLobby = lobby;
 
-            if (lobby.Data.TryGetValue("JoinCode", out DataObject joinCodeData))
-            {
-                string joinCode = joinCodeData.Value;
-                Debug.Log($"접속 코드 발견: {joinCode}");
-                await RelayManager.Instance.JoinRelayAsync(joinCode);
-            }
-            else
-            {
-                Debug.LogError("이 방에는 조인 코드가 없습니다!");
-            }
+            await JoinViaLobbyData(lobby);
         }
         catch (LobbyServiceException e)
         {
@@ -148,7 +176,7 @@ public class LobbyManager : MonoBehaviour
         }
     }
 
-    // [기능 4] 코드로 입장 (추가 기능)
+    // 코드(LobbyCode)로 로비 입장
     public async void JoinLobbyByCode(string lobbyCode)
     {
         try
@@ -167,11 +195,7 @@ public class LobbyManager : MonoBehaviour
             Lobby lobby = await LobbyService.Instance.JoinLobbyByCodeAsync(lobbyCode, options);
             _hostLobby = lobby;
 
-            if (lobby.Data.TryGetValue("JoinCode", out DataObject joinCodeData))
-            {
-                string joinCode = joinCodeData.Value;
-                await RelayManager.Instance.JoinRelayAsync(joinCode);
-            }
+            await JoinViaLobbyData(lobby);
         }
         catch (LobbyServiceException e)
         {
@@ -179,6 +203,30 @@ public class LobbyManager : MonoBehaviour
         }
     }
 
+    private async Task JoinViaLobbyData(Lobby lobby)
+    {
+        if (lobby == null)
+        {
+            Debug.LogError("로비 정보가 없습니다!");
+            return;
+        }
+
+        if (!lobby.Data.TryGetValue("JoinCode", out DataObject joinCodeData))
+        {
+            Debug.LogError("이 방에는 JoinCode가 없습니다!");
+            return;
+        }
+
+        string joinCode = joinCodeData.Value;
+        if (string.IsNullOrEmpty(joinCode))
+        {
+            Debug.LogError("JoinCode 값이 비어있습니다!");
+            return;
+        }
+
+        Debug.Log($"[Lobby] Relay JoinCode={joinCode}");
+        await RelayManager.Instance.JoinViaCode(joinCode);
+    }
 
     private async void HandleLobbyHeartbeat()
     {
