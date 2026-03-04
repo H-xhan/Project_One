@@ -1,0 +1,94 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!1 &8925433067854178374
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 398676309222465606}
+  - component: {fileID: 4056417873359994567}
+  m_Layer: 0
+  m_Name: Text Creator
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!4 &398676309222465606
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 8925433067854178374}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 0}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!114 &4056417873359994567
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 8925433067854178374}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: f10876c98aaa70343b08e51daf3daa90, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  playbackSpeed: 1
+  pause: 0
+  delay: 0
+  shouldDelayLeftToRight: 0
+  delayLeftToRight: 0.05
+  textType: 0
+  font: {fileID: 11400000, guid: ff93b156b6198d34889b77040734d324, type: 2}
+  text: YOUR TEXT HERE!
+  textAnimation: 0
+  dropShadowDelay: 0.05
+  curve:
+    serializedVersion: 2
+    m_Curve:
+    - serializedVersion: 3
+      time: 0
+      value: 0
+      inSlope: 0
+      outSlope: 0
+      tangentMode: 34
+      weightedMode: 0
+      inWeight: 0
+      outWeight: 0.33333334
+    - serializedVersion: 3
+      time: 1
+      value: 0
+      inSlope: 0
+      outSlope: 0
+      tangentMode: 34
+      weightedMode: 0
+      inWeight: 0.33333334
+      outWeight: 0
+    m_PreInfinity: 2
+    m_PostInfinity: 2
+    m_RotationOrder: 4
+  characterOffset: 1
+  fontSize: 1.75
+  lifetime: 1
+  color1: {r: 0.9911022, g: 0.1746475, b: 0.003676507, a: 1}
+  color2: {r: 0.9911022, g: 0.8796226, b: 0.1651322, a: 1}
+  outline: {r: 0.2917707, g: 0.01850022, b: 0.01096009, a: 1}
+  amplitude: 0.1
+  frequency: 0.5
+  overlay: {fileID: 0}
+  overlayColor: {r: 0, g: 0, b: 0, a: 0}
+  overlayTiling: 1
+  dropShadowSizeMultiplier: 1
+  dropShadowColor: {r: 0, g: 0, b: 0, a: 0}
+  dropShadowPosition: {x: 0, y: 0.1}

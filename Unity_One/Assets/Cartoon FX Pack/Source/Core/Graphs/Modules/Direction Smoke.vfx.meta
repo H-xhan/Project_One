@@ -1,0 +1,21 @@
+fileFormatVersion: 2
+guid: ca3d280f0ec5a9a40812395cc1faf345
+VisualEffectImporter:
+  externalObjects: {}
+  serializedVersion: 1
+  template:
+    name: 
+    category: 
+    description: 
+    icon: {instanceID: 0}
+    thumbnail: {instanceID: 0}
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 307044
+  packageName: Cartoon FX Pack
+  packageVersion: 1.0.4
+  assetPath: Assets/Cartoon FX Pack/Source/Core/Graphs/Modules/Direction Smoke.vfx
+  uploadId: 732410

@@ -1,0 +1,17 @@
+fileFormatVersion: 2
+guid: 3b0fffcacda464c4b9cb99d7f78f31b5
+ScriptedImporter:
+  internalIDToNameTable: []
+  externalObjects: {}
+  serializedVersion: 2
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+  script: {fileID: 11500000, guid: 60072b568d64c40a485e0fc55012dc9f, type: 3}
+AssetOrigin:
+  serializedVersion: 1
+  productId: 307044
+  packageName: Cartoon FX Pack
+  packageVersion: 1.0.4
+  assetPath: Assets/Cartoon FX Pack/Source/Core/Shaders/Subgraphs/Soft Particle.shadersubgraph
+  uploadId: 732410

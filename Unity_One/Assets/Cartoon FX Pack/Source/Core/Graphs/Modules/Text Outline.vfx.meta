@@ -1,0 +1,21 @@
+fileFormatVersion: 2
+guid: 0ec522d7a5662694cb2820fb5923ac60
+VisualEffectImporter:
+  externalObjects: {}
+  serializedVersion: 1
+  template:
+    name: 
+    category: 
+    description: 
+    icon: {instanceID: 0}
+    thumbnail: {instanceID: 0}
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 307044
+  packageName: Cartoon FX Pack
+  packageVersion: 1.0.4
+  assetPath: Assets/Cartoon FX Pack/Source/Core/Graphs/Modules/Text Outline.vfx
+  uploadId: 732410

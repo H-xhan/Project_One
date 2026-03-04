@@ -1,0 +1,21 @@
+fileFormatVersion: 2
+guid: 898c50dff7d8d6341a2b02b3b7561ec0
+VisualEffectImporter:
+  externalObjects: {}
+  serializedVersion: 1
+  template:
+    name: 
+    category: 
+    description: 
+    icon: {instanceID: 0}
+    thumbnail: {instanceID: 0}
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 307044
+  packageName: Cartoon FX Pack
+  packageVersion: 1.0.4
+  assetPath: Assets/Cartoon FX Pack/Source/Core/Graphs/Subgraphs/Operators/Flipbook.vfxoperator
+  uploadId: 732410

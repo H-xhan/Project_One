@@ -1,0 +1,22 @@
+fileFormatVersion: 2
+guid: aa0ef1e84f7a9e646b0030496f73c199
+VisualEffectImporter:
+  externalObjects: {}
+  serializedVersion: 1
+  template:
+    name: 
+    category: 
+    description: 
+    icon: {instanceID: 0}
+    thumbnail: {instanceID: 0}
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 307044
+  packageName: Cartoon FX Pack
+  packageVersion: 1.0.4
+  assetPath: Assets/Cartoon FX Pack/Source/Core/Graphs/Subgraphs/Blocks/Smoke Extra
+    Output.vfxblock
+  uploadId: 732410

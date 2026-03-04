@@ -430,6 +430,8 @@ MonoBehaviour:
   container: {fileID: 1507958372}
   lobbySingleTemplate: {fileID: 513379208}
   refreshButton: {fileID: 1267232119}
+  autoRefreshOnStart: 1
+  showTemplateAsHeader: 1
 --- !u!4 &294183265
 Transform:
   m_ObjectHideFlags: 0
