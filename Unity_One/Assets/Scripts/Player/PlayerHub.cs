@@ -1,6 +1,7 @@
 using System.Collections;
 using Unity.Netcode;
 using UnityEngine;
+using UnityEngine.SceneManagement;
 
 public class PlayerHub : NetworkBehaviour
 {
@@ -33,12 +34,17 @@ public class PlayerHub : NetworkBehaviour
     [Tooltip("공격 상태 감지 최대 대기 시간(초). 상태명이 다르거나 전이가 꼬였을 때 무한 대기 방지")]
     [SerializeField] private float attackStateTimeout = 2.0f;
 
+    [Header("Spawn Settings")]
+    [Tooltip("이 씬들에서는 초기 Owner 스폰 보정 루틴을 건너뜁니다. 인게임 씬은 InGameMatchManager가 배치를 전담하도록 비워두지 않는 것을 권장합니다.")]
+    [SerializeField] private string[] skipInitialSpawnScenes = new[] { "InGame" };
+
     [Header("Modules (자동 연결됨)")]
     [SerializeField] private PlayerInputModule inputModule;
     [SerializeField] private PlayerLocomotionModule locomotionModule;
     [SerializeField] private PlayerAnimModule animModule;
     [SerializeField] private PlayerCombatModule combatModule;
     [SerializeField] private PlayerInteractModule interactModule;
+    [SerializeField] private PlayerStatusModule statusModule;
 
     public bool IsCursorLocked => inputModule != null && inputModule.IsCursorLocked;
 
@@ -69,7 +75,8 @@ public class PlayerHub : NetworkBehaviour
         ResolveRefs();
         ApplyOwnerVisuals();
 
-        if (!IsOwner && inputModule != null) inputModule.enabled = false;
+        if (!IsOwner && inputModule != null)
+            inputModule.enabled = false;
 
         if (!IsOwner)
         {
@@ -80,7 +87,8 @@ public class PlayerHub : NetworkBehaviour
             if (listener != null) listener.enabled = false;
         }
 
-        StartCoroutine(SpawnPosRoutine());
+        if (!ShouldSkipInitialSpawnRoutine())
+            StartCoroutine(SpawnPosRoutine());
     }
 
     private IEnumerator SpawnPosRoutine()
@@ -108,6 +116,20 @@ public class PlayerHub : NetworkBehaviour
         if (cc != null) cc.enabled = true;
     }
 
+    private bool ShouldSkipInitialSpawnRoutine()
+    {
+        string currentScene = SceneManager.GetActiveScene().name;
+        if (skipInitialSpawnScenes == null) return false;
+
+        for (int i = 0; i < skipInitialSpawnScenes.Length; i++)
+        {
+            if (!string.IsNullOrWhiteSpace(skipInitialSpawnScenes[i]) && skipInitialSpawnScenes[i] == currentScene)
+                return true;
+        }
+
+        return false;
+    }
+
     [ContextMenu("Auto Find Modules")]
     private void ResolveRefs()
     {
@@ -124,6 +146,7 @@ public class PlayerHub : NetworkBehaviour
         if (animModule == null) animModule = GetComponentInChildren<PlayerAnimModule>(true);
         if (combatModule == null) combatModule = GetComponentInChildren<PlayerCombatModule>(true);
         if (interactModule == null) interactModule = GetComponentInChildren<PlayerInteractModule>(true);
+        if (statusModule == null) statusModule = GetComponentInChildren<PlayerStatusModule>(true);
     }
 
     private void ApplyOwnerVisuals()
@@ -132,6 +155,21 @@ public class PlayerHub : NetworkBehaviour
         if (cameraRoot != null) cameraRoot.SetActive(active);
         if (audioListener != null) audioListener.enabled = active;
         if (interactModule != null) interactModule.SetOwnerMode(active);
+    }
+
+    private bool CanMoveNow()
+    {
+        return statusModule == null || statusModule.CanMove;
+    }
+
+    private bool CanAttackNow()
+    {
+        return statusModule == null || statusModule.CanAttack;
+    }
+
+    private bool CanInteractNow()
+    {
+        return statusModule == null || statusModule.CanInteract;
     }
 
     private void Update()
@@ -164,10 +202,20 @@ public class PlayerHub : NetworkBehaviour
 
         HandleCameraRotation(_pitchDelta);
 
+        if (!CanMoveNow())
+        {
+            _moveInput = Vector2.zero;
+            _yawDelta = 0f;
+            _jumpPressed = false;
+            _sprintHeld = false;
+        }
+
         SubmitInputServerRpc(_moveInput, _yawDelta, _jumpPressed, _sprintHeld);
 
-        if (attackPressed) AttackServerRpc();
-        if (interactPressed && interactModule != null)
+        if (attackPressed && CanAttackNow())
+            AttackServerRpc();
+
+        if (interactPressed && CanInteractNow() && interactModule != null)
         {
             if (interactModule.HasHeldItem())
             {
@@ -179,12 +227,15 @@ public class PlayerHub : NetworkBehaviour
                     TryPickupServerRpc(target);
             }
         }
-        if (dropPressed) DropItemServerRpc();
+
+        if (dropPressed && CanInteractNow())
+            DropItemServerRpc();
     }
 
     [ServerRpc]
     private void DropItemServerRpc()
     {
+        if (!CanInteractNow()) return;
         if (interactModule != null) interactModule.ServerTryDrop();
     }
 
@@ -226,6 +277,12 @@ public class PlayerHub : NetworkBehaviour
     [Rpc(SendTo.Server)]
     private void AttackServerRpc()
     {
+        if (!CanAttackNow())
+        {
+            _attackBufferedServer = false;
+            return;
+        }
+
         if (_attackLockedServer)
         {
             if (allowAttackBuffer)
@@ -241,6 +298,9 @@ public class PlayerHub : NetworkBehaviour
 
     private void StartAttackServerInternal()
     {
+        if (!CanAttackNow())
+            return;
+
         _attackLockedServer = true;
 
         int weaponAnimId = 0;
@@ -327,6 +387,7 @@ public class PlayerHub : NetworkBehaviour
     [ServerRpc]
     private void TryPickupServerRpc(NetworkObjectReference target)
     {
+        if (!CanInteractNow()) return;
         if (interactModule == null) return;
         if (!interactModule.ServerTryPickup(target)) return;
 

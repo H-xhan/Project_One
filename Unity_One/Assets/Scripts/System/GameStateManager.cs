@@ -31,6 +31,9 @@ public class GameStateManager : NetworkBehaviour
     [Tooltip("게임플레이 씬에서 사용할 스폰포인트 태그")]
     [SerializeField] private string spawnPointTag = "SpawnPoint";
 
+    [Tooltip("게임플레이 씬 로드 완료 직후 GameStateManager가 직접 플레이어를 텔레포트할지 여부. InGameMatchManager를 단일 책임으로 쓸 때는 끕니다.")]
+    [SerializeField] private bool teleportPlayersOnGameSceneLoaded = false;
+
     public NetworkVariable<int> StateValue = new NetworkVariable<int>((int)GameState.Lobby);
     public NetworkVariable<float> StateTimer = new NetworkVariable<float>(0f);
 
@@ -79,12 +82,11 @@ public class GameStateManager : NetworkBehaviour
         {
             if (readySystem != null && readySystem.CanStartGameServer() && readySystem.AreAllReady())
             {
-                readySystem.ResetAllReadyServer(); // 또는 readySystem.Server_ResetAllReady()
+                readySystem.ResetAllReadyServer();
                 EnterCountdown();
             }
             return;
         }
-
 
         float t = StateTimer.Value;
         if (t > 0f)
@@ -112,7 +114,6 @@ public class GameStateManager : NetworkBehaviour
     private void EnterCountdown()
     {
         StateValue.Value = (int)GameState.Countdown;
-
         StateTimer.Value = 0f;
         _waitingForGameScene = true;
     }
@@ -137,10 +138,12 @@ public class GameStateManager : NetworkBehaviour
             return;
 
         _waitingForGameScene = false;
-
         StateTimer.Value = countdownSeconds;
 
-        TeleportAllPlayersToTaggedSpawns();
+        if (teleportPlayersOnGameSceneLoaded)
+        {
+            TeleportAllPlayersToTaggedSpawns();
+        }
     }
 
     private void TeleportAllPlayersToTaggedSpawns()

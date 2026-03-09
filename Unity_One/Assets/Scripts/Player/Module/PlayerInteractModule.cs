@@ -1,5 +1,3 @@
-using System;
-using System.Reflection;
 using Unity.Netcode;
 using UnityEngine;
 
@@ -59,6 +57,9 @@ public class PlayerInteractModule : NetworkBehaviour
     private float _pendingStartTime;
 
     private NetworkObject _heldCache;
+    private ItemPickupNetwork _heldPickup;
+    private WeaponItemDataSO _heldWeaponData;
+
     private int _cachedWeaponAnimId;
     private Vector3 _cachedLocalPos;
     private Vector3 _cachedLocalEuler;
@@ -79,8 +80,7 @@ public class PlayerInteractModule : NetworkBehaviour
         _cc = GetComponentInParent<CharacterController>();
         _anim = GetComponentInParent<Animator>();
 
-        AutoFindHandBone();
-
+        AutoFindRefs();
         _heldItem.OnValueChanged += OnHeldItemChanged;
 
         ResolveHeldCache();
@@ -89,39 +89,47 @@ public class PlayerInteractModule : NetworkBehaviour
 
     public override void OnNetworkDespawn()
     {
-        if (IsSpawned)
-            _heldItem.OnValueChanged -= OnHeldItemChanged;
-
+        _heldItem.OnValueChanged -= OnHeldItemChanged;
         base.OnNetworkDespawn();
     }
 
-    private void AutoFindHandBone()
+    private void AutoFindRefs()
     {
+        if (ownerCamera == null)
+            ownerCamera = GetComponentInParent<Camera>();
+
         if (rightHandBone != null) return;
 
         if (_anim != null && _anim.isHuman)
             rightHandBone = _anim.GetBoneTransform(HumanBodyBones.RightHand);
     }
 
-    private void OnHeldItemChanged(NetworkObjectReference prev, NetworkObjectReference next)
+    private void OnHeldItemChanged(NetworkObjectReference previousValue, NetworkObjectReference newValue)
     {
         _heldCache = null;
+        _heldPickup = null;
+        _heldWeaponData = null;
+
         _hasCachedMeta = false;
+        _cachedWeaponAnimId = 0;
+        _cachedLocalPos = defaultHeldLocalPosition;
+        _cachedLocalEuler = defaultHeldLocalEulerAngles;
 
         _pendingAttach = false;
         _attached = false;
-
         _pendingStartTime = Time.time;
 
         ResolveHeldCache();
         CacheHeldMeta();
 
-        if (_heldCache != null)
+        if (IsServer && _heldCache != null)
             _pendingAttach = true;
     }
 
     private void Update()
     {
+        if (!IsServer) return;
+
         if (_pendingAttach && !_attached)
         {
             if (Time.time - _pendingStartTime >= pickupPendingTime)
@@ -131,10 +139,11 @@ public class PlayerInteractModule : NetworkBehaviour
 
     private void LateUpdate()
     {
+        if (!IsServer) return;
         if (!_attached) return;
 
         if (!ResolveHeldCache()) return;
-        if (rightHandBone == null) AutoFindHandBone();
+        if (rightHandBone == null) AutoFindRefs();
         if (rightHandBone == null) return;
 
         Vector3 localPos = _hasCachedMeta ? _cachedLocalPos : defaultHeldLocalPosition;
@@ -157,6 +166,7 @@ public class PlayerInteractModule : NetworkBehaviour
 
         if (!_ownerMode) return false;
         if (ownerCamera == null) return false;
+        if (HasHeldItem()) return false;
 
         Ray ray = new Ray(ownerCamera.transform.position, ownerCamera.transform.forward);
         if (!Physics.Raycast(ray, out RaycastHit hit, pickupDistance, pickupMask, QueryTriggerInteraction.Ignore))
@@ -178,12 +188,11 @@ public class PlayerInteractModule : NetworkBehaviour
         if (netObj == null || !netObj.IsSpawned) return false;
 
         netObj.ChangeOwnership(OwnerClientId);
-
         SetHeldPhysics(netObj, true);
 
         _heldItem.Value = target;
 
-        if (disableCharacterControllerWhilePickingUp && _cc != null)
+        if (disableCharacterControllerWhilePickingUp && _cc != null && _cc.enabled)
             _cc.enabled = false;
 
         return true;
@@ -196,31 +205,25 @@ public class PlayerInteractModule : NetworkBehaviour
 
         NetworkObject netObj = _heldCache;
 
-        // 드랍 직전에 스냅을 끊어서 손이 계속 끌고 가지 않게 함
         _attached = false;
         _pendingAttach = false;
 
-        // 메타가 없으면 한 번 갱신
-        if (!_hasCachedMeta) CacheHeldMeta();
+        if (!_hasCachedMeta)
+            CacheHeldMeta();
 
-        // 손(WeaponPoint) 위치에서 드랍되도록 위치/회전 맞춤
         if (TryGetHandWorldPose(out Vector3 handPos, out Quaternion handRot))
         {
-            // 겹침 방지용 살짝 오프셋(플레이어 기준 forward/up)
             Vector3 dropPos = handPos + transform.forward * dropHandForwardOffset + Vector3.up * dropHandUpOffset;
             netObj.transform.SetPositionAndRotation(dropPos, handRot);
         }
         else
         {
-            // 안전 fallback
             Vector3 dropPos = transform.position + transform.forward * 1.2f + Vector3.up * 1.0f;
-            netObj.transform.position = dropPos;
+            netObj.transform.SetPositionAndRotation(dropPos, Quaternion.identity);
         }
 
-        // 물리 복구
         SetHeldPhysics(netObj, false);
 
-        // 던지기 힘
         Rigidbody rb = netObj.GetComponent<Rigidbody>();
         if (rb != null)
         {
@@ -228,9 +231,12 @@ public class PlayerInteractModule : NetworkBehaviour
             rb.AddForce(force, ForceMode.Impulse);
         }
 
+        if (NetworkManager != null)
+            netObj.ChangeOwnership(NetworkManager.ServerClientId);
+
         _heldItem.Value = default;
 
-        if (_cc != null)
+        if (_cc != null && !_cc.enabled)
             _cc.enabled = true;
     }
 
@@ -243,6 +249,7 @@ public class PlayerInteractModule : NetworkBehaviour
 
     public void AnimEvent_AttachHeldItem()
     {
+        if (!IsServer) return;
         ForceAttach();
     }
 
@@ -253,20 +260,27 @@ public class PlayerInteractModule : NetworkBehaviour
         _pendingAttach = false;
         _attached = true;
 
-        if (_cc != null)
+        if (_cc != null && !_cc.enabled)
             _cc.enabled = true;
+
+        if (TryGetHandWorldPose(out Vector3 handPos, out Quaternion handRot))
+            _heldCache.transform.SetPositionAndRotation(handPos, handRot);
     }
 
     private bool ResolveHeldCache()
     {
-        if (_heldCache != null && _heldCache.IsSpawned) return true;
+        if (_heldCache != null && _heldCache.IsSpawned)
+            return true;
 
         if (_heldItem.Value.TryGet(out NetworkObject netObj))
         {
             _heldCache = netObj;
+            _heldPickup = _heldCache != null ? _heldCache.GetComponent<ItemPickupNetwork>() : null;
             return _heldCache != null && _heldCache.IsSpawned;
         }
 
+        _heldCache = null;
+        _heldPickup = null;
         return false;
     }
 
@@ -275,7 +289,7 @@ public class PlayerInteractModule : NetworkBehaviour
         pos = Vector3.zero;
         rot = Quaternion.identity;
 
-        if (rightHandBone == null) AutoFindHandBone();
+        if (rightHandBone == null) AutoFindRefs();
         if (rightHandBone == null) return false;
 
         Vector3 localPos = _hasCachedMeta ? _cachedLocalPos : defaultHeldLocalPosition;
@@ -301,15 +315,14 @@ public class PlayerInteractModule : NetworkBehaviour
 
                 rb.isKinematic = true;
                 rb.detectCollisions = false;
+                rb.Sleep();
             }
             else
             {
                 rb.isKinematic = false;
                 rb.detectCollisions = true;
-
                 rb.linearVelocity = Vector3.zero;
                 rb.angularVelocity = Vector3.zero;
-
                 rb.WakeUp();
             }
         }
@@ -322,42 +335,27 @@ public class PlayerInteractModule : NetworkBehaviour
     private void CacheHeldMeta()
     {
         _hasCachedMeta = false;
+        _heldWeaponData = null;
         _cachedWeaponAnimId = 0;
         _cachedLocalPos = defaultHeldLocalPosition;
         _cachedLocalEuler = defaultHeldLocalEulerAngles;
 
         if (!ResolveHeldCache()) return;
+        if (_heldPickup == null) return;
 
-        Component pickup = _heldCache.GetComponent("ItemPickupNetwork");
-        if (pickup == null) return;
+        _heldWeaponData = _heldPickup.GetWeaponData();
+        if (_heldWeaponData == null) return;
 
-        object itemData = ReadMemberValue(pickup, "itemData") ?? ReadMemberValue(pickup, "ItemData");
-        if (itemData == null) return;
-
-        object animIdObj = ReadMemberValue(itemData, "weaponAnimID") ?? ReadMemberValue(itemData, "weaponAnimId");
-        if (animIdObj is int id) _cachedWeaponAnimId = id;
-
-        object posObj = ReadMemberValue(itemData, "equippedLocalPosition");
-        if (posObj is Vector3 p) _cachedLocalPos = p;
-
-        object eulObj = ReadMemberValue(itemData, "equippedLocalEulerAngles");
-        if (eulObj is Vector3 e) _cachedLocalEuler = e;
-
+        _cachedWeaponAnimId = _heldWeaponData.weaponAnimID;
+        _cachedLocalPos = _heldWeaponData.equippedLocalPosition;
+        _cachedLocalEuler = _heldWeaponData.equippedLocalEulerAngles;
         _hasCachedMeta = true;
     }
 
-    private object ReadMemberValue(object obj, string name)
+#if UNITY_EDITOR
+    private void OnValidate()
     {
-        if (obj == null) return null;
-
-        Type t = obj.GetType();
-
-        FieldInfo f = t.GetField(name, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
-        if (f != null) return f.GetValue(obj);
-
-        PropertyInfo p = t.GetProperty(name, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
-        if (p != null && p.CanRead) return p.GetValue(obj);
-
-        return null;
+        AutoFindRefs();
     }
+#endif
 }
