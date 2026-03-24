@@ -15,11 +15,20 @@ public class ItemSpawner : NetworkBehaviour
         [Tooltip("소환할 아이템 프리팹 (반드시 NetworkObject가 있어야 함)")]
         public GameObject prefab;
 
-        [Tooltip("소환될 위치")]
-        public Vector3 position;
+        [Tooltip("이 아이템이 생성될 전용 스폰 포인트")]
+        public Transform spawnPoint;
 
-        [Tooltip("소환될 회전값")]
-        public Vector3 rotation;
+        [Tooltip("스폰 포인트 기준 로컬 위치 오프셋")]
+        public Vector3 localPositionOffset = Vector3.zero;
+
+        [Tooltip("스폰 포인트 기준 로컬 회전 오프셋")]
+        public Vector3 localRotationOffset = Vector3.zero;
+
+        [Tooltip("스폰 포인트가 비어 있을 때만 사용할 예비 위치")]
+        public Vector3 fallbackPosition = Vector3.zero;
+
+        [Tooltip("스폰 포인트가 비어 있을 때만 사용할 예비 회전값")]
+        public Vector3 fallbackRotation = Vector3.zero;
     }
 
     [Header("Spawn Settings")]
@@ -30,7 +39,7 @@ public class ItemSpawner : NetworkBehaviour
     [SerializeField] private bool preventDuplicateSpawnPerScene = true;
 
     [Header("Spawn List")]
-    [Tooltip("여기에서 + 버튼을 눌러 아이템을 추가하세요")]
+    [Tooltip("각 아이템마다 전용 스폰 포인트를 연결하세요")]
     [SerializeField] private List<SpawnEntry> itemsToSpawn = new List<SpawnEntry>();
 
     private int _lastSpawnedSceneHandle = int.MinValue;
@@ -45,6 +54,8 @@ public class ItemSpawner : NetworkBehaviour
 
     public override void OnNetworkSpawn()
     {
+        base.OnNetworkSpawn();
+
         if (!IsServerNow()) return;
 
         HookSceneEventsOnce();
@@ -85,6 +96,7 @@ public class ItemSpawner : NetworkBehaviour
             {
                 NetworkManager.Singleton.SceneManager.OnLoadEventCompleted -= OnLoadEventCompletedServer;
             }
+
             _subscribed = false;
         }
 
@@ -112,7 +124,6 @@ public class ItemSpawner : NetworkBehaviour
             return;
 
         _lastSpawnedSceneHandle = handle;
-
         SpawnAllServer(activeSceneName);
     }
 
@@ -121,7 +132,8 @@ public class ItemSpawner : NetworkBehaviour
         for (int i = 0; i < itemsToSpawn.Count; i++)
         {
             var entry = itemsToSpawn[i];
-            if (entry == null || entry.prefab == null) continue;
+            if (entry == null || entry.prefab == null)
+                continue;
 
             SpawnItem(entry);
         }
@@ -131,16 +143,17 @@ public class ItemSpawner : NetworkBehaviour
 
     private void SpawnItem(SpawnEntry entry)
     {
-        Quaternion rot = Quaternion.Euler(entry.rotation);
-        GameObject newItem = Instantiate(entry.prefab, entry.position, rot);
+        Vector3 spawnPos = ResolveSpawnPosition(entry);
+        Quaternion spawnRot = ResolveSpawnRotation(entry);
 
+        GameObject newItem = Instantiate(entry.prefab, spawnPos, spawnRot);
         SceneManager.MoveGameObjectToScene(newItem, SceneManager.GetActiveScene());
 
         NetworkObject netObj = newItem.GetComponent<NetworkObject>();
         if (netObj != null)
         {
             netObj.Spawn();
-            Debug.Log($"[ItemSpawner] {entry.name} 소환 완료! 위치: {entry.position}");
+            Debug.Log($"[ItemSpawner] {entry.name} 소환 완료! 위치: {spawnPos}");
         }
         else
         {
@@ -148,13 +161,38 @@ public class ItemSpawner : NetworkBehaviour
         }
     }
 
+    private Vector3 ResolveSpawnPosition(SpawnEntry entry)
+    {
+        if (entry.spawnPoint != null)
+            return entry.spawnPoint.TransformPoint(entry.localPositionOffset);
+
+        return entry.fallbackPosition;
+    }
+
+    private Quaternion ResolveSpawnRotation(SpawnEntry entry)
+    {
+        if (entry.spawnPoint != null)
+            return entry.spawnPoint.rotation * Quaternion.Euler(entry.localRotationOffset);
+
+        return Quaternion.Euler(entry.fallbackRotation);
+    }
+
     private void OnDrawGizmosSelected()
     {
         Gizmos.color = Color.cyan;
+
+        if (itemsToSpawn == null) return;
+
         foreach (var entry in itemsToSpawn)
         {
-            Gizmos.DrawWireSphere(entry.position, 0.5f);
-            Gizmos.DrawRay(entry.position, Vector3.up * 1f);
+            if (entry == null) continue;
+
+            Vector3 gizmoPos = entry.spawnPoint != null
+                ? entry.spawnPoint.TransformPoint(entry.localPositionOffset)
+                : entry.fallbackPosition;
+
+            Gizmos.DrawWireSphere(gizmoPos, 0.15f);
+            Gizmos.DrawRay(gizmoPos, Vector3.up * 0.5f);
         }
     }
 }

@@ -87,8 +87,8 @@ public class PlayerHub : NetworkBehaviour
             if (listener != null) listener.enabled = false;
         }
 
-        if (!ShouldSkipInitialSpawnRoutine())
-            StartCoroutine(SpawnPosRoutine());
+        //if (!ShouldSkipInitialSpawnRoutine())
+            //StartCoroutine(SpawnPosRoutine());
     }
 
     private IEnumerator SpawnPosRoutine()

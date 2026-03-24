@@ -1,7 +1,5 @@
-using System.Collections.Generic;
 using Unity.Netcode;
 using UnityEngine;
-using UnityEngine.SceneManagement;
 
 public class GameStateManager : NetworkBehaviour
 {
@@ -13,31 +11,35 @@ public class GameStateManager : NetworkBehaviour
         Results = 3
     }
 
-    [Tooltip("ReadySystem 참조(없으면 자동 탐색)")]
-    [SerializeField] private ReadySystem readySystem;
+    [Header("Refs")]
+    [SerializeField, Tooltip("ReadySystem 참조(없으면 자동 탐색)")]
+    private ReadySystem readySystem;
 
-    [Tooltip("카운트다운 시간(초)")]
-    [SerializeField] private float countdownSeconds = 3f;
+    [SerializeField, Tooltip("로비/게임 존 텔레포트를 담당하는 매니저(없으면 자동 탐색)")]
+    private InGameMatchManager inGameMatchManager;
 
-    [Tooltip("플레이 시간(초)")]
-    [SerializeField] private float playSeconds = 120f;
+    [Header("시간 설정")]
+    [SerializeField, Tooltip("카운트다운 시간(초)")]
+    private float countdownSeconds = 3f;
 
-    [Tooltip("결과 시간(초)")]
-    [SerializeField] private float resultsSeconds = 6f;
+    [SerializeField, Tooltip("플레이 시간(초)")]
+    private float playSeconds = 120f;
 
-    [Tooltip("Results 후 Lobby로 자동 복귀")]
-    [SerializeField] private bool autoReturnToLobby = true;
+    [SerializeField, Tooltip("결과 시간(초)")]
+    private float resultsSeconds = 6f;
 
-    [Tooltip("게임플레이 씬에서 사용할 스폰포인트 태그")]
-    [SerializeField] private string spawnPointTag = "SpawnPoint";
+    [Header("동작 옵션")]
+    [SerializeField, Tooltip("Results 후 Lobby로 자동 복귀")]
+    private bool autoReturnToLobby = true;
 
-    [Tooltip("게임플레이 씬 로드 완료 직후 GameStateManager가 직접 플레이어를 텔레포트할지 여부. InGameMatchManager를 단일 책임으로 쓸 때는 끕니다.")]
-    [SerializeField] private bool teleportPlayersOnGameSceneLoaded = false;
+    [SerializeField, Tooltip("Lobby 진입 시 플레이어를 로비 존으로 다시 보낼지 여부")]
+    private bool teleportPlayersOnEnterLobby = true;
+
+    [SerializeField, Tooltip("Playing 진입 시 플레이어를 게임 존으로 보낼지 여부")]
+    private bool teleportPlayersOnEnterPlaying = true;
 
     public NetworkVariable<int> StateValue = new NetworkVariable<int>((int)GameState.Lobby);
     public NetworkVariable<float> StateTimer = new NetworkVariable<float>(0f);
-
-    private bool _waitingForGameScene;
 
     public GameState GetState()
     {
@@ -46,35 +48,29 @@ public class GameStateManager : NetworkBehaviour
 
     public override void OnNetworkSpawn()
     {
+        base.OnNetworkSpawn();
+
+        ResolveRefs();
+
+        if (!IsServer) return;
+
+        EnterLobby(true);
+    }
+
+    private void ResolveRefs()
+    {
         if (readySystem == null)
             readySystem = FindFirstObjectByType<ReadySystem>();
 
-        if (!IsServer) return;
-
-        if (NetworkManager.Singleton != null && NetworkManager.Singleton.SceneManager != null)
-        {
-            NetworkManager.Singleton.SceneManager.OnLoadEventCompleted += OnLoadEventCompleted;
-        }
-
-        EnterLobby();
-    }
-
-    public override void OnNetworkDespawn()
-    {
-        if (!IsServer) return;
-
-        if (NetworkManager.Singleton != null && NetworkManager.Singleton.SceneManager != null)
-        {
-            NetworkManager.Singleton.SceneManager.OnLoadEventCompleted -= OnLoadEventCompleted;
-        }
+        if (inGameMatchManager == null)
+            inGameMatchManager = FindFirstObjectByType<InGameMatchManager>();
     }
 
     private void Update()
     {
         if (!IsServer) return;
 
-        if (_waitingForGameScene)
-            return;
+        ResolveRefs();
 
         var state = GetState();
 
@@ -85,93 +81,77 @@ public class GameStateManager : NetworkBehaviour
                 readySystem.ResetAllReadyServer();
                 EnterCountdown();
             }
+
             return;
         }
 
-        float t = StateTimer.Value;
-        if (t > 0f)
+        float timer = StateTimer.Value;
+        if (timer > 0f)
         {
-            t -= Time.deltaTime;
-            if (t < 0f) t = 0f;
-            StateTimer.Value = t;
+            timer -= Time.deltaTime;
+            if (timer < 0f) timer = 0f;
+            StateTimer.Value = timer;
         }
 
         if (StateTimer.Value > 0f)
             return;
 
-        if (state == GameState.Countdown) EnterPlaying();
-        else if (state == GameState.Playing) EnterResults();
-        else if (state == GameState.Results && autoReturnToLobby) EnterLobby();
+        if (state == GameState.Countdown)
+        {
+            EnterPlaying();
+        }
+        else if (state == GameState.Playing)
+        {
+            EnterResults();
+        }
+        else if (state == GameState.Results && autoReturnToLobby)
+        {
+            EnterLobby(false);
+        }
     }
 
-    private void EnterLobby()
+    private void EnterLobby(bool isInitialSpawn)
     {
         StateValue.Value = (int)GameState.Lobby;
         StateTimer.Value = 0f;
-        _waitingForGameScene = false;
+
+        if (readySystem != null)
+            readySystem.ResetAllReadyServer();
+
+        if (!isInitialSpawn && teleportPlayersOnEnterLobby && inGameMatchManager != null && inGameMatchManager.IsSpawned)
+        {
+            inGameMatchManager.TeleportPlayersToLobbyServer();
+        }
+
+        Debug.Log("[GameStateManager] EnterLobby");
     }
 
     private void EnterCountdown()
     {
         StateValue.Value = (int)GameState.Countdown;
-        StateTimer.Value = 0f;
-        _waitingForGameScene = true;
+        StateTimer.Value = countdownSeconds;
+
+        Debug.Log("[GameStateManager] EnterCountdown");
     }
 
     private void EnterPlaying()
     {
         StateValue.Value = (int)GameState.Playing;
         StateTimer.Value = playSeconds;
+
+        if (teleportPlayersOnEnterPlaying && inGameMatchManager != null && inGameMatchManager.IsSpawned)
+        {
+            inGameMatchManager.TeleportPlayersToGameServer();
+        }
+
+        Debug.Log("[GameStateManager] EnterPlaying");
     }
 
     private void EnterResults()
     {
         StateValue.Value = (int)GameState.Results;
         StateTimer.Value = resultsSeconds;
-    }
 
-    private void OnLoadEventCompleted(string sceneName, LoadSceneMode mode, List<ulong> clientsCompleted, List<ulong> clientsTimedOut)
-    {
-        if (!IsServer) return;
-
-        if (GetState() != GameState.Countdown)
-            return;
-
-        _waitingForGameScene = false;
-        StateTimer.Value = countdownSeconds;
-
-        if (teleportPlayersOnGameSceneLoaded)
-        {
-            TeleportAllPlayersToTaggedSpawns();
-        }
-    }
-
-    private void TeleportAllPlayersToTaggedSpawns()
-    {
-        var spawnObjects = GameObject.FindGameObjectsWithTag(spawnPointTag);
-        if (spawnObjects == null || spawnObjects.Length == 0)
-        {
-            Debug.LogWarning($"[GameStateManager] No SpawnPoints found with tag '{spawnPointTag}'.");
-            return;
-        }
-
-        var spawns = new List<Transform>(spawnObjects.Length);
-        for (int i = 0; i < spawnObjects.Length; i++)
-            spawns.Add(spawnObjects[i].transform);
-
-        spawns.Sort((a, b) => string.Compare(a.name, b.name, System.StringComparison.Ordinal));
-
-        int idx = 0;
-        foreach (var clientId in NetworkManager.Singleton.ConnectedClientsIds)
-        {
-            var client = NetworkManager.Singleton.ConnectedClients[clientId];
-            var playerObj = client.PlayerObject;
-            if (playerObj == null) continue;
-
-            var target = spawns[idx % spawns.Count];
-            idx++;
-
-            playerObj.transform.SetPositionAndRotation(target.position, target.rotation);
-        }
+        Debug.Log("[GameStateManager] EnterResults");
     }
 }

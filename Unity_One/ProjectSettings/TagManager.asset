@@ -9,6 +9,7 @@ TagManager:
   - Item
   - AI
   - GameSpawnPoint
+  - LobbySpawnPoint
   layers:
   - Default
   - TransparentFX

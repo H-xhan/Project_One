@@ -74,11 +74,13 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: 
   ShowTopMostFoldoutHeaderGroup: 1
-  attackOrigin: {fileID: 0}
+  attackOrigin: {fileID: 4707094265180831813}
   hitForce: 15
   upwardForce: 3
   hitRadius: 1.1
   hitDistance: 1.5
+  fallbackDamage: 10
+  fallbackCooldown: 0.6
   targetMask:
     serializedVersion: 2
     m_Bits: 320
@@ -170,6 +172,7 @@ MonoBehaviour:
   rootRigidbody: {fileID: 2851017198822883728}
   charController: {fileID: 8782184542177483484}
   knockbackDuration: 1.2
+  eliminationY: -15
 --- !u!1 &4962043045615566174
 GameObject:
   m_ObjectHideFlags: 0
@@ -1603,11 +1606,14 @@ MonoBehaviour:
   allowAttackBuffer: 1
   attackBufferWindow: 0.2
   attackStateTimeout: 1
+  skipInitialSpawnScenes:
+  - InGame
   inputModule: {fileID: 8598645012782326681}
   locomotionModule: {fileID: 7163163093271237374}
   animModule: {fileID: 6032066017176849164}
   combatModule: {fileID: 5562244057572314665}
   interactModule: {fileID: 2709897059885907672}
+  statusModule: {fileID: 7247400059496916096}
 --- !u!114 &7740102240635983405
 MonoBehaviour:
   m_ObjectHideFlags: 0

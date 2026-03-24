@@ -1,113 +1,157 @@
 using System.Collections;
 using System.Collections.Generic;
 using Unity.Netcode;
+using Unity.Netcode.Components;
 using UnityEngine;
-using UnityEngine.SceneManagement;
 
 public class InGameMatchManager : NetworkBehaviour
 {
     [Header("플레이어 스폰")]
-    [SerializeField, Tooltip("인게임에서 스폰에 사용할 플레이어 프리팹(NetworkObject 포함). 비어있으면 NetworkManager의 PlayerPrefab을 사용합니다.")]
+    [SerializeField, Tooltip("플레이어 프리팹(NetworkObject 포함). 비어 있으면 NetworkManager의 PlayerPrefab을 사용합니다.")]
     private NetworkObject playerPrefab;
 
-    [SerializeField, Tooltip("인게임 스폰포인트 태그")]
+    [Header("로비 스폰 설정")]
+    [SerializeField, Tooltip("로비 스폰포인트 태그")]
+    private string lobbySpawnTag = "LobbySpawnPoint";
+
+    [SerializeField, Tooltip("로비 스폰포인트 이름 접두어")]
+    private string lobbySpawnNamePrefix = "LobbySpawnPoint_";
+
+    [Header("게임 스폰 설정")]
+    [SerializeField, Tooltip("게임 스폰포인트 태그")]
     private string gameSpawnTag = "GameSpawnPoint";
 
-    [SerializeField, Tooltip("씬 로드 직후 스폰/텔레포트 지연(초). 네트워크/로딩이 느리면 올리세요.")]
-    private float spawnAndTeleportDelay = 0.1f;
+    [SerializeField, Tooltip("게임 스폰포인트 이름 접두어")]
+    private string gameSpawnNamePrefix = "GameSpawnPoint_";
 
-    private bool _didEnsureThisScene;
+    [SerializeField, Tooltip("텔레포트 전 대기 시간(초)")]
+    private float teleportDelay = 0.1f;
+
+    private Coroutine _teleportRoutine;
 
     public override void OnNetworkSpawn()
     {
-        if (NetworkManager.Singleton == null) return;
+        base.OnNetworkSpawn();
 
-        if (NetworkManager.Singleton.SceneManager != null)
-            NetworkManager.Singleton.SceneManager.OnLoadEventCompleted += OnLoadEventCompleted;
+        if (!IsServer) return;
 
-        // 호스트에서 이미 인게임 씬으로 들어온 상태에서 스폰되는 케이스 안전 처리
-        if (IsServer)
-            TryEnsureNow();
+        // InGame 씬에 들어오면 우선 로비 존으로 배치
+        TeleportPlayersToLobbyServer();
     }
 
-    public override void OnDestroy()
+    public override void OnNetworkDespawn()
     {
-        if (NetworkManager.Singleton != null && NetworkManager.Singleton.SceneManager != null)
+        if (_teleportRoutine != null)
         {
-            NetworkManager.Singleton.SceneManager.OnLoadEventCompleted -= OnLoadEventCompleted;
+            StopCoroutine(_teleportRoutine);
+            _teleportRoutine = null;
         }
 
-        base.OnDestroy();
+        base.OnNetworkDespawn();
     }
 
-    private void OnLoadEventCompleted(string sceneName, LoadSceneMode loadMode, List<ulong> clientsCompleted, List<ulong> clientsTimedOut)
+    public void TeleportPlayersToLobbyServer()
+    {
+        if (!IsServer) return;
+        StartTeleportRoutine(lobbySpawnTag, lobbySpawnNamePrefix, true);
+    }
+
+    public void TeleportPlayersToGameServer()
+    {
+        if (!IsServer) return;
+        StartTeleportRoutine(gameSpawnTag, gameSpawnNamePrefix, true);
+    }
+
+    private void StartTeleportRoutine(string tagName, string namePrefix, bool spawnIfMissing)
     {
         if (!IsServer) return;
 
-        // 이 오브젝트가 인게임 씬에만 있다면 사실상 항상 true지만, 안전하게 한 번 더 체크
-        if (SceneManager.GetActiveScene().name != sceneName) return;
+        if (_teleportRoutine != null)
+            StopCoroutine(_teleportRoutine);
 
-        TryEnsureNow();
+        _teleportRoutine = StartCoroutine(TeleportPlayersRoutine(tagName, namePrefix, spawnIfMissing));
     }
 
-    private void TryEnsureNow()
+    private IEnumerator TeleportPlayersRoutine(string tagName, string namePrefix, bool spawnIfMissing)
     {
-        if (!IsServer) return;
-        if (_didEnsureThisScene) return;
+        yield return null;
+        yield return null;
 
-        _didEnsureThisScene = true;
-        StartCoroutine(ServerEnsurePlayersAndTeleportRoutine());
-    }
-
-    private IEnumerator ServerEnsurePlayersAndTeleportRoutine()
-    {
-        if (spawnAndTeleportDelay > 0f)
-            yield return new WaitForSeconds(spawnAndTeleportDelay);
+        if (teleportDelay > 0f)
+            yield return new WaitForSeconds(teleportDelay);
 
         var nm = NetworkManager.Singleton;
         if (nm == null)
         {
             Debug.LogWarning("[InGameMatchManager] NetworkManager.Singleton is null.");
+            _teleportRoutine = null;
             yield break;
         }
 
-        // 스폰포인트 수집
-        var spawnPoints = FindSpawnPointsByTag(gameSpawnTag);
+        var spawnPoints = FindSpawnPointsByTag(tagName);
+        spawnPoints.Sort((a, b) => string.Compare(a.name, b.name, System.StringComparison.Ordinal));
+
         if (spawnPoints.Count == 0)
         {
-            Debug.LogWarning($"[InGameMatchManager] SpawnPoint tag not found or empty: {gameSpawnTag}");
+            Debug.LogWarning($"[InGameMatchManager] SpawnPoint tag not found or empty: {tagName}");
+            _teleportRoutine = null;
+            yield break;
         }
 
-        int index = 0;
+        var clientIds = new List<ulong>(nm.ConnectedClientsIds);
+        clientIds.Sort();
 
-        foreach (var clientId in nm.ConnectedClientsIds)
+        for (int i = 0; i < clientIds.Count; i++)
         {
+            ulong clientId = clientIds[i];
             var client = nm.ConnectedClients[clientId];
             NetworkObject playerObj = client.PlayerObject;
 
-            // 1) 플레이어가 없으면 스폰
-            if (playerObj == null || !playerObj.IsSpawned)
+            if ((playerObj == null || !playerObj.IsSpawned) && spawnIfMissing)
             {
                 var prefabToUse = ResolvePlayerPrefab(nm);
                 if (prefabToUse == null)
                 {
                     Debug.LogError("[InGameMatchManager] playerPrefab이 비어 있습니다. 인스펙터에 플레이어 프리팹(NetworkObject)을 넣어주세요.");
+                    _teleportRoutine = null;
                     yield break;
                 }
 
                 var instance = Instantiate(prefabToUse.gameObject);
                 playerObj = instance.GetComponent<NetworkObject>();
                 playerObj.SpawnAsPlayerObject(clientId, true);
+
+                yield return null;
             }
 
-            // 2) 스폰포인트 텔레포트
-            if (spawnPoints.Count > 0 && playerObj != null)
-            {
-                var sp = spawnPoints[index % spawnPoints.Count];
-                TeleportPlayerSafely(playerObj, sp.position, sp.rotation);
-                index++;
-            }
+            if (playerObj == null || !playerObj.IsSpawned)
+                continue;
+
+            var targetSpawn = ResolveSpawnPointForClient(spawnPoints, clientId, i, namePrefix);
+            if (targetSpawn == null)
+                continue;
+
+            TeleportPlayerSafely(playerObj, targetSpawn.position, targetSpawn.rotation);
+            Debug.Log($"[InGameMatchManager] Teleport client:{clientId} -> {targetSpawn.name} pos:{targetSpawn.position}");
         }
+
+        _teleportRoutine = null;
+    }
+
+    private Transform ResolveSpawnPointForClient(List<Transform> spawnPoints, ulong clientId, int fallbackIndex, string namePrefix)
+    {
+        string exactName = $"{namePrefix}{clientId}";
+
+        for (int i = 0; i < spawnPoints.Count; i++)
+        {
+            if (spawnPoints[i] != null && spawnPoints[i].name == exactName)
+                return spawnPoints[i];
+        }
+
+        if (spawnPoints.Count == 0)
+            return null;
+
+        return spawnPoints[fallbackIndex % spawnPoints.Count];
     }
 
     private NetworkObject ResolvePlayerPrefab(NetworkManager nm)
@@ -146,13 +190,18 @@ public class InGameMatchManager : NetworkBehaviour
 
     private void TeleportPlayerSafely(NetworkObject player, Vector3 pos, Quaternion rot)
     {
-        var go = player.gameObject;
+        if (player == null) return;
 
-        // CharacterController가 있으면 순간 이동 시 충돌 문제 방지
+        var go = player.gameObject;
         var cc = go.GetComponent<CharacterController>();
+        var nt = go.GetComponent<NetworkTransform>();
+
         if (cc != null) cc.enabled = false;
 
-        go.transform.SetPositionAndRotation(pos, rot);
+        if (nt != null)
+            nt.Teleport(pos, rot, go.transform.localScale);
+        else
+            go.transform.SetPositionAndRotation(pos, rot);
 
         if (cc != null) cc.enabled = true;
     }
