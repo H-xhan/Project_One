@@ -153,9 +153,15 @@ public class PlayerStatusModule : NetworkBehaviour
 
         if (rootRigidbody != null)
         {
-            rootRigidbody.linearVelocity = Vector3.zero;
-            rootRigidbody.angularVelocity = Vector3.zero;
+            // Dynamic 상태일 때만 속도를 0으로 정리
+            if (!rootRigidbody.isKinematic)
+            {
+                rootRigidbody.linearVelocity = Vector3.zero;
+                rootRigidbody.angularVelocity = Vector3.zero;
+            }
+
             rootRigidbody.isKinematic = true;
+            rootRigidbody.Sleep();
         }
 
         if (charController != null && charController.enabled)
