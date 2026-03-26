@@ -45,6 +45,38 @@ public class LobbyUI : MonoBehaviour
     {
         Debug.Log("[LobbyUI] Awake");
         ValidateRefs();
+
+        if (createLobbyButton != null)
+        {
+            createLobbyButton.onClick.RemoveListener(OnClickCreateLobby);
+            createLobbyButton.onClick.AddListener(OnClickCreateLobby);
+        }
+
+        if (joinCodeButton != null)
+        {
+            joinCodeButton.onClick.RemoveListener(OnClickJoinByCode);
+            joinCodeButton.onClick.AddListener(OnClickJoinByCode);
+        }
+
+        if (refreshButton != null)
+        {
+            refreshButton.onClick.RemoveListener(OnClickRefresh);
+            refreshButton.onClick.AddListener(OnClickRefresh);
+        }
+
+        Debug.Log("[LobbyUI] 버튼 이벤트 연결 완료");
+    }
+
+    private void OnDestroy()
+    {
+        if (createLobbyButton != null)
+            createLobbyButton.onClick.RemoveListener(OnClickCreateLobby);
+
+        if (joinCodeButton != null)
+            joinCodeButton.onClick.RemoveListener(OnClickJoinByCode);
+
+        if (refreshButton != null)
+            refreshButton.onClick.RemoveListener(OnClickRefresh);
     }
 
     private void Start()
