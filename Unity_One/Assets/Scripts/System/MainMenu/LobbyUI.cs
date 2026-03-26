@@ -43,61 +43,15 @@ public class LobbyUI : MonoBehaviour
 
     private void Awake()
     {
-        if (createLobbyButton != null)
-        {
-            createLobbyButton.onClick.AddListener(() =>
-            {
-                if (!IsServicesReady())
-                {
-                    Debug.LogWarning("[LobbyUI] 서비스 초기화 중입니다. 잠시 후 다시 시도해주세요.");
-                    return;
-                }
-
-                string lobbyName = createInput != null ? createInput.text : string.Empty;
-                if (string.IsNullOrEmpty(lobbyName)) lobbyName = "New Room";
-
-                if (LobbyManager.Instance != null)
-                    LobbyManager.Instance.CreateLobby(lobbyName, 4);
-            });
-        }
-
-        if (joinCodeButton != null)
-        {
-            joinCodeButton.onClick.AddListener(() =>
-            {
-                if (!IsServicesReady())
-                {
-                    Debug.LogWarning("[LobbyUI] 서비스 초기화 중입니다. 잠시 후 다시 시도해주세요.");
-                    return;
-                }
-
-                string code = codeInput != null ? codeInput.text : string.Empty;
-                if (string.IsNullOrEmpty(code)) return;
-
-                if (LobbyManager.Instance != null)
-                    LobbyManager.Instance.JoinLobbyByCode(code);
-            });
-        }
-
-        if (refreshButton != null)
-        {
-            refreshButton.onClick.AddListener(() =>
-            {
-                if (!IsServicesReady())
-                {
-                    Debug.LogWarning("[LobbyUI] 서비스 초기화 중입니다. 잠시 후 다시 시도해주세요.");
-                    return;
-                }
-
-                RefreshLobbyList();
-            });
-        }
+        Debug.Log("[LobbyUI] Awake");
+        ValidateRefs();
     }
 
     private void Start()
     {
-        SetupTemplateHeader();
+        Debug.Log("[LobbyUI] Start");
 
+        SetupTemplateHeader();
         SetInteractable(false);
 
         if (_autoRefreshRoutine != null)
@@ -106,18 +60,36 @@ public class LobbyUI : MonoBehaviour
         _autoRefreshRoutine = StartCoroutine(WaitForServicesThenEnableUI());
     }
 
+    private void ValidateRefs()
+    {
+        Debug.Log($"[LobbyUI] createLobbyButton={(createLobbyButton != null)}");
+        Debug.Log($"[LobbyUI] joinCodeButton={(joinCodeButton != null)}");
+        Debug.Log($"[LobbyUI] createInput={(createInput != null)}");
+        Debug.Log($"[LobbyUI] codeInput={(codeInput != null)}");
+        Debug.Log($"[LobbyUI] refreshButton={(refreshButton != null)}");
+    }
+
     private IEnumerator WaitForServicesThenEnableUI()
     {
+        Debug.Log("[LobbyUI] WaitForServicesThenEnableUI 시작");
+
         while (LobbyManager.Instance == null)
             yield return null;
+
+        Debug.Log("[LobbyUI] LobbyManager.Instance 확인 완료");
 
         while (UnityServices.State != ServicesInitializationState.Initialized)
             yield return null;
 
+        Debug.Log("[LobbyUI] UnityServices Initialized");
+
         while (!AuthenticationService.Instance.IsSignedIn)
             yield return null;
 
+        Debug.Log("[LobbyUI] Authentication SignedIn 완료");
+
         SetInteractable(true);
+        Debug.Log("[LobbyUI] 버튼 활성화 완료");
 
         if (autoRefreshOnStart)
             RefreshLobbyList();
@@ -137,9 +109,84 @@ public class LobbyUI : MonoBehaviour
         if (refreshButton != null) refreshButton.interactable = enabled;
     }
 
+    public void OnClickCreateLobby()
+    {
+        Debug.Log("[LobbyUI] Create 버튼 클릭");
+
+        if (!IsServicesReady())
+        {
+            Debug.LogWarning("[LobbyUI] 서비스 초기화 중입니다. 잠시 후 다시 시도해주세요.");
+            return;
+        }
+
+        string lobbyName = createInput != null ? createInput.text : string.Empty;
+        if (string.IsNullOrWhiteSpace(lobbyName))
+            lobbyName = "New Room";
+
+        Debug.Log($"[LobbyUI] CreateLobby 요청. Name={lobbyName}");
+
+        if (LobbyManager.Instance == null)
+        {
+            Debug.LogError("[LobbyUI] LobbyManager.Instance가 null입니다.");
+            return;
+        }
+
+        LobbyManager.Instance.CreateLobby(lobbyName, 4);
+    }
+
+    public void OnClickJoinByCode()
+    {
+        Debug.Log("[LobbyUI] Join 버튼 클릭");
+
+        if (!IsServicesReady())
+        {
+            Debug.LogWarning("[LobbyUI] 서비스 초기화 중입니다. 잠시 후 다시 시도해주세요.");
+            return;
+        }
+
+        if (codeInput == null)
+        {
+            Debug.LogError("[LobbyUI] codeInput이 null입니다.");
+            return;
+        }
+
+        string rawCode = codeInput.text;
+        string code = NormalizeLobbyCode(rawCode);
+
+        Debug.Log($"[LobbyUI] Join 입력값 Raw={rawCode}, Normalized={code}");
+
+        if (string.IsNullOrEmpty(code))
+        {
+            Debug.LogWarning("[LobbyUI] 참가 코드가 비어 있습니다.");
+            return;
+        }
+
+        if (LobbyManager.Instance == null)
+        {
+            Debug.LogError("[LobbyUI] LobbyManager.Instance가 null입니다.");
+            return;
+        }
+
+        LobbyManager.Instance.JoinLobbyByCode(code);
+    }
+
+    public void OnClickRefresh()
+    {
+        Debug.Log("[LobbyUI] Refresh 버튼 클릭");
+
+        if (!IsServicesReady())
+        {
+            Debug.LogWarning("[LobbyUI] 서비스 초기화 중입니다. 잠시 후 다시 시도해주세요.");
+            return;
+        }
+
+        RefreshLobbyList();
+    }
+
     private void SetupTemplateHeader()
     {
-        if (lobbySingleTemplate == null) return;
+        if (lobbySingleTemplate == null)
+            return;
 
         if (showTemplateAsHeader)
         {
@@ -170,11 +217,14 @@ public class LobbyUI : MonoBehaviour
 
         foreach (Transform child in container)
         {
-            if (child == lobbySingleTemplate) continue;
+            if (child == lobbySingleTemplate)
+                continue;
+
             Destroy(child.gameObject);
         }
 
-        if (lobbies == null) return;
+        if (lobbies == null)
+            return;
 
         foreach (Lobby lobby in lobbies)
         {
@@ -189,5 +239,12 @@ public class LobbyUI : MonoBehaviour
             if (singleUI != null)
                 singleUI.SetLobby(lobby);
         }
+    }
+
+    private string NormalizeLobbyCode(string code)
+    {
+        return string.IsNullOrWhiteSpace(code)
+            ? string.Empty
+            : code.Trim().ToUpper();
     }
 }
