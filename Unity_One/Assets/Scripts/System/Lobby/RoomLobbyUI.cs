@@ -7,6 +7,9 @@ public class RoomLobbyUI : MonoBehaviour
     [SerializeField, Tooltip("룸 로비의 플레이어/레디 카운트를 표시할 텍스트")]
     private TextMeshProUGUI playerCountText;
 
+    [SerializeField, Tooltip("룸 코드를 표시할 텍스트")]
+    private TextMeshProUGUI roomCodeText;
+
     [SerializeField, Tooltip("레디 시스템 참조(룸 로비 오브젝트의 ReadySystem)")]
     private ReadySystem readySystem;
 
@@ -16,9 +19,24 @@ public class RoomLobbyUI : MonoBehaviour
     private void OnEnable()
     {
         ApplyLobbyCursor();
+        UpdateRoomCodeText();
     }
 
     private void Update()
+    {
+        UpdateReadyText();
+        UpdateRoomCodeText();
+    }
+
+    private void LateUpdate()
+    {
+        if (!enforceLobbyCursor)
+            return;
+
+        ApplyLobbyCursor();
+    }
+
+    private void UpdateReadyText()
     {
         if (playerCountText == null || readySystem == null)
             return;
@@ -32,12 +50,18 @@ public class RoomLobbyUI : MonoBehaviour
         playerCountText.text = $"{readyPlayers}/{totalPlayers} READY";
     }
 
-    private void LateUpdate()
+    private void UpdateRoomCodeText()
     {
-        if (!enforceLobbyCursor)
+        if (roomCodeText == null)
             return;
 
-        ApplyLobbyCursor();
+        string code = RelayManager.Instance != null
+            ? RelayManager.Instance.CurrentJoinCode
+            : string.Empty;
+
+        roomCodeText.text = string.IsNullOrEmpty(code)
+            ? "ROOM CODE : ----"
+            : $"ROOM CODE : {code}";
     }
 
     private void ApplyLobbyCursor()

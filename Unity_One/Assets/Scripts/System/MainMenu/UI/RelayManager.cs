@@ -13,6 +13,8 @@ public class RelayManager : MonoBehaviour
 {
     public static RelayManager Instance { get; private set; }
 
+    public string CurrentJoinCode { get; private set; } = string.Empty;
+
     [Header("Relay 설정")]
     [SerializeField, Tooltip("Join 후 실제 연결(OnClientConnected)까지 기다리는 최대 시간(초)")]
     private float joinConnectTimeoutSec = 8f;
@@ -67,10 +69,21 @@ public class RelayManager : MonoBehaviour
     private void OnTransportFailure()
     {
         Debug.LogError("[Relay] OnTransportFailure: transport failed. NetworkManager will shutdown.");
+        SetCurrentJoinCode(string.Empty);
+
         if (NetworkManager.Singleton != null && NetworkManager.Singleton.IsListening)
         {
             NetworkManager.Singleton.Shutdown();
         }
+    }
+
+    private void SetCurrentJoinCode(string code)
+    {
+        CurrentJoinCode = string.IsNullOrWhiteSpace(code)
+            ? string.Empty
+            : code.Trim().ToUpper();
+
+        Debug.Log($"[Relay] CurrentJoinCode={CurrentJoinCode}");
     }
 
     private bool TryGetNet(out NetworkManager nm, out UnityTransport utp)
@@ -131,7 +144,6 @@ public class RelayManager : MonoBehaviour
             Allocation alloc = await RelayService.Instance.CreateAllocationAsync(mc);
             string joinCode = await RelayService.Instance.GetJoinCodeAsync(alloc.AllocationId);
 
-            // UDP 고정 (DTLS 사용 안 함)
             utp.SetRelayServerData(
                 alloc.RelayServer.IpV4,
                 (ushort)alloc.RelayServer.Port,
@@ -147,16 +159,23 @@ public class RelayManager : MonoBehaviour
             bool ok = nm.StartHost();
             Debug.Log($"[Relay] StartHost={ok}");
 
-            return ok ? joinCode : string.Empty;
+            if (!ok)
+            {
+                SetCurrentJoinCode(string.Empty);
+                return string.Empty;
+            }
+
+            SetCurrentJoinCode(joinCode);
+            return joinCode;
         }
         catch (Exception e)
         {
             Debug.LogError($"[Relay] CreateRelay failed: {e}");
+            SetCurrentJoinCode(string.Empty);
             return string.Empty;
         }
     }
 
-    // 기존 코드 호환용(유지)
     public async Task<bool> JoinRelayAsync(string joinCode)
     {
         return await JoinRelay(joinCode);
@@ -186,7 +205,6 @@ public class RelayManager : MonoBehaviour
 
             JoinAllocation joinAlloc = await RelayService.Instance.JoinAllocationAsync(code);
 
-            // UDP 고정 (DTLS 사용 안 함)
             utp.SetRelayServerData(
                 joinAlloc.RelayServer.IpV4,
                 (ushort)joinAlloc.RelayServer.Port,
@@ -203,24 +221,34 @@ public class RelayManager : MonoBehaviour
 
             bool startOk = nm.StartClient();
             Debug.Log($"[Relay] StartClient={startOk}");
-            if (!startOk) return false;
+            if (!startOk)
+            {
+                SetCurrentJoinCode(string.Empty);
+                return false;
+            }
 
             using (var cts = new CancellationTokenSource(TimeSpan.FromSeconds(joinConnectTimeoutSec)))
             {
                 cts.Token.Register(() => _clientConnectedTcs.TrySetResult(false));
                 bool connected = await _clientConnectedTcs.Task;
                 Debug.Log($"[Relay] Client Connected Result={connected}");
+
+                if (connected)
+                    SetCurrentJoinCode(code);
+                else
+                    SetCurrentJoinCode(string.Empty);
+
                 return connected;
             }
         }
         catch (Exception e)
         {
             Debug.LogError($"[Relay] JoinRelay failed: {e}");
+            SetCurrentJoinCode(string.Empty);
             return false;
         }
     }
 
-    // 공통 루트: 코드로 참가(목록 참가도 결국 여기로 들어오게 통일)
     public async Task<bool> JoinViaCode(string joinCode)
     {
         return await JoinRelay(joinCode);

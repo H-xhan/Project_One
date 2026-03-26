@@ -18,6 +18,8 @@ public class LobbyManager : MonoBehaviour
 
     private Lobby _hostLobby;
     private float _heartbeatTimer;
+    private bool _isLobbyOwner;
+    private bool _servicesReady;
 
     private void Awake()
     {
@@ -34,17 +36,39 @@ public class LobbyManager : MonoBehaviour
 
     private async void Start()
     {
-        await UnityServices.InitializeAsync();
+        await EnsureServicesInitialized();
+    }
 
-        AuthenticationService.Instance.SignedIn += () =>
+    private async Task EnsureServicesInitialized()
+    {
+        if (_servicesReady)
+            return;
+
+        if (UnityServices.State != ServicesInitializationState.Initialized)
         {
-            Debug.Log("로그인 성공! ID: " + AuthenticationService.Instance.PlayerId);
-        };
+#if UNITY_EDITOR
+            string profileName = "Editor";
+#else
+            string profileName = "Build";
+#endif
+            InitializationOptions options = new InitializationOptions();
+            options.SetProfile(profileName);
+
+            await UnityServices.InitializeAsync(options);
+            Debug.Log($"[Lobby] UGS Initialized. Profile={profileName}");
+        }
 
         if (!AuthenticationService.Instance.IsSignedIn)
         {
             await AuthenticationService.Instance.SignInAnonymouslyAsync();
+            Debug.Log($"[Lobby] Signed In. PlayerID={AuthenticationService.Instance.PlayerId}");
         }
+        else
+        {
+            Debug.Log($"[Lobby] Already Signed In. PlayerID={AuthenticationService.Instance.PlayerId}");
+        }
+
+        _servicesReady = true;
     }
 
     private void Update()
@@ -52,14 +76,18 @@ public class LobbyManager : MonoBehaviour
         HandleLobbyHeartbeat();
     }
 
-    // 방 만들기 (Host)
     public async void CreateLobby(string lobbyName, int maxPlayers)
     {
         try
         {
-            // Relay 코드 먼저 만들기 (StartHost까지 여기서 처리됨)
+            await EnsureServicesInitialized();
+
             string joinCode = await RelayManager.Instance.CreateRelay(maxPlayers);
-            if (string.IsNullOrEmpty(joinCode)) return;
+            if (string.IsNullOrEmpty(joinCode))
+            {
+                Debug.LogError("[Lobby] Relay 생성 실패");
+                return;
+            }
 
             CreateLobbyOptions options = new CreateLobbyOptions
             {
@@ -78,16 +106,17 @@ public class LobbyManager : MonoBehaviour
             };
 
             Lobby lobby = await LobbyService.Instance.CreateLobbyAsync(lobbyName, maxPlayers, options);
+
             _hostLobby = lobby;
+            _isLobbyOwner = true;
 
-            Debug.Log($"방 생성 완료! LobbyCode: {lobby.LobbyCode}, RelayJoinCode: {joinCode}");
+            Debug.Log($"[Lobby] 방 생성 완료! LobbyCode: {lobby.LobbyCode}, RelayJoinCode: {joinCode}");
 
-            // Host 생성 성공 -> RoomLobby로 즉시 이동
             TryLoadRoomLobbyForHost();
         }
         catch (LobbyServiceException e)
         {
-            Debug.LogError("방 생성 실패: " + e);
+            Debug.LogError("[Lobby] 방 생성 실패: " + e);
         }
     }
 
@@ -116,12 +145,11 @@ public class LobbyManager : MonoBehaviour
         }
         else
         {
-            Debug.LogWarning("[Lobby] Netcode SceneManager가 없어 일반 SceneManager로 로드합니다. (씬 동기화 안 될 수 있음)");
+            Debug.LogWarning("[Lobby] Netcode SceneManager가 없어 일반 SceneManager로 로드합니다.");
             SceneManager.LoadScene(roomLobbySceneName);
         }
     }
 
-    // 방 목록 가져오기
     public async Task<List<Lobby>> GetLobbies()
     {
         try
@@ -144,16 +172,17 @@ public class LobbyManager : MonoBehaviour
         }
         catch (LobbyServiceException e)
         {
-            Debug.LogError("방 목록 로드 실패: " + e);
+            Debug.LogError("[Lobby] 방 목록 로드 실패: " + e);
             return null;
         }
     }
 
-    // 목록에서 선택한 LobbyId로 입장
     public async void JoinLobbyById(string lobbyId)
     {
         try
         {
+            await EnsureServicesInitialized();
+
             JoinLobbyByIdOptions options = new JoinLobbyByIdOptions
             {
                 Player = new Player
@@ -166,21 +195,35 @@ public class LobbyManager : MonoBehaviour
             };
 
             Lobby lobby = await LobbyService.Instance.JoinLobbyByIdAsync(lobbyId, options);
+
             _hostLobby = lobby;
+            _isLobbyOwner = false;
+
+            Debug.Log($"[Lobby] JoinLobbyById 성공. LobbyCode={lobby.LobbyCode}");
 
             await JoinViaLobbyData(lobby);
         }
         catch (LobbyServiceException e)
         {
-            Debug.LogError("방 입장 실패: " + e);
+            Debug.LogError("[Lobby] 방 입장 실패: " + e);
         }
     }
 
-    // 코드(LobbyCode)로 로비 입장
     public async void JoinLobbyByCode(string lobbyCode)
     {
         try
         {
+            await EnsureServicesInitialized();
+
+            string normalizedCode = NormalizeLobbyCode(lobbyCode);
+            Debug.Log($"[Lobby] JoinLobbyByCode 시도. Raw={lobbyCode}, Normalized={normalizedCode}");
+
+            if (string.IsNullOrEmpty(normalizedCode))
+            {
+                Debug.LogWarning("[Lobby] LobbyCode 입력값이 비어 있습니다.");
+                return;
+            }
+
             JoinLobbyByCodeOptions options = new JoinLobbyByCodeOptions
             {
                 Player = new Player
@@ -192,14 +235,18 @@ public class LobbyManager : MonoBehaviour
                 }
             };
 
-            Lobby lobby = await LobbyService.Instance.JoinLobbyByCodeAsync(lobbyCode, options);
+            Lobby lobby = await LobbyService.Instance.JoinLobbyByCodeAsync(normalizedCode, options);
+
             _hostLobby = lobby;
+            _isLobbyOwner = false;
+
+            Debug.Log($"[Lobby] JoinLobbyByCode 성공. LobbyCode={lobby.LobbyCode}");
 
             await JoinViaLobbyData(lobby);
         }
         catch (LobbyServiceException e)
         {
-            Debug.LogError("코드 입장 실패: " + e);
+            Debug.LogError("[Lobby] 코드 입장 실패: " + e);
         }
     }
 
@@ -207,37 +254,61 @@ public class LobbyManager : MonoBehaviour
     {
         if (lobby == null)
         {
-            Debug.LogError("로비 정보가 없습니다!");
+            Debug.LogError("[Lobby] 로비 정보가 없습니다.");
             return;
         }
 
         if (!lobby.Data.TryGetValue("JoinCode", out DataObject joinCodeData))
         {
-            Debug.LogError("이 방에는 JoinCode가 없습니다!");
+            Debug.LogError("[Lobby] 이 방에는 Relay JoinCode가 없습니다.");
             return;
         }
 
-        string joinCode = joinCodeData.Value;
+        string joinCode = NormalizeRelayCode(joinCodeData.Value);
         if (string.IsNullOrEmpty(joinCode))
         {
-            Debug.LogError("JoinCode 값이 비어있습니다!");
+            Debug.LogError("[Lobby] Relay JoinCode 값이 비어 있습니다.");
             return;
         }
 
         Debug.Log($"[Lobby] Relay JoinCode={joinCode}");
-        await RelayManager.Instance.JoinViaCode(joinCode);
+
+        bool relayJoined = await RelayManager.Instance.JoinViaCode(joinCode);
+        Debug.Log($"[Lobby] Relay Join Result={relayJoined}");
+
+        if (!relayJoined)
+        {
+            Debug.LogError("[Lobby] Lobby 참가에는 성공했지만 Relay 접속에 실패했습니다.");
+            return;
+        }
+
+        Debug.Log($"[Lobby] 최종 참가 성공. CurrentScene={SceneManager.GetActiveScene().name}");
+    }
+
+    private string NormalizeLobbyCode(string code)
+    {
+        return string.IsNullOrWhiteSpace(code)
+            ? string.Empty
+            : code.Trim().ToUpper();
+    }
+
+    private string NormalizeRelayCode(string code)
+    {
+        return string.IsNullOrWhiteSpace(code)
+            ? string.Empty
+            : code.Trim().ToUpper();
     }
 
     private async void HandleLobbyHeartbeat()
     {
-        if (_hostLobby != null)
+        if (!_isLobbyOwner || _hostLobby == null)
+            return;
+
+        _heartbeatTimer -= Time.deltaTime;
+        if (_heartbeatTimer < 0f)
         {
-            _heartbeatTimer -= Time.deltaTime;
-            if (_heartbeatTimer < 0f)
-            {
-                _heartbeatTimer = 15f;
-                await LobbyService.Instance.SendHeartbeatPingAsync(_hostLobby.Id);
-            }
+            _heartbeatTimer = 15f;
+            await LobbyService.Instance.SendHeartbeatPingAsync(_hostLobby.Id);
         }
     }
 
