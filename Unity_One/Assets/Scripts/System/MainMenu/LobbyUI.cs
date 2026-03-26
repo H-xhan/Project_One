@@ -92,6 +92,14 @@ public class LobbyUI : MonoBehaviour
         _autoRefreshRoutine = StartCoroutine(WaitForServicesThenEnableUI());
     }
 
+    private void Update()
+    {
+        if (Input.GetKeyDown(KeyCode.F8))
+        {
+            Debug.Log("[LobbyUI] F8 강제 Join 호출");
+            OnClickJoinByCode();
+        }
+    }
     private void ValidateRefs()
     {
         Debug.Log($"[LobbyUI] createLobbyButton={(createLobbyButton != null)}");
