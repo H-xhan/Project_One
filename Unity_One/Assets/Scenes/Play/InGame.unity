@@ -241,8 +241,8 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 3f44f0b9cec03c843bea3598910a07a1, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  readySystem: {fileID: 1478549241}
-  gameStateManager: {fileID: 1478549242}
+  readySystem: {fileID: 0}
+  gameStateManager: {fileID: 0}
   readyText: {fileID: 372378546}
   readyButton: {fileID: 2110143003}
   roomCodeText: {fileID: 857130336}
@@ -270,7 +270,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 70ea7077c1a4a694882f1824db80b3b9, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  gameStateManager: {fileID: 1478549242}
+  gameStateManager: {fileID: 0}
   targetCanvasGroup: {fileID: 39293974}
   showInCountdown: 1
 --- !u!1 &56218765
@@ -5883,15 +5883,13 @@ GameObject:
   m_Component:
   - component: {fileID: 1478549239}
   - component: {fileID: 1478549240}
-  - component: {fileID: 1478549241}
-  - component: {fileID: 1478549242}
   m_Layer: 0
   m_Name: InGameSystems
   m_TagString: Untagged
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
   m_StaticEditorFlags: 0
-  m_IsActive: 1
+  m_IsActive: 0
 --- !u!4 &1478549239
 Transform:
   m_ObjectHideFlags: 0
@@ -5932,45 +5930,6 @@ MonoBehaviour:
   AutoObjectParentSync: 1
   SyncOwnerTransformWhenParented: 1
   AllowOwnerToParent: 0
---- !u!114 &1478549241
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 1478549238}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 18baecb3f3fd5134f94ef7d41bd17c89, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: 
-  ShowTopMostFoldoutHeaderGroup: 1
-  minPlayersToStart: 1
---- !u!114 &1478549242
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 1478549238}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: a20eb59973fb0744186fcbe55e1fa421, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: 
-  ShowTopMostFoldoutHeaderGroup: 1
-  readySystem: {fileID: 1478549241}
-  inGameMatchManager: {fileID: 1995524424}
-  countdownSeconds: 3
-  playSeconds: 120
-  resultsSeconds: 6
-  autoReturnToLobby: 1
-  teleportPlayersOnEnterLobby: 1
-  teleportPlayersOnEnterPlaying: 1
-  StateValue:
-    m_InternalValue: 0
-  StateTimer:
-    m_InternalValue: 0
 --- !u!1001 &1478944396
 PrefabInstance:
   m_ObjectHideFlags: 0
@@ -7643,6 +7602,7 @@ GameObject:
   - component: {fileID: 1995524425}
   - component: {fileID: 1995524423}
   - component: {fileID: 1995524424}
+  - component: {fileID: 1995524426}
   m_Layer: 0
   m_Name: InGameMatchManager
   m_TagString: Untagged
@@ -7709,6 +7669,20 @@ Transform:
   m_Children: []
   m_Father: {fileID: 0}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!114 &1995524426
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1995524422}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: d9847cc48e675064e8854804e85d887f, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  ShowTopMostFoldoutHeaderGroup: 1
+  minPlayersToStart: 2
 --- !u!1001 &2027238305
 PrefabInstance:
   m_ObjectHideFlags: 0
