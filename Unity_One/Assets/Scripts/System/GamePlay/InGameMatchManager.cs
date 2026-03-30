@@ -32,10 +32,10 @@ public class InGameMatchManager : NetworkBehaviour
     private float playerResolveTimeout = 2.0f;
 
     [SerializeField, Tooltip("스폰 시 위로 띄울 기본 오프셋")]
-    private float baseSpawnYOffset = 0.3f;
+    private float baseSpawnYOffset = 0.5f;
 
     [SerializeField, Tooltip("late join 클라이언트 전용 텔레포트 지연(초)")]
-    private float lateJoinTeleportDelay = 0.05f;
+    private float lateJoinTeleportDelay = 0.00f;
 
     private Coroutine _teleportRoutine;
 

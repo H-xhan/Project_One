@@ -47,11 +47,9 @@ public class PlayerLocomotionModule : MonoBehaviour
 
         if (grounded)
         {
-            // 멀티 텔레포트/보정 후 양수 수직속도가 남아 있으면 자동 점프처럼 튈 수 있으니 끊어줌
             if (_verticalVelocity > 0f)
                 _verticalVelocity = 0f;
 
-            // 지면 위에서는 항상 바닥 밀착 상태 유지
             if (_verticalVelocity <= 0f)
                 _verticalVelocity = stickToGroundForce;
 
