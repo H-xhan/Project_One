@@ -7693,11 +7693,10 @@ MonoBehaviour:
   playerPrefab: {fileID: 0}
   lobbySpawnTag: LobbySpawnPoint
   lobbySpawnNamePrefix: LobbySpawnPoint_
-  lobbyYawOffset: 0
   gameSpawnTag: GameSpawnPoint
   gameSpawnNamePrefix: GameSpawnPoint_
-  gameYawOffset: 0
-  teleportDelay: 0.1
+  teleportDelay: 0.3
+  playerResolveTimeout: 2
 --- !u!4 &1995524425
 Transform:
   m_ObjectHideFlags: 0
@@ -7726,7 +7725,7 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: 
   ShowTopMostFoldoutHeaderGroup: 1
-  minPlayersToStart: 1
+  minPlayersToStart: 2
 --- !u!1001 &2027238305
 PrefabInstance:
   m_ObjectHideFlags: 0
