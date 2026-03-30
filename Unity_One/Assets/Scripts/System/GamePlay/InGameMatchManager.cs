@@ -34,6 +34,9 @@ public class InGameMatchManager : NetworkBehaviour
     [SerializeField, Tooltip("스폰 시 위로 띄울 기본 오프셋")]
     private float baseSpawnYOffset = 0.3f;
 
+    [SerializeField, Tooltip("late join 클라이언트 전용 텔레포트 지연(초)")]
+    private float lateJoinTeleportDelay = 0.05f;
+
     private Coroutine _teleportRoutine;
 
     public override void OnNetworkSpawn()
@@ -163,9 +166,6 @@ public class InGameMatchManager : NetworkBehaviour
 
     private IEnumerator TeleportSingleClientRoutine(ulong clientId, string tagName, string namePrefix)
     {
-        if (teleportDelay > 0f)
-            yield return new WaitForSeconds(teleportDelay);
-
         var nm = NetworkManager.Singleton;
         if (nm == null) yield break;
 
@@ -192,6 +192,9 @@ public class InGameMatchManager : NetworkBehaviour
             Debug.LogWarning($"[InGameMatchManager] Late-join teleport skipped. PlayerObject not ready. client:{clientId}");
             yield break;
         }
+
+        if (lateJoinTeleportDelay > 0f)
+            yield return new WaitForSeconds(lateJoinTeleportDelay);
 
         var spawnPoints = FindSpawnPointsByTag(tagName);
         spawnPoints.Sort((a, b) => string.Compare(a.name, b.name, System.StringComparison.Ordinal));
