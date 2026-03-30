@@ -17,12 +17,18 @@ public class InGameMatchManager : NetworkBehaviour
     [SerializeField, Tooltip("로비 스폰포인트 이름 접두어")]
     private string lobbySpawnNamePrefix = "LobbySpawnPoint_";
 
+    [SerializeField, Tooltip("로비 배치 시 추가할 Y 회전 오프셋")]
+    private float lobbyYawOffset = 0f;
+
     [Header("게임 스폰 설정")]
     [SerializeField, Tooltip("게임 스폰포인트 태그")]
     private string gameSpawnTag = "GameSpawnPoint";
 
     [SerializeField, Tooltip("게임 스폰포인트 이름 접두어")]
     private string gameSpawnNamePrefix = "GameSpawnPoint_";
+
+    [SerializeField, Tooltip("게임 배치 시 추가할 Y 회전 오프셋")]
+    private float gameYawOffset = 0f;
 
     [SerializeField, Tooltip("텔레포트 전 대기 시간(초)")]
     private float teleportDelay = 0.1f;
@@ -53,26 +59,26 @@ public class InGameMatchManager : NetworkBehaviour
     public void TeleportPlayersToLobbyServer()
     {
         if (!IsServer) return;
-        StartTeleportRoutine(lobbySpawnTag, lobbySpawnNamePrefix, true);
+        StartTeleportRoutine(lobbySpawnTag, lobbySpawnNamePrefix, true, lobbyYawOffset);
     }
 
     public void TeleportPlayersToGameServer()
     {
         if (!IsServer) return;
-        StartTeleportRoutine(gameSpawnTag, gameSpawnNamePrefix, true);
+        StartTeleportRoutine(gameSpawnTag, gameSpawnNamePrefix, true, gameYawOffset);
     }
 
-    private void StartTeleportRoutine(string tagName, string namePrefix, bool spawnIfMissing)
+    private void StartTeleportRoutine(string tagName, string namePrefix, bool spawnIfMissing, float yawOffset)
     {
         if (!IsServer) return;
 
         if (_teleportRoutine != null)
             StopCoroutine(_teleportRoutine);
 
-        _teleportRoutine = StartCoroutine(TeleportPlayersRoutine(tagName, namePrefix, spawnIfMissing));
+        _teleportRoutine = StartCoroutine(TeleportPlayersRoutine(tagName, namePrefix, spawnIfMissing, yawOffset));
     }
 
-    private IEnumerator TeleportPlayersRoutine(string tagName, string namePrefix, bool spawnIfMissing)
+    private IEnumerator TeleportPlayersRoutine(string tagName, string namePrefix, bool spawnIfMissing, float yawOffset)
     {
         yield return null;
         yield return null;
@@ -131,7 +137,7 @@ public class InGameMatchManager : NetworkBehaviour
             if (targetSpawn == null)
                 continue;
 
-            TeleportPlayerSafely(playerObj, targetSpawn.position, targetSpawn.rotation);
+            TeleportPlayerSafely(playerObj, targetSpawn.position, targetSpawn.rotation, yawOffset);
             Debug.Log($"[InGameMatchManager] Teleport client:{clientId} -> {targetSpawn.name} pos:{targetSpawn.position}");
         }
 
@@ -188,21 +194,45 @@ public class InGameMatchManager : NetworkBehaviour
         return list;
     }
 
-    private void TeleportPlayerSafely(NetworkObject player, Vector3 pos, Quaternion rot)
+    private void TeleportPlayerSafely(NetworkObject player, Vector3 pos, Quaternion rot, float yawOffset)
     {
         if (player == null) return;
 
         var go = player.gameObject;
+        var tf = go.transform;
         var cc = go.GetComponent<CharacterController>();
         var nt = go.GetComponent<NetworkTransform>();
+        var rb = go.GetComponent<Rigidbody>();
 
-        if (cc != null) cc.enabled = false;
+        // 캐릭터는 항상 수직 상태를 유지하고, 스폰포인트 Yaw + 오프셋만 사용
+        Vector3 euler = rot.eulerAngles;
+        float finalYaw = Mathf.Repeat(euler.y + yawOffset, 360f);
+        Quaternion uprightRot = Quaternion.Euler(0f, finalYaw, 0f);
+
+        // 바닥 겹침 방지용 소폭 오프셋
+        Vector3 spawnPos = pos + Vector3.up * 0.05f;
+
+        if (cc != null && cc.enabled)
+            cc.enabled = false;
+
+        if (rb != null)
+        {
+            rb.linearVelocity = Vector3.zero;
+            rb.angularVelocity = Vector3.zero;
+        }
 
         if (nt != null)
-            nt.Teleport(pos, rot, go.transform.localScale);
+            nt.Teleport(spawnPos, uprightRot, tf.localScale);
         else
-            go.transform.SetPositionAndRotation(pos, rot);
+            tf.SetPositionAndRotation(spawnPos, uprightRot);
 
-        if (cc != null) cc.enabled = true;
+        if (rb != null)
+        {
+            rb.linearVelocity = Vector3.zero;
+            rb.angularVelocity = Vector3.zero;
+        }
+
+        if (cc != null)
+            cc.enabled = true;
     }
 }

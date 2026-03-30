@@ -45,6 +45,7 @@ public class PlayerHub : NetworkBehaviour
     [SerializeField] private PlayerCombatModule combatModule;
     [SerializeField] private PlayerInteractModule interactModule;
     [SerializeField] private PlayerStatusModule statusModule;
+    [SerializeField] private GameStateManager gameStateManager;
 
     public bool IsCursorLocked => inputModule != null && inputModule.IsCursorLocked;
 
@@ -147,6 +148,7 @@ public class PlayerHub : NetworkBehaviour
         if (combatModule == null) combatModule = GetComponentInChildren<PlayerCombatModule>(true);
         if (interactModule == null) interactModule = GetComponentInChildren<PlayerInteractModule>(true);
         if (statusModule == null) statusModule = GetComponentInChildren<PlayerStatusModule>(true);
+        if (gameStateManager == null) gameStateManager = FindFirstObjectByType<GameStateManager>();
     }
 
     private void ApplyOwnerVisuals()
@@ -171,6 +173,21 @@ public class PlayerHub : NetworkBehaviour
     {
         return statusModule == null || statusModule.CanInteract;
     }
+    private bool IsPlayingState()
+    {
+        if (gameStateManager == null)
+            gameStateManager = FindFirstObjectByType<GameStateManager>();
+
+        if (gameStateManager == null)
+            return false;
+
+        return gameStateManager.GetState() == GameStateManager.GameState.Playing;
+    }
+
+    private bool AllowLookInput()
+    {
+        return IsPlayingState();
+    }
 
     private void Update()
     {
@@ -193,6 +210,14 @@ public class PlayerHub : NetworkBehaviour
             out bool dropPressed
         );
 
+        bool allowLook = AllowLookInput();
+
+        if (!allowLook)
+        {
+            yawDelta = 0f;
+            pitchDelta = 0f;
+        }
+
         _moveInput = move;
         _yawDelta = yawDelta;
         _pitchDelta = pitchDelta;
@@ -200,7 +225,10 @@ public class PlayerHub : NetworkBehaviour
         if (jumpPressed) _jumpPressed = true;
         _sprintHeld = sprintHeld;
 
-        HandleCameraRotation(_pitchDelta);
+        if (allowLook)
+        {
+            HandleCameraRotation(_pitchDelta);
+        }
 
         if (!CanMoveNow())
         {
@@ -253,8 +281,10 @@ public class PlayerHub : NetworkBehaviour
         if (CharacterController == null || !CharacterController.enabled) return;
 
         bool jumped = false;
+        float serverYawDelta = AllowLookInput() ? _yawDelta : 0f;
+
         if (locomotionModule != null)
-            jumped = locomotionModule.TickServer(_moveInput, _yawDelta, _jumpPressed, _sprintHeld);
+            jumped = locomotionModule.TickServer(_moveInput, serverYawDelta, _jumpPressed, _sprintHeld);
 
         if (jumped && animModule != null) animModule.TriggerJump();
 

@@ -25,6 +25,15 @@ public class PlayerInputModule : MonoBehaviour
     [Tooltip("마우스 Y 감도")]
     [SerializeField] private float mouseSensitivityY = 2.0f;
 
+    [Tooltip("이 값보다 작은 마우스 델타는 0으로 처리")]
+    [SerializeField] private float mouseDeadzone = 0.5f;
+
+    [Tooltip("커서 잠금 직후 이 시간 동안 마우스 델타를 무시")]
+    [SerializeField] private float ignoreMouseDeltaAfterLock = 0.2f;
+
+    [Tooltip("프레임당 허용할 최대 마우스 델타")]
+    [SerializeField] private float maxMouseDeltaPerFrame = 80f;
+
     [Header("Keys")]
     [Tooltip("달리기 키")]
     [SerializeField] private Key sprintKey = Key.LeftShift;
@@ -44,15 +53,13 @@ public class PlayerInputModule : MonoBehaviour
     private NetworkObject _netObj;
     private bool _cursorLocked;
     private bool _cursorInitDone;
+    private float _ignoreMouseUntil;
 
     public bool IsCursorLocked => _cursorLocked;
 
     private void Awake()
     {
         _netObj = GetComponent<NetworkObject>();
-        // 멀티에서 "상대 플레이어"도 내 클라이언트에 스폰되므로
-        // Awake에서 커서 잠그는 행동은 절대 하면 안 됨.
-        // (오너 판별된 뒤에만 처리)
     }
 
     private void Update()
@@ -71,7 +78,6 @@ public class PlayerInputModule : MonoBehaviour
 
     private bool IsLocalOwner()
     {
-        // 네트워크가 아닌 단독 테스트(에디터) 상황은 오너 취급
         if (_netObj == null)
             return true;
 
@@ -109,6 +115,9 @@ public class PlayerInputModule : MonoBehaviour
         _cursorLocked = locked;
         Cursor.lockState = locked ? CursorLockMode.Locked : CursorLockMode.None;
         Cursor.visible = !locked;
+
+        // 커서 잠금/해제 직후 델타 튐 방지
+        _ignoreMouseUntil = Time.unscaledTime + Mathf.Max(0f, ignoreMouseDeltaAfterLock);
     }
 
     public void ReadInputs(
@@ -122,7 +131,6 @@ public class PlayerInputModule : MonoBehaviour
         out bool dropPressed
     )
     {
-        // 오너가 아니면 입력/커서 영향 절대 금지
         if (!IsLocalOwner())
         {
             move = Vector2.zero;
@@ -139,7 +147,6 @@ public class PlayerInputModule : MonoBehaviour
         var kb = Keyboard.current;
         var mouse = Mouse.current;
 
-        // 이동
         float x = 0f;
         float y = 0f;
 
@@ -154,20 +161,30 @@ public class PlayerInputModule : MonoBehaviour
         move = new Vector2(x, y);
         if (move.sqrMagnitude > 1f) move.Normalize();
 
-        // 마우스
-        if (_cursorLocked && mouse != null)
+        yawDelta = 0f;
+        pitchDelta = 0f;
+
+        bool canReadMouseLook =
+            _cursorLocked &&
+            mouse != null &&
+            Time.unscaledTime >= _ignoreMouseUntil;
+
+        if (canReadMouseLook)
         {
             Vector2 delta = mouse.delta.ReadValue();
+
+            // 작은 흔들림 제거
+            if (Mathf.Abs(delta.x) < mouseDeadzone) delta.x = 0f;
+            if (Mathf.Abs(delta.y) < mouseDeadzone) delta.y = 0f;
+
+            // 비정상적으로 큰 튐 방지
+            delta.x = Mathf.Clamp(delta.x, -maxMouseDeltaPerFrame, maxMouseDeltaPerFrame);
+            delta.y = Mathf.Clamp(delta.y, -maxMouseDeltaPerFrame, maxMouseDeltaPerFrame);
+
             yawDelta = delta.x * mouseSensitivityX;
             pitchDelta = delta.y * mouseSensitivityY;
         }
-        else
-        {
-            yawDelta = 0f;
-            pitchDelta = 0f;
-        }
 
-        // 액션
         jumpPressed = (kb != null) && kb[jumpKey].wasPressedThisFrame;
         sprintHeld = (kb != null) && kb[sprintKey].isPressed;
 

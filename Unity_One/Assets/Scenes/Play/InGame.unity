@@ -5883,13 +5883,15 @@ GameObject:
   m_Component:
   - component: {fileID: 1478549239}
   - component: {fileID: 1478549240}
+  - component: {fileID: 1478549242}
+  - component: {fileID: 1478549241}
   m_Layer: 0
   m_Name: InGameSystems
   m_TagString: Untagged
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
   m_StaticEditorFlags: 0
-  m_IsActive: 0
+  m_IsActive: 1
 --- !u!4 &1478549239
 Transform:
   m_ObjectHideFlags: 0
@@ -5930,6 +5932,46 @@ MonoBehaviour:
   AutoObjectParentSync: 1
   SyncOwnerTransformWhenParented: 1
   AllowOwnerToParent: 0
+--- !u!114 &1478549241
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1478549238}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 70ea7077c1a4a694882f1824db80b3b9, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  gameStateManager: {fileID: 1478549242}
+  targetCanvasGroup: {fileID: 39293974}
+  showInCountdown: 1
+--- !u!114 &1478549242
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1478549238}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: d15a6af3e38e2324f85bf787cc2887d8, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  ShowTopMostFoldoutHeaderGroup: 1
+  readySystem: {fileID: 1995524426}
+  inGameMatchManager: {fileID: 1995524424}
+  countdownSeconds: 3
+  playSeconds: 120
+  resultsSeconds: 6
+  autoReturnToLobby: 1
+  teleportPlayersOnEnterLobby: 1
+  teleportPlayersOnEnterPlaying: 1
+  StateValue:
+    m_InternalValue: 0
+  StateTimer:
+    m_InternalValue: 0
 --- !u!1001 &1478944396
 PrefabInstance:
   m_ObjectHideFlags: 0
@@ -7651,8 +7693,10 @@ MonoBehaviour:
   playerPrefab: {fileID: 0}
   lobbySpawnTag: LobbySpawnPoint
   lobbySpawnNamePrefix: LobbySpawnPoint_
+  lobbyYawOffset: 0
   gameSpawnTag: GameSpawnPoint
   gameSpawnNamePrefix: GameSpawnPoint_
+  gameYawOffset: 0
   teleportDelay: 0.1
 --- !u!4 &1995524425
 Transform:
@@ -7682,7 +7726,7 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: 
   ShowTopMostFoldoutHeaderGroup: 1
-  minPlayersToStart: 2
+  minPlayersToStart: 1
 --- !u!1001 &2027238305
 PrefabInstance:
   m_ObjectHideFlags: 0

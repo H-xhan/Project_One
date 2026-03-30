@@ -55,7 +55,7 @@ MonoBehaviour:
   weaponPoint: {fileID: 0}
   rightHandBone: {fileID: 3680798424019886322}
   rightHandGrabTarget: {fileID: 1755140454431793062}
-  updateGrabTarget: 1
+  updateGrabTarget: 0
   updateGrabTargetInLateUpdate: 1
   speedParam: Speed
   groundedParam: IsGrounded
@@ -96,7 +96,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 31041fa31085b4c4d92322c2edd014db, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  defaultCursorLocked: 1
+  defaultCursorLocked: 0
   allowCursorToggle: 1
   toggleCursorKey: 60
   forceCursorUnlockedScenes:
@@ -104,6 +104,9 @@ MonoBehaviour:
   - MainMenu
   mouseSensitivityX: 0.2
   mouseSensitivityY: 0.2
+  mouseDeadzone: 0.5
+  ignoreMouseDeltaAfterLock: 0.2
+  maxMouseDeltaPerFrame: 80
   sprintKey: 51
   jumpKey: 1
   attackMouseButton: 0
@@ -656,9 +659,6 @@ PrefabInstance:
     - targetCorrespondingSourceObject: {fileID: 919132149155446097, guid: 83fbe5706b3039349abb894620751b26, type: 3}
       insertIndex: -1
       addedObject: {fileID: 1692870032418172118}
-    - targetCorrespondingSourceObject: {fileID: 919132149155446097, guid: 83fbe5706b3039349abb894620751b26, type: 3}
-      insertIndex: -1
-      addedObject: {fileID: 1724022757549012920}
     - targetCorrespondingSourceObject: {fileID: 3877284837222275464, guid: 83fbe5706b3039349abb894620751b26, type: 3}
       insertIndex: -1
       addedObject: {fileID: 1403265306979268750}
@@ -1564,14 +1564,14 @@ MonoBehaviour:
   SyncPositionX: 1
   SyncPositionY: 1
   SyncPositionZ: 1
-  SyncRotAngleX: 1
+  SyncRotAngleX: 0
   SyncRotAngleY: 1
-  SyncRotAngleZ: 1
+  SyncRotAngleZ: 0
   SyncScaleX: 0
   SyncScaleY: 0
   SyncScaleZ: 0
-  PositionThreshold: 0.05
-  RotAngleThreshold: 2
+  PositionThreshold: 0.02
+  RotAngleThreshold: 0.5
   ScaleThreshold: 0.01
   UseQuaternionSynchronization: 0
   UseQuaternionCompression: 0
@@ -1609,6 +1609,7 @@ MonoBehaviour:
   combatModule: {fileID: 5562244057572314665}
   interactModule: {fileID: 2709897059885907672}
   statusModule: {fileID: 7247400059496916096}
+  gameStateManager: {fileID: 0}
 --- !u!114 &7740102240635983405
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -1694,7 +1695,7 @@ Rigidbody:
   m_UseGravity: 1
   m_IsKinematic: 1
   m_Interpolate: 1
-  m_Constraints: 0
+  m_Constraints: 80
   m_CollisionDetection: 2
 --- !u!136 &7163919530760741216
 CapsuleCollider:
@@ -1757,23 +1758,6 @@ MonoBehaviour:
   - {x: 0.132, y: 0}
   globalFineOffset: {x: 0, y: 0}
   holdSeconds: 3.5
---- !u!114 &1724022757549012920
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 5339340507742051071}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: f6c0be61502bb534f922ebb746851216, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: 
-  ShowTopMostFoldoutHeaderGroup: 1
-  NetworkRigidbodyBaseExpanded: 0
-  UseRigidBodyForMotion: 0
-  AutoUpdateKinematicState: 1
-  AutoSetKinematicOnDespawn: 1
 --- !u!1 &5565051002022854831 stripped
 GameObject:
   m_CorrespondingSourceObject: {fileID: 856603465497814785, guid: 83fbe5706b3039349abb894620751b26, type: 3}
