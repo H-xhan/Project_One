@@ -43,9 +43,17 @@ public class PlayerLocomotionModule : MonoBehaviour
             _cc.transform.Rotate(0f, yawDelta * yawScale, 0f);
 
         // 2. 점프 및 중력 처리
-        if (IsGrounded)
+        bool grounded = IsGrounded;
+
+        if (grounded)
         {
-            if (_verticalVelocity < 0f) _verticalVelocity = stickToGroundForce; // 바닥 밀착
+            // 멀티 텔레포트/보정 후 양수 수직속도가 남아 있으면 자동 점프처럼 튈 수 있으니 끊어줌
+            if (_verticalVelocity > 0f)
+                _verticalVelocity = 0f;
+
+            // 지면 위에서는 항상 바닥 밀착 상태 유지
+            if (_verticalVelocity <= 0f)
+                _verticalVelocity = stickToGroundForce;
 
             if (jumpPressed)
             {
@@ -53,6 +61,7 @@ public class PlayerLocomotionModule : MonoBehaviour
                 didJump = true;
             }
         }
+
         _verticalVelocity += gravity * dt;
 
         // 3. 이동 속도 계산 (핵심 수정!)
@@ -86,5 +95,10 @@ public class PlayerLocomotionModule : MonoBehaviour
         _cc.Move(finalMotion * dt);
 
         return didJump;
+    }
+    public void ResetMotionServer()
+    {
+        _planarVelocity = Vector3.zero;
+        _verticalVelocity = 0f;
     }
 }

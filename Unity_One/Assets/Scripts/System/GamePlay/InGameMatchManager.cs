@@ -7,7 +7,7 @@ using UnityEngine;
 public class InGameMatchManager : NetworkBehaviour
 {
     [Header("플레이어 스폰")]
-    [SerializeField, Tooltip("플레이어 프리팹(NetworkObject 포함). 현재는 직접 스폰하지 않고, NetworkManager의 PlayerObject를 사용합니다.")]
+    [SerializeField, Tooltip("플레이어 프리팹(NetworkObject 포함). 현재는 직접 스폰하지 않고 NetworkManager의 PlayerObject를 사용합니다.")]
     private NetworkObject playerPrefab;
 
     [Header("로비 스폰 설정")]
@@ -28,8 +28,11 @@ public class InGameMatchManager : NetworkBehaviour
     [SerializeField, Tooltip("상태 전환 후 텔레포트 시작 전 대기 시간(초)")]
     private float teleportDelay = 0.3f;
 
-    [SerializeField, Tooltip("모든 PlayerObject가 준비될 때까지 기다리는 최대 시간(초)")]
+    [SerializeField, Tooltip("PlayerObject가 준비될 때까지 기다리는 최대 시간(초)")]
     private float playerResolveTimeout = 2.0f;
+
+    [SerializeField, Tooltip("스폰 시 위로 띄울 기본 오프셋")]
+    private float baseSpawnYOffset = 0.3f;
 
     private Coroutine _teleportRoutine;
 
@@ -39,12 +42,17 @@ public class InGameMatchManager : NetworkBehaviour
 
         if (!IsServer) return;
 
-        // InGame 씬 진입 직후 로비 존 배치
+        if (NetworkManager.Singleton != null)
+            NetworkManager.Singleton.OnClientConnectedCallback += HandleClientConnected;
+
         TeleportPlayersToLobbyServer();
     }
 
     public override void OnNetworkDespawn()
     {
+        if (NetworkManager.Singleton != null)
+            NetworkManager.Singleton.OnClientConnectedCallback -= HandleClientConnected;
+
         if (_teleportRoutine != null)
         {
             StopCoroutine(_teleportRoutine);
@@ -52,6 +60,25 @@ public class InGameMatchManager : NetworkBehaviour
         }
 
         base.OnNetworkDespawn();
+    }
+
+    private void HandleClientConnected(ulong clientId)
+    {
+        if (!IsServer) return;
+        if (NetworkManager.Singleton == null) return;
+
+        // 호스트 자기 자신 초기 접속은 전체 로비 배치 루틴에서 처리
+        if (clientId == NetworkManager.ServerClientId &&
+            NetworkManager.Singleton.ConnectedClientsIds.Count <= 1)
+            return;
+
+        var gsm = FindFirstObjectByType<GameStateManager>();
+        bool goToGame = gsm != null && gsm.GetState() == GameStateManager.GameState.Playing;
+
+        string tag = goToGame ? gameSpawnTag : lobbySpawnTag;
+        string prefix = goToGame ? gameSpawnNamePrefix : lobbySpawnNamePrefix;
+
+        StartCoroutine(TeleportSingleClientRoutine(clientId, tag, prefix));
     }
 
     public void TeleportPlayersToLobbyServer()
@@ -89,17 +116,11 @@ public class InGameMatchManager : NetworkBehaviour
             yield break;
         }
 
-        // 모든 플레이어 오브젝트가 준비될 때까지 잠깐 대기
         float wait = 0f;
         while (wait < playerResolveTimeout && !AreAllPlayerObjectsReady(nm))
         {
             wait += Time.deltaTime;
             yield return null;
-        }
-
-        if (!AreAllPlayerObjectsReady(nm))
-        {
-            Debug.LogWarning("[InGameMatchManager] Some PlayerObjects are still not ready. Teleport will continue with available players only.");
         }
 
         var spawnPoints = FindSpawnPointsByTag(tagName);
@@ -129,7 +150,7 @@ public class InGameMatchManager : NetworkBehaviour
                 continue;
             }
 
-            var targetSpawn = ResolveSpawnPointForClient(spawnPoints, clientId, i, namePrefix);
+            Transform targetSpawn = ResolveSpawnPointForClient(spawnPoints, clientId, i, namePrefix);
             if (targetSpawn == null)
                 continue;
 
@@ -138,6 +159,59 @@ public class InGameMatchManager : NetworkBehaviour
         }
 
         _teleportRoutine = null;
+    }
+
+    private IEnumerator TeleportSingleClientRoutine(ulong clientId, string tagName, string namePrefix)
+    {
+        if (teleportDelay > 0f)
+            yield return new WaitForSeconds(teleportDelay);
+
+        var nm = NetworkManager.Singleton;
+        if (nm == null) yield break;
+
+        float wait = 0f;
+        while (wait < playerResolveTimeout)
+        {
+            if (nm.ConnectedClients.TryGetValue(clientId, out var client) &&
+                client != null &&
+                client.PlayerObject != null &&
+                client.PlayerObject.IsSpawned)
+            {
+                break;
+            }
+
+            wait += Time.deltaTime;
+            yield return null;
+        }
+
+        if (!nm.ConnectedClients.TryGetValue(clientId, out var targetClient) ||
+            targetClient == null ||
+            targetClient.PlayerObject == null ||
+            !targetClient.PlayerObject.IsSpawned)
+        {
+            Debug.LogWarning($"[InGameMatchManager] Late-join teleport skipped. PlayerObject not ready. client:{clientId}");
+            yield break;
+        }
+
+        var spawnPoints = FindSpawnPointsByTag(tagName);
+        spawnPoints.Sort((a, b) => string.Compare(a.name, b.name, System.StringComparison.Ordinal));
+
+        if (spawnPoints.Count == 0)
+        {
+            Debug.LogWarning($"[InGameMatchManager] SpawnPoint tag not found or empty: {tagName}");
+            yield break;
+        }
+
+        var ids = new List<ulong>(nm.ConnectedClientsIds);
+        ids.Sort();
+        int fallbackIndex = Mathf.Max(0, ids.IndexOf(clientId));
+
+        Transform targetSpawn = ResolveSpawnPointForClient(spawnPoints, clientId, fallbackIndex, namePrefix);
+        if (targetSpawn == null)
+            yield break;
+
+        yield return TeleportPlayerSafely(targetClient.PlayerObject, targetSpawn.position, targetSpawn.rotation);
+        Debug.Log($"[InGameMatchManager] LateJoin Teleport client:{clientId} -> {targetSpawn.name} pos:{targetSpawn.position}");
     }
 
     private bool AreAllPlayerObjectsReady(NetworkManager nm)
@@ -200,25 +274,33 @@ public class InGameMatchManager : NetworkBehaviour
     {
         if (player == null) yield break;
 
-        var go = player.gameObject;
-        var tf = go.transform;
-        var cc = go.GetComponent<CharacterController>();
-        var nt = go.GetComponent<NetworkTransform>();
-        var rb = go.GetComponent<Rigidbody>();
-
-        Vector3 euler = rot.eulerAngles;
-        Quaternion uprightRot = Quaternion.Euler(0f, euler.y, 0f);
-        Vector3 spawnPos = pos + Vector3.up * 0.05f;
+        GameObject go = player.gameObject;
+        Transform tf = go.transform;
+        CharacterController cc = go.GetComponent<CharacterController>();
+        NetworkTransform nt = go.GetComponent<NetworkTransform>();
+        Rigidbody rb = go.GetComponent<Rigidbody>();
+        PlayerLocomotionModule locomotion = go.GetComponentInChildren<PlayerLocomotionModule>(true);
 
         bool hadCC = cc != null && cc.enabled;
         if (hadCC)
             cc.enabled = false;
+
+        if (locomotion != null)
+            locomotion.ResetMotionServer();
 
         if (rb != null && !rb.isKinematic)
         {
             rb.linearVelocity = Vector3.zero;
             rb.angularVelocity = Vector3.zero;
         }
+
+        float safeYOffset = baseSpawnYOffset;
+        if (cc != null)
+            safeYOffset = Mathf.Max(baseSpawnYOffset, cc.radius + 0.05f);
+
+        Vector3 spawnPos = pos + Vector3.up * safeYOffset;
+        Vector3 euler = rot.eulerAngles;
+        Quaternion uprightRot = Quaternion.Euler(0f, euler.y, 0f);
 
         if (nt != null)
             nt.Teleport(spawnPos, uprightRot, tf.localScale);
@@ -228,6 +310,9 @@ public class InGameMatchManager : NetworkBehaviour
         Physics.SyncTransforms();
         yield return null;
 
+        if (locomotion != null)
+            locomotion.ResetMotionServer();
+
         if (rb != null && !rb.isKinematic)
         {
             rb.linearVelocity = Vector3.zero;
@@ -236,5 +321,10 @@ public class InGameMatchManager : NetworkBehaviour
 
         if (hadCC)
             cc.enabled = true;
+
+        yield return null;
+
+        if (hadCC)
+            cc.Move(Vector3.zero);
     }
 }
