@@ -37,6 +37,15 @@ public class InGameMatchManager : NetworkBehaviour
     [SerializeField, Tooltip("late join 클라이언트 전용 텔레포트 지연(초)")]
     private float lateJoinTeleportDelay = 0.15f;
 
+    [SerializeField, Tooltip("바닥 탐색 시작 높이")]
+    private float groundProbeStartHeight = 4f;
+
+    [SerializeField, Tooltip("바닥 탐색 거리")]
+    private float groundProbeDistance = 12f;
+
+    [SerializeField, Tooltip("텔레포트 직후 허용할 최대 수평 드리프트")]
+    private float postTeleportDriftTolerance = 0.05f;
+
     private Coroutine _teleportRoutine;
     private readonly Dictionary<ulong, Coroutine> _singleTeleportRoutines = new Dictionary<ulong, Coroutine>();
     private readonly Dictionary<ulong, int> _singleTeleportTokens = new Dictionary<ulong, int>();
@@ -106,7 +115,6 @@ public class InGameMatchManager : NetworkBehaviour
             _teleportRoutine = null;
         }
 
-        // 존 전체 텔레포트가 시작되면, 대기 중인 단일 클라이언트 텔레포트는 모두 취소
         StopAllSingleClientTeleportRoutines();
 
         _teleportVersion++;
@@ -240,7 +248,7 @@ public class InGameMatchManager : NetworkBehaviour
             if (requestVersion != _teleportVersion)
                 yield break;
 
-            Debug.Log($"[InGameMatchManager] Teleport client:{clientId} -> {targetSpawn.name} pos:{targetSpawn.position}");
+            Debug.Log($"[InGameMatchManager] Teleport client:{clientId} -> {targetSpawn.name} pos:{targetSpawn.position} actual:{playerObj.transform.position}");
         }
 
         if (requestVersion == _teleportVersion)
@@ -333,7 +341,7 @@ public class InGameMatchManager : NetworkBehaviour
             yield break;
         }
 
-        Debug.Log($"[InGameMatchManager] LateJoin Teleport client:{clientId} -> {targetSpawn.name} pos:{targetSpawn.position}");
+        Debug.Log($"[InGameMatchManager] LateJoin Teleport client:{clientId} -> {targetSpawn.name} pos:{targetSpawn.position} actual:{targetClient.PlayerObject.transform.position}");
         CompleteSingleClientTeleportRoutine(clientId, requestToken);
     }
 
@@ -390,7 +398,7 @@ public class InGameMatchManager : NetworkBehaviour
             var found = GameObject.FindGameObjectsWithTag(tagName);
             for (int i = 0; i < found.Length; i++)
             {
-                if (found[i] != null)
+                if (found[i] != null && found[i].activeInHierarchy)
                     list.Add(found[i].transform);
             }
         }
@@ -417,46 +425,98 @@ public class InGameMatchManager : NetworkBehaviour
         if (hadCC)
             cc.enabled = false;
 
-        if (locomotion != null)
-            locomotion.ResetMotionServer();
+        ResetMotion(locomotion, rb);
 
-        if (rb != null && !rb.isKinematic)
-        {
-            rb.linearVelocity = Vector3.zero;
-            rb.angularVelocity = Vector3.zero;
-        }
-
-        float safeYOffset = baseSpawnYOffset;
-        if (cc != null)
-            safeYOffset = Mathf.Max(baseSpawnYOffset, cc.radius + 0.05f);
-
-        Vector3 spawnPos = pos + Vector3.up * safeYOffset;
         Vector3 euler = rot.eulerAngles;
         Quaternion uprightRot = Quaternion.Euler(0f, euler.y, 0f);
+        Vector3 exactSpawnPos = ResolveExactSpawnPosition(pos, cc);
 
-        if (nt != null)
-            nt.Teleport(spawnPos, uprightRot, tf.localScale);
-        else
-            tf.SetPositionAndRotation(spawnPos, uprightRot);
-
-        Physics.SyncTransforms();
+        ForceSetTransform(tf, nt, exactSpawnPos, uprightRot);
         yield return null;
 
-        if (locomotion != null)
-            locomotion.ResetMotionServer();
-
-        if (rb != null && !rb.isKinematic)
-        {
-            rb.linearVelocity = Vector3.zero;
-            rb.angularVelocity = Vector3.zero;
-        }
+        // 호스트 입력/모션 잔여값이 다음 프레임에 한 번 더 들어오는 경우를 막기 위해
+        // CC를 끈 상태로 한 프레임 더 대기하며 모션을 다시 0으로 정리합니다.
+        ResetMotion(locomotion, rb);
+        ForceSetTransform(tf, nt, exactSpawnPos, uprightRot);
+        yield return null;
 
         if (hadCC)
             cc.enabled = true;
 
         yield return null;
 
-        if (hadCC)
-            cc.Move(Vector3.zero);
+        ResetMotion(locomotion, rb);
+
+        Vector3 horizontalNow = new Vector3(tf.position.x, 0f, tf.position.z);
+        Vector3 horizontalTarget = new Vector3(exactSpawnPos.x, 0f, exactSpawnPos.z);
+        float horizontalDrift = Vector3.Distance(horizontalNow, horizontalTarget);
+
+        if (horizontalDrift > postTeleportDriftTolerance)
+        {
+            bool ccWasEnabled = cc != null && cc.enabled;
+            if (ccWasEnabled)
+                cc.enabled = false;
+
+            ResetMotion(locomotion, rb);
+            ForceSetTransform(tf, nt, exactSpawnPos, uprightRot);
+            Physics.SyncTransforms();
+            yield return null;
+
+            if (ccWasEnabled)
+                cc.enabled = true;
+
+            Debug.LogWarning($"[InGameMatchManager] Post-teleport drift corrected. owner:{player.OwnerClientId} drift:{horizontalDrift:F3} target:{exactSpawnPos} actual:{tf.position}");
+        }
+    }
+
+    private void ResetMotion(PlayerLocomotionModule locomotion, Rigidbody rb)
+    {
+        if (locomotion != null)
+            locomotion.ResetMotionServer();
+
+        if (rb != null && !rb.isKinematic)
+        {
+            rb.linearVelocity = Vector3.zero;
+            rb.angularVelocity = Vector3.zero;
+        }
+    }
+
+    private void ForceSetTransform(Transform tf, NetworkTransform nt, Vector3 pos, Quaternion rot)
+    {
+        if (tf == null) return;
+
+        tf.SetPositionAndRotation(pos, rot);
+        Physics.SyncTransforms();
+
+        if (nt != null)
+            nt.Teleport(pos, rot, tf.localScale);
+    }
+
+    private Vector3 ResolveExactSpawnPosition(Vector3 requestedPos, CharacterController cc)
+    {
+        Vector3 result = requestedPos;
+
+        float bottomOffset = 0f;
+        float extraLift = Mathf.Max(0.02f, baseSpawnYOffset * 0.1f);
+
+        if (cc != null)
+        {
+            bottomOffset = cc.center.y - (cc.height * 0.5f);
+            extraLift = Mathf.Max(0.02f, cc.skinWidth + 0.02f);
+        }
+
+        Vector3 rayStart = requestedPos + Vector3.up * Mathf.Max(0.5f, groundProbeStartHeight);
+        float rayDistance = Mathf.Max(1f, groundProbeStartHeight + groundProbeDistance);
+
+        if (Physics.Raycast(rayStart, Vector3.down, out RaycastHit hit, rayDistance, Physics.DefaultRaycastLayers, QueryTriggerInteraction.Ignore))
+        {
+            result.y = hit.point.y - bottomOffset + extraLift;
+        }
+        else
+        {
+            result.y = requestedPos.y + Mathf.Max(baseSpawnYOffset, extraLift - bottomOffset);
+        }
+
+        return result;
     }
 }
