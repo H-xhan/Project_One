@@ -35,9 +35,12 @@ public class InGameMatchManager : NetworkBehaviour
     private float baseSpawnYOffset = 0.5f;
 
     [SerializeField, Tooltip("late join 클라이언트 전용 텔레포트 지연(초)")]
-    private float lateJoinTeleportDelay = 0.00f;
+    private float lateJoinTeleportDelay = 0.15f;
 
     private Coroutine _teleportRoutine;
+    private readonly Dictionary<ulong, Coroutine> _singleTeleportRoutines = new Dictionary<ulong, Coroutine>();
+    private readonly Dictionary<ulong, int> _singleTeleportTokens = new Dictionary<ulong, int>();
+    private int _teleportVersion;
 
     public override void OnNetworkSpawn()
     {
@@ -62,6 +65,9 @@ public class InGameMatchManager : NetworkBehaviour
             _teleportRoutine = null;
         }
 
+        StopAllSingleClientTeleportRoutines();
+        _teleportVersion++;
+
         base.OnNetworkDespawn();
     }
 
@@ -75,13 +81,7 @@ public class InGameMatchManager : NetworkBehaviour
             NetworkManager.Singleton.ConnectedClientsIds.Count <= 1)
             return;
 
-        var gsm = FindFirstObjectByType<GameStateManager>();
-        bool goToGame = gsm != null && gsm.GetState() == GameStateManager.GameState.Playing;
-
-        string tag = goToGame ? gameSpawnTag : lobbySpawnTag;
-        string prefix = goToGame ? gameSpawnNamePrefix : lobbySpawnNamePrefix;
-
-        StartCoroutine(TeleportSingleClientRoutine(clientId, tag, prefix));
+        StartSingleClientTeleportRoutine(clientId);
     }
 
     public void TeleportPlayersToLobbyServer()
@@ -101,30 +101,104 @@ public class InGameMatchManager : NetworkBehaviour
         if (!IsServer) return;
 
         if (_teleportRoutine != null)
+        {
             StopCoroutine(_teleportRoutine);
+            _teleportRoutine = null;
+        }
 
-        _teleportRoutine = StartCoroutine(TeleportPlayersRoutine(tagName, namePrefix));
+        // 존 전체 텔레포트가 시작되면, 대기 중인 단일 클라이언트 텔레포트는 모두 취소
+        StopAllSingleClientTeleportRoutines();
+
+        _teleportVersion++;
+        int requestVersion = _teleportVersion;
+        _teleportRoutine = StartCoroutine(TeleportPlayersRoutine(tagName, namePrefix, requestVersion));
     }
 
-    private IEnumerator TeleportPlayersRoutine(string tagName, string namePrefix)
+    private void StartSingleClientTeleportRoutine(ulong clientId)
+    {
+        StopSingleClientTeleportRoutine(clientId);
+
+        int nextToken = 1;
+        if (_singleTeleportTokens.TryGetValue(clientId, out int prevToken))
+            nextToken = prevToken + 1;
+
+        _singleTeleportTokens[clientId] = nextToken;
+
+        int requestVersion = _teleportVersion;
+        Coroutine routine = StartCoroutine(TeleportSingleClientRoutine(clientId, requestVersion, nextToken));
+        _singleTeleportRoutines[clientId] = routine;
+    }
+
+    private void StopSingleClientTeleportRoutine(ulong clientId)
+    {
+        if (_singleTeleportRoutines.TryGetValue(clientId, out Coroutine runningRoutine) && runningRoutine != null)
+            StopCoroutine(runningRoutine);
+
+        _singleTeleportRoutines.Remove(clientId);
+        _singleTeleportTokens.Remove(clientId);
+    }
+
+    private void StopAllSingleClientTeleportRoutines()
+    {
+        foreach (var pair in _singleTeleportRoutines)
+        {
+            if (pair.Value != null)
+                StopCoroutine(pair.Value);
+        }
+
+        _singleTeleportRoutines.Clear();
+        _singleTeleportTokens.Clear();
+    }
+
+    private void CompleteSingleClientTeleportRoutine(ulong clientId, int requestToken)
+    {
+        if (_singleTeleportTokens.TryGetValue(clientId, out int currentToken) && currentToken == requestToken)
+        {
+            _singleTeleportTokens.Remove(clientId);
+            _singleTeleportRoutines.Remove(clientId);
+        }
+    }
+
+    private bool IsSingleTeleportRequestValid(ulong clientId, int requestVersion, int requestToken)
+    {
+        if (requestVersion != _teleportVersion)
+            return false;
+
+        if (!_singleTeleportTokens.TryGetValue(clientId, out int currentToken))
+            return false;
+
+        return currentToken == requestToken;
+    }
+
+    private IEnumerator TeleportPlayersRoutine(string tagName, string namePrefix, int requestVersion)
     {
         if (teleportDelay > 0f)
             yield return new WaitForSeconds(teleportDelay);
+
+        if (requestVersion != _teleportVersion)
+            yield break;
 
         var nm = NetworkManager.Singleton;
         if (nm == null)
         {
             Debug.LogWarning("[InGameMatchManager] NetworkManager.Singleton is null.");
-            _teleportRoutine = null;
+            if (requestVersion == _teleportVersion)
+                _teleportRoutine = null;
             yield break;
         }
 
         float wait = 0f;
         while (wait < playerResolveTimeout && !AreAllPlayerObjectsReady(nm))
         {
+            if (requestVersion != _teleportVersion)
+                yield break;
+
             wait += Time.deltaTime;
             yield return null;
         }
+
+        if (requestVersion != _teleportVersion)
+            yield break;
 
         var spawnPoints = FindSpawnPointsByTag(tagName);
         spawnPoints.Sort((a, b) => string.Compare(a.name, b.name, System.StringComparison.Ordinal));
@@ -132,7 +206,8 @@ public class InGameMatchManager : NetworkBehaviour
         if (spawnPoints.Count == 0)
         {
             Debug.LogWarning($"[InGameMatchManager] SpawnPoint tag not found or empty: {tagName}");
-            _teleportRoutine = null;
+            if (requestVersion == _teleportVersion)
+                _teleportRoutine = null;
             yield break;
         }
 
@@ -141,6 +216,9 @@ public class InGameMatchManager : NetworkBehaviour
 
         for (int i = 0; i < clientIds.Count; i++)
         {
+            if (requestVersion != _teleportVersion)
+                yield break;
+
             ulong clientId = clientIds[i];
 
             if (!nm.ConnectedClients.TryGetValue(clientId, out var client) || client == null)
@@ -158,20 +236,35 @@ public class InGameMatchManager : NetworkBehaviour
                 continue;
 
             yield return TeleportPlayerSafely(playerObj, targetSpawn.position, targetSpawn.rotation);
+
+            if (requestVersion != _teleportVersion)
+                yield break;
+
             Debug.Log($"[InGameMatchManager] Teleport client:{clientId} -> {targetSpawn.name} pos:{targetSpawn.position}");
         }
 
-        _teleportRoutine = null;
+        if (requestVersion == _teleportVersion)
+            _teleportRoutine = null;
     }
 
-    private IEnumerator TeleportSingleClientRoutine(ulong clientId, string tagName, string namePrefix)
+    private IEnumerator TeleportSingleClientRoutine(ulong clientId, int requestVersion, int requestToken)
     {
         var nm = NetworkManager.Singleton;
-        if (nm == null) yield break;
+        if (nm == null)
+        {
+            CompleteSingleClientTeleportRoutine(clientId, requestToken);
+            yield break;
+        }
 
         float wait = 0f;
         while (wait < playerResolveTimeout)
         {
+            if (!IsSingleTeleportRequestValid(clientId, requestVersion, requestToken))
+            {
+                CompleteSingleClientTeleportRoutine(clientId, requestToken);
+                yield break;
+            }
+
             if (nm.ConnectedClients.TryGetValue(clientId, out var client) &&
                 client != null &&
                 client.PlayerObject != null &&
@@ -184,17 +277,32 @@ public class InGameMatchManager : NetworkBehaviour
             yield return null;
         }
 
+        if (!IsSingleTeleportRequestValid(clientId, requestVersion, requestToken))
+        {
+            CompleteSingleClientTeleportRoutine(clientId, requestToken);
+            yield break;
+        }
+
         if (!nm.ConnectedClients.TryGetValue(clientId, out var targetClient) ||
             targetClient == null ||
             targetClient.PlayerObject == null ||
             !targetClient.PlayerObject.IsSpawned)
         {
             Debug.LogWarning($"[InGameMatchManager] Late-join teleport skipped. PlayerObject not ready. client:{clientId}");
+            CompleteSingleClientTeleportRoutine(clientId, requestToken);
             yield break;
         }
 
         if (lateJoinTeleportDelay > 0f)
             yield return new WaitForSeconds(lateJoinTeleportDelay);
+
+        if (!IsSingleTeleportRequestValid(clientId, requestVersion, requestToken))
+        {
+            CompleteSingleClientTeleportRoutine(clientId, requestToken);
+            yield break;
+        }
+
+        ResolveCurrentSpawnSettings(out string tagName, out string namePrefix);
 
         var spawnPoints = FindSpawnPointsByTag(tagName);
         spawnPoints.Sort((a, b) => string.Compare(a.name, b.name, System.StringComparison.Ordinal));
@@ -202,6 +310,7 @@ public class InGameMatchManager : NetworkBehaviour
         if (spawnPoints.Count == 0)
         {
             Debug.LogWarning($"[InGameMatchManager] SpawnPoint tag not found or empty: {tagName}");
+            CompleteSingleClientTeleportRoutine(clientId, requestToken);
             yield break;
         }
 
@@ -211,10 +320,30 @@ public class InGameMatchManager : NetworkBehaviour
 
         Transform targetSpawn = ResolveSpawnPointForClient(spawnPoints, clientId, fallbackIndex, namePrefix);
         if (targetSpawn == null)
+        {
+            CompleteSingleClientTeleportRoutine(clientId, requestToken);
             yield break;
+        }
 
         yield return TeleportPlayerSafely(targetClient.PlayerObject, targetSpawn.position, targetSpawn.rotation);
+
+        if (!IsSingleTeleportRequestValid(clientId, requestVersion, requestToken))
+        {
+            CompleteSingleClientTeleportRoutine(clientId, requestToken);
+            yield break;
+        }
+
         Debug.Log($"[InGameMatchManager] LateJoin Teleport client:{clientId} -> {targetSpawn.name} pos:{targetSpawn.position}");
+        CompleteSingleClientTeleportRoutine(clientId, requestToken);
+    }
+
+    private void ResolveCurrentSpawnSettings(out string tagName, out string namePrefix)
+    {
+        var gsm = FindFirstObjectByType<GameStateManager>();
+        bool goToGame = gsm != null && gsm.GetState() == GameStateManager.GameState.Playing;
+
+        tagName = goToGame ? gameSpawnTag : lobbySpawnTag;
+        namePrefix = goToGame ? gameSpawnNamePrefix : lobbySpawnNamePrefix;
     }
 
     private bool AreAllPlayerObjectsReady(NetworkManager nm)
