@@ -30,6 +30,10 @@ public class PlayerCombatModule : NetworkBehaviour
     [Tooltip("공격 대상 레이어 마스크")]
     [SerializeField] private LayerMask targetMask;
 
+    [Header("Debug")]
+    [Tooltip("공격 판정 디버그 로그 출력 여부")]
+    [SerializeField] private bool enableDebugLogs = true;
+
     private PlayerInteractModule interactModule;
     private PlayerStatusModule statusModule;
     private float nextAttackTime;
@@ -74,19 +78,29 @@ public class PlayerCombatModule : NetworkBehaviour
         ResolveRefs();
 
         if (statusModule != null && !statusModule.CanAttack)
+        {
+            Log("[PlayerCombat] Attack blocked. CanAttack is false.");
             return;
+        }
 
         AttackProfile profile = BuildAttackProfile();
 
         if (Time.time < nextAttackTime)
+        {
+            Log($"[PlayerCombat] Cooldown. next:{nextAttackTime:0.00}, now:{Time.time:0.00}");
             return;
+        }
 
         nextAttackTime = Time.time + Mathf.Max(0.01f, profile.cooldown);
 
         Transform originTf = attackOrigin != null ? attackOrigin : transform.root;
         Vector3 center = originTf.position + originTf.forward * profile.distance;
 
+        Log($"[PlayerCombat] Attack center:{center}, radius:{profile.radius}, distance:{profile.distance}");
+
         Collider[] hits = Physics.OverlapSphere(center, profile.radius, targetMask, QueryTriggerInteraction.Ignore);
+        Log($"[PlayerCombat] Overlap hits: {hits.Length}");
+
         if (hits == null || hits.Length == 0)
             return;
 
@@ -105,13 +119,25 @@ public class PlayerCombatModule : NetworkBehaviour
             if (!processedRoots.Add(rootId))
                 continue;
 
-            IDamageable damageable = hit.GetComponentInParent<IDamageable>();
-            if (damageable != null)
-                damageable.TakeDamage(profile.damage);
+            Log($"[PlayerCombat] Hit root: {root.name}, collider: {hit.name}");
 
-            PlayerStatusModule targetStatus = hit.GetComponentInParent<PlayerStatusModule>();
+            IDamageable damageable = root.GetComponentInChildren<IDamageable>(true);
+            if (damageable != null)
+            {
+                Log($"[PlayerCombat] TakeDamage -> {root.name}, damage:{profile.damage}");
+                damageable.TakeDamage(profile.damage);
+            }
+            else
+            {
+                LogWarning($"[PlayerCombat] IDamageable not found on root: {root.name}");
+            }
+
+            PlayerStatusModule targetStatus = root.GetComponentInChildren<PlayerStatusModule>(true);
             if (targetStatus == null)
+            {
+                LogWarning($"[PlayerCombat] TargetStatus not found on root: {root.name}");
                 continue;
+            }
 
             Vector3 dir = targetStatus.transform.position - originTf.position;
             dir.y = 0f;
@@ -122,6 +148,8 @@ public class PlayerCombatModule : NetworkBehaviour
                 dir = dir.normalized;
 
             Vector3 impulse = dir * profile.hitForce + Vector3.up * profile.upwardForce;
+
+            Log($"[PlayerCombat] ApplyKnockback -> {targetStatus.name}, impulse:{impulse}");
             targetStatus.ApplyKnockbackServer(impulse);
         }
     }
@@ -200,6 +228,18 @@ public class PlayerCombatModule : NetworkBehaviour
         }
 
         return true;
+    }
+
+    private void Log(string message)
+    {
+        if (!enableDebugLogs) return;
+        Debug.Log(message);
+    }
+
+    private void LogWarning(string message)
+    {
+        if (!enableDebugLogs) return;
+        Debug.LogWarning(message);
     }
 
 #if UNITY_EDITOR

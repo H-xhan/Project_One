@@ -1,7 +1,7 @@
 using Unity.Netcode;
 using UnityEngine;
 
-public class PlayerStatusModule : NetworkBehaviour
+public class PlayerStatusModule : NetworkBehaviour, IDamageable
 {
     [Header("Knockback")]
     [Tooltip("넉백/다운 시 물리를 적용할 루트 Rigidbody")]
@@ -175,6 +175,11 @@ public class PlayerStatusModule : NetworkBehaviour
 
         if (NetworkObject != null && NetworkObject.IsSpawned)
             NetworkObject.Despawn();
+    }
+
+    public void TakeDamage(float damage)
+    {
+        Debug.Log($"[PlayerStatus] TakeDamage -> {name}, damage:{damage}");
     }
 
 #if UNITY_EDITOR
