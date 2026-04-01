@@ -37,17 +37,29 @@ public class PlayerAnimModule : MonoBehaviour
     [Tooltip("지면 판정 Bool 파라미터 이름")]
     [SerializeField] private string groundedParam = "IsGrounded";
 
+    [Tooltip("공격 무기 타입 Int 파라미터 이름")]
+    [SerializeField] private string weaponTypeParam = "WeaponType";
+
     [Header("Triggers")]
     [Tooltip("점프 Trigger 파라미터 이름")]
     [SerializeField] private string jumpTrigger = "Jump";
 
+    [Tooltip("공격 Trigger 파라미터 이름")]
+    [SerializeField] private string attackTrigger = "Attack";
+
     [Tooltip("줍기 Trigger 파라미터 이름")]
     [SerializeField] private string pickUpTrigger = "PickUp";
 
+    [Tooltip("피격 Trigger 파라미터 이름(Animator에 없으면 자동 무시)")]
+    [SerializeField] private string hitTrigger = "Hit";
+
     private int _speedHash;
     private int _groundHash;
+    private int _weaponTypeHash;
     private int _jumpHash;
+    private int _attackHash;
     private int _pickUpHash;
+    private int _hitHash;
 
     private NetworkObject _netObj;
 
@@ -73,8 +85,11 @@ public class PlayerAnimModule : MonoBehaviour
     {
         _speedHash = Animator.StringToHash(speedParam);
         _groundHash = Animator.StringToHash(groundedParam);
+        _weaponTypeHash = Animator.StringToHash(weaponTypeParam);
         _jumpHash = Animator.StringToHash(jumpTrigger);
+        _attackHash = Animator.StringToHash(attackTrigger);
         _pickUpHash = Animator.StringToHash(pickUpTrigger);
+        _hitHash = Animator.StringToHash(hitTrigger);
     }
 
     private void Update()
@@ -135,22 +150,81 @@ public class PlayerAnimModule : MonoBehaviour
 
     public void TriggerJump()
     {
-        if (networkAnimator != null) networkAnimator.SetTrigger(_jumpHash);
-        else if (animator != null) animator.SetTrigger(_jumpHash);
+        TriggerNetworked(_jumpHash, jumpTrigger);
     }
 
     public void TriggerAttack(int weaponID)
     {
         if (animator == null) return;
 
-        animator.SetInteger("WeaponType", weaponID);
-        animator.SetTrigger("Attack");
+        SetIntParameter(_weaponTypeHash, weaponTypeParam, weaponID);
+        TriggerNetworked(_attackHash, attackTrigger);
     }
 
     public void TriggerPickUp()
     {
-        if (networkAnimator != null) networkAnimator.SetTrigger(_pickUpHash);
-        else if (animator != null) animator.SetTrigger(_pickUpHash);
+        TriggerNetworked(_pickUpHash, pickUpTrigger);
+    }
+
+    public void TriggerHit()
+    {
+        TriggerNetworked(_hitHash, hitTrigger, warnIfMissing: false);
+    }
+
+    public void SetWeaponType(int weaponID)
+    {
+        SetIntParameter(_weaponTypeHash, weaponTypeParam, weaponID);
+    }
+
+    private void TriggerNetworked(int triggerHash, string triggerName, bool warnIfMissing = true)
+    {
+        if (animator == null) return;
+
+        if (!HasParameter(triggerHash, AnimatorControllerParameterType.Trigger))
+        {
+            if (warnIfMissing)
+                Debug.LogWarning($"[PlayerAnimModule] Trigger parameter not found: {triggerName}", this);
+            return;
+        }
+
+        if (networkAnimator != null)
+        {
+            networkAnimator.SetTrigger(triggerHash);
+            return;
+        }
+
+        animator.SetTrigger(triggerHash);
+    }
+
+    private void SetIntParameter(int paramHash, string paramName, int value)
+    {
+        if (animator == null) return;
+
+        if (!HasParameter(paramHash, AnimatorControllerParameterType.Int))
+        {
+            Debug.LogWarning($"[PlayerAnimModule] Int parameter not found: {paramName}", this);
+            return;
+        }
+
+        animator.SetInteger(paramHash, value);
+    }
+
+    private bool HasParameter(int paramHash, AnimatorControllerParameterType expectedType)
+    {
+        if (animator == null) return false;
+
+        AnimatorControllerParameter[] parameters = animator.parameters;
+        if (parameters == null) return false;
+
+        for (int i = 0; i < parameters.Length; i++)
+        {
+            AnimatorControllerParameter parameter = parameters[i];
+            if (parameter == null) continue;
+            if (parameter.nameHash != paramHash) continue;
+            return parameter.type == expectedType;
+        }
+
+        return false;
     }
 
 #if UNITY_EDITOR
