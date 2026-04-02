@@ -345,8 +345,8 @@ public class PlayerHub : NetworkBehaviour
         if (animModule != null)
             animModule.TriggerAttack(weaponAnimId);
 
-        if (combatModule != null)
-            combatModule.DoAttackServer();
+        // 실제 타격 판정은 공격 애니메이션 이벤트에서 처리합니다.
+        // (PickupAnimEventRelay -> AnimEvent_AttackHit -> PlayerCombatModule.DoAttackServer)
 
         if (_attackLockRoutine != null) StopCoroutine(_attackLockRoutine);
         _attackLockRoutine = StartCoroutine(ServerAttackLockRoutine());

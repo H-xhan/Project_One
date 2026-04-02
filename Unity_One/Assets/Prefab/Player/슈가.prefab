@@ -31,7 +31,7 @@ Transform:
   m_GameObject: {fileID: 744085754044551008}
   serializedVersion: 2
   m_LocalRotation: {x: -0, y: -0, z: -0, w: 1}
-  m_LocalPosition: {x: -3, y: -0.3000002, z: -3}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
   m_LocalScale: {x: 1, y: 1, z: 1}
   m_ConstrainProportionsScale: 0
   m_Children: []
@@ -64,6 +64,7 @@ MonoBehaviour:
   attackTrigger: Attack
   pickUpTrigger: PickUp
   hitTrigger: Hit
+  standUpBackTrigger: StandUpBack
 --- !u!114 &5562244057572314665
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -185,7 +186,19 @@ MonoBehaviour:
   ShowTopMostFoldoutHeaderGroup: 1
   rootRigidbody: {fileID: 2851017198822883728}
   charController: {fileID: 8782184542177483484}
+  locomotionModule: {fileID: 7163163093271237374}
   knockbackDuration: 1.2
+  standUpVelocityThreshold: 0.15
+  useVelocityChange: 1
+  knockbackVelocityScale: 0.35
+  allowKnockRotation: 1
+  animModule: {fileID: 6032066017176849164}
+  useBackStandUp: 1
+  disableControllerDuringStandUp: 1
+  standUpFallbackTime: 2
+  triggerHitOnDamage: 0
+  hitReactionCooldown: 0.12
+  triggerHitWhileKnocked: 0
   eliminationY: -15
 --- !u!1 &4265901228011405660
 GameObject:
@@ -1912,6 +1925,8 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: 
   interactModule: {fileID: 2709897059885907672}
+  statusModule: {fileID: 7247400059496916096}
+  combatModule: {fileID: 5562244057572314665}
 --- !u!114 &1692870032418172118
 MonoBehaviour:
   m_ObjectHideFlags: 0

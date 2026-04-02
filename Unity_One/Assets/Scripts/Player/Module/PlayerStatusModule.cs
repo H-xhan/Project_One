@@ -23,11 +23,23 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
     [Tooltip("질량 영향을 무시하고 바로 속도를 부여합니다. 작은 캐릭터 넉백에 더 잘 맞습니다.")]
     [SerializeField] private bool useVelocityChange = true;
 
-    [Tooltip("넉백 벡터를 몇 배로 적용할지 조절합니다.")]
-    [SerializeField] private float knockbackVelocityScale = 0.35f;
+    [Tooltip("수평 넉백 세기. 뒤로 미는 힘을 얼마나 줄지 조절합니다.")]
+    [SerializeField] private float horizontalLaunchScale = 0.65f;
+
+    [Tooltip("위로 띄우는 최소 속도. 이 값이 낮으면 미끄러지듯 밀립니다.")]
+    [SerializeField] private float minimumUpwardLaunch = 2.8f;
+
+    [Tooltip("기본 위쪽 힘에 추가로 더해줄 상승 보정값입니다.")]
+    [SerializeField] private float upwardLaunchBonus = 1.1f;
+
+    [Tooltip("옆으로/앞뒤로 구르도록 주는 회전 토크 세기입니다.")]
+    [SerializeField] private float tumbleTorque = 10f;
+
+    [Tooltip("약간의 랜덤 회전을 섞어 파티 애니멀즈처럼 덜 기계적으로 보이게 합니다.")]
+    [SerializeField] private float randomYawTorque = 2.5f;
 
     [Tooltip("진짜 물리로 굴릴지 여부. 꺼두면 회전은 고정된 채로 밀려납니다.")]
-    [SerializeField] private bool allowKnockRotation = false;
+    [SerializeField] private bool allowKnockRotation = true;
 
     [Header("Stand Up")]
     [Tooltip("기상 트리거를 보낼 애니메이션 모듈")]
@@ -213,6 +225,7 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
         rootRigidbody.isKinematic = false;
         rootRigidbody.useGravity = true;
         rootRigidbody.interpolation = RigidbodyInterpolation.Interpolate;
+        rootRigidbody.collisionDetectionMode = CollisionDetectionMode.ContinuousDynamic;
         rootRigidbody.WakeUp();
         rootRigidbody.linearVelocity = Vector3.zero;
         rootRigidbody.angularVelocity = Vector3.zero;
@@ -221,12 +234,31 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
             ? RigidbodyConstraints.None
             : cachedConstraints;
 
-        Vector3 launch = impulse * knockbackVelocityScale;
+        Vector3 flat = new Vector3(impulse.x, 0f, impulse.z);
+        Vector3 launch = flat * horizontalLaunchScale;
+        launch.y = Mathf.Max(minimumUpwardLaunch, impulse.y + upwardLaunchBonus);
 
         if (useVelocityChange)
             rootRigidbody.AddForce(launch, ForceMode.VelocityChange);
         else
             rootRigidbody.AddForce(launch, ForceMode.Impulse);
+
+        if (allowKnockRotation)
+        {
+            Vector3 axis = flat.sqrMagnitude > 0.0001f
+                ? Vector3.Cross(flat.normalized, Vector3.up)
+                : rootTransform != null ? rootTransform.right : Vector3.right;
+
+            Vector3 torque = axis * tumbleTorque + Vector3.up * Random.Range(-randomYawTorque, randomYawTorque);
+
+            if (useVelocityChange)
+                rootRigidbody.AddTorque(torque, ForceMode.VelocityChange);
+            else
+                rootRigidbody.AddTorque(torque, ForceMode.Impulse);
+
+            Debug.Log($"[PlayerStatus] Knockback launch:{launch}, torque:{torque}, mode:{(useVelocityChange ? "VelocityChange" : "Impulse")}, mass:{rootRigidbody.mass}");
+            return;
+        }
 
         Debug.Log($"[PlayerStatus] Knockback launch:{launch}, mode:{(useVelocityChange ? "VelocityChange" : "Impulse")}, mass:{rootRigidbody.mass}");
     }
@@ -277,7 +309,6 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
         FinishStandUpImmediate();
     }
 
-    // Back Stand Up 클립 이벤트에서 이 이름으로 불러도 됩니다.
     public void AnimEvent_StandUpBackFinished()
     {
         AnimEvent_StandUpFinished();
