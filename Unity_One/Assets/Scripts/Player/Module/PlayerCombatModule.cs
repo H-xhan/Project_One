@@ -98,7 +98,8 @@ public class PlayerCombatModule : NetworkBehaviour
 
         Log($"[PlayerCombat] Attack center:{center}, radius:{profile.radius}, distance:{profile.distance}");
 
-        Collider[] hits = Physics.OverlapSphere(center, profile.radius, targetMask, QueryTriggerInteraction.Ignore);
+        // 핵심: Trigger Hurtbox를 찾기 위해 Collide 사용
+        Collider[] hits = Physics.OverlapSphere(center, profile.radius, targetMask, QueryTriggerInteraction.Collide);
         Log($"[PlayerCombat] Overlap hits: {hits.Length}");
 
         if (hits == null || hits.Length == 0)
@@ -111,31 +112,38 @@ public class PlayerCombatModule : NetworkBehaviour
             Collider hit = hits[i];
             if (hit == null) continue;
 
-            Transform root = hit.transform.root;
-            if (root == originTf.root)
+            // Hurtbox만 맞춘다는 전제
+            if (!hit.isTrigger)
                 continue;
 
-            int rootId = root.gameObject.GetInstanceID();
+            Transform targetRoot = GetHitRoot(hit);
+            if (targetRoot == null)
+                continue;
+
+            if (targetRoot == originTf.root)
+                continue;
+
+            int rootId = targetRoot.gameObject.GetInstanceID();
             if (!processedRoots.Add(rootId))
                 continue;
 
-            Log($"[PlayerCombat] Hit root: {root.name}, collider: {hit.name}");
+            Log($"[PlayerCombat] Hurtbox hit: {hit.name}, targetRoot: {targetRoot.name}");
 
-            IDamageable damageable = root.GetComponentInChildren<IDamageable>(true);
+            IDamageable damageable = targetRoot.GetComponentInChildren<IDamageable>(true);
             if (damageable != null)
             {
-                Log($"[PlayerCombat] TakeDamage -> {root.name}, damage:{profile.damage}");
+                Log($"[PlayerCombat] TakeDamage -> {targetRoot.name}, damage:{profile.damage}");
                 damageable.TakeDamage(profile.damage);
             }
             else
             {
-                LogWarning($"[PlayerCombat] IDamageable not found on root: {root.name}");
+                LogWarning($"[PlayerCombat] IDamageable not found on root: {targetRoot.name}");
             }
 
-            PlayerStatusModule targetStatus = root.GetComponentInChildren<PlayerStatusModule>(true);
+            PlayerStatusModule targetStatus = targetRoot.GetComponentInChildren<PlayerStatusModule>(true);
             if (targetStatus == null)
             {
-                LogWarning($"[PlayerCombat] TargetStatus not found on root: {root.name}");
+                LogWarning($"[PlayerCombat] TargetStatus not found on root: {targetRoot.name}");
                 continue;
             }
 
@@ -240,6 +248,17 @@ public class PlayerCombatModule : NetworkBehaviour
     {
         if (!enableDebugLogs) return;
         Debug.LogWarning(message);
+    }
+
+    private Transform GetHitRoot(Collider hit)
+    {
+        if (hit == null)
+            return null;
+
+        if (hit.attachedRigidbody != null)
+            return hit.attachedRigidbody.transform;
+
+        return hit.transform.root;
     }
 
 #if UNITY_EDITOR
