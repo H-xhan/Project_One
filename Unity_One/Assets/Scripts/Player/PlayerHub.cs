@@ -89,7 +89,7 @@ public class PlayerHub : NetworkBehaviour
         }
 
         //if (!ShouldSkipInitialSpawnRoutine())
-            //StartCoroutine(SpawnPosRoutine());
+        //StartCoroutine(SpawnPosRoutine());
     }
 
     private IEnumerator SpawnPosRoutine()
@@ -221,8 +221,6 @@ public class PlayerHub : NetworkBehaviour
         _moveInput = move;
         _yawDelta = yawDelta;
         _pitchDelta = pitchDelta;
-
-        if (jumpPressed) _jumpPressed = true;
         _sprintHeld = sprintHeld;
 
         if (allowLook)
@@ -234,11 +232,13 @@ public class PlayerHub : NetworkBehaviour
         {
             _moveInput = Vector2.zero;
             _yawDelta = 0f;
-            _jumpPressed = false;
             _sprintHeld = false;
         }
 
-        SubmitInputServerRpc(_moveInput, _yawDelta, _jumpPressed, _sprintHeld);
+        SubmitInputServerRpc(_moveInput, _yawDelta, _sprintHeld);
+
+        if (jumpPressed && CanMoveNow())
+            QueueJumpServerRpc();
 
         if (attackPressed && CanAttackNow())
             AttackServerRpc();
@@ -296,12 +296,17 @@ public class PlayerHub : NetworkBehaviour
     }
 
     [ServerRpc(Delivery = RpcDelivery.Unreliable)]
-    private void SubmitInputServerRpc(Vector2 move, float yawDelta, bool jumpPressed, bool sprintHeld)
+    private void SubmitInputServerRpc(Vector2 move, float yawDelta, bool sprintHeld)
     {
         _moveInput = move;
         _yawDelta = yawDelta;
-        if (jumpPressed) _jumpPressed = true;
         _sprintHeld = sprintHeld;
+    }
+
+    [ServerRpc(Delivery = RpcDelivery.Reliable)]
+    private void QueueJumpServerRpc()
+    {
+        _jumpPressed = true;
     }
 
     [Rpc(SendTo.Server)]
