@@ -28,7 +28,6 @@ public class PickupAnimEventRelay : MonoBehaviour
             statusModule = GetComponentInChildren<PlayerStatusModule>(true);
     }
 
-    // Animation Event에서 호출할 함수 이름(클립 이벤트 Function에 이 이름을 넣기)
     public void AnimEvent_AttachHeldItem()
     {
         Debug.Log("[PickupAnimEventRelay] AnimEvent fired");
@@ -42,16 +41,30 @@ public class PickupAnimEventRelay : MonoBehaviour
         interactModule.AnimEvent_AttachHeldItem();
     }
 
-    // Back Stand Up 클립 마지막 프레임 이벤트에서 호출
+    public void AnimEvent_StandUpFinished()
+    {
+        ForwardStandUpFinished();
+    }
+
     public void AnimEvent_StandUpBackFinished()
     {
+        ForwardStandUpFinished();
+    }
+
+    private void ForwardStandUpFinished()
+    {
+        if (statusModule == null)
+        {
+            ResolveRefs();
+        }
+
         if (statusModule == null)
         {
             Debug.LogWarning("[PickupAnimEventRelay] statusModule is null");
             return;
         }
 
-        statusModule.AnimEvent_StandUpBackFinished();
+        statusModule.AnimEvent_StandUpFinished();
     }
 
 #if UNITY_EDITOR
