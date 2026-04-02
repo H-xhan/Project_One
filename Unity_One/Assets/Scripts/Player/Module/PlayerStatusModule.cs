@@ -13,6 +13,19 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
     [Tooltip("다운 상태 유지 시간(초)")]
     [SerializeField] private float knockbackDuration = 1.2f;
 
+    [Header("Hit Reaction")]
+    [Tooltip("피격 트리거를 보낼 애니메이션 모듈")]
+    [SerializeField] private PlayerAnimModule animModule;
+
+    [Tooltip("데미지를 받으면 Hit 트리거를 보낼지")]
+    [SerializeField] private bool triggerHitOnDamage = true;
+
+    [Tooltip("피격 트리거 최소 간격(초). 너무 짧으면 애니메이션이 과도하게 끊깁니다.")]
+    [SerializeField] private float hitReactionCooldown = 0.12f;
+
+    [Tooltip("다운 상태에서도 Hit 트리거를 허용할지")]
+    [SerializeField] private bool triggerHitWhileKnocked = false;
+
     [Header("Elimination")]
     [Tooltip("이 높이 아래로 떨어지면 탈락 처리되는 Y값")]
     [SerializeField] private float eliminationY = -15f;
@@ -20,6 +33,7 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
     private bool isKnocked;
     private bool isEliminated;
     private float knockTimer;
+    private float nextHitReactionAt;
 
     private NetworkObject rootNetObj;
     private Transform rootTransform;
@@ -74,6 +88,7 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
         RecoverFromKnock();
     }
 
+    [ContextMenu("Auto Find Refs")]
     private void ResolveRefs()
     {
         if (rootRigidbody == null)
@@ -81,6 +96,9 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
 
         if (charController == null)
             charController = GetComponentInParent<CharacterController>();
+
+        if (animModule == null)
+            animModule = GetComponentInParent<PlayerAnimModule>();
 
         if (rootNetObj == null)
             rootNetObj = GetComponentInParent<NetworkObject>();
@@ -129,7 +147,6 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
     {
         if (rootRigidbody != null)
         {
-            // Dynamic 상태일 때만 속도를 0으로 정리
             if (!rootRigidbody.isKinematic)
             {
                 rootRigidbody.linearVelocity = Vector3.zero;
@@ -153,7 +170,6 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
 
         if (rootRigidbody != null)
         {
-            // Dynamic 상태일 때만 속도를 0으로 정리
             if (!rootRigidbody.isKinematic)
             {
                 rootRigidbody.linearVelocity = Vector3.zero;
@@ -179,7 +195,22 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
 
     public void TakeDamage(float damage)
     {
+        if (!IsServer) return;
+        if (isEliminated) return;
+
         Debug.Log($"[PlayerStatus] TakeDamage -> {name}, damage:{damage}");
+        TryTriggerHitReaction();
+    }
+
+    private void TryTriggerHitReaction()
+    {
+        if (!triggerHitOnDamage) return;
+        if (animModule == null) return;
+        if (isKnocked && !triggerHitWhileKnocked) return;
+        if (Time.time < nextHitReactionAt) return;
+
+        nextHitReactionAt = Time.time + Mathf.Max(0f, hitReactionCooldown);
+        animModule.TriggerHit();
     }
 
 #if UNITY_EDITOR
