@@ -54,6 +54,9 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
     [Tooltip("애니메이션 이벤트가 누락됐을 때 강제로 standing으로 복귀시키는 최대 대기 시간(초)")]
     [SerializeField] private float standUpFallbackTime = 2.0f;
 
+    [Tooltip("기상 시작 시 루트 회전을 지면 기준으로 바로 세웁니다.")]
+    [SerializeField] private bool snapUprightOnStandUp = true;
+
     [Header("Hit Reaction")]
     [Tooltip("데미지를 받으면 Hit 트리거를 보낼지")]
     [SerializeField] private bool triggerHitOnDamage = false;
@@ -97,6 +100,7 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
     public override void OnNetworkSpawn()
     {
         base.OnNetworkSpawn();
+
         ResolveRefs();
         if (rootRigidbody != null)
             cachedConstraints = rootRigidbody.constraints;
@@ -286,6 +290,9 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
             rootRigidbody.Sleep();
         }
 
+        if (snapUprightOnStandUp)
+            SnapRootUpright();
+
         if (disableControllerDuringStandUp && charController != null && charController.enabled)
             charController.enabled = false;
 
@@ -299,6 +306,27 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
         }
 
         FinishStandUpImmediate();
+    }
+
+    private void SnapRootUpright()
+    {
+        if (rootTransform == null)
+            rootTransform = rootNetObj != null ? rootNetObj.transform : transform.root;
+        if (rootTransform == null)
+            return;
+
+        Vector3 forward = Vector3.ProjectOnPlane(rootTransform.forward, Vector3.up);
+        if (forward.sqrMagnitude < 0.0001f)
+            forward = Vector3.ProjectOnPlane(rootTransform.up, Vector3.up);
+        if (forward.sqrMagnitude < 0.0001f)
+            forward = Vector3.forward;
+
+        Quaternion upright = Quaternion.LookRotation(forward.normalized, Vector3.up);
+
+        if (rootRigidbody != null)
+            rootRigidbody.MoveRotation(upright);
+
+        rootTransform.rotation = upright;
     }
 
     public void AnimEvent_StandUpFinished()
@@ -316,6 +344,9 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
 
     private void FinishStandUpImmediate()
     {
+        if (snapUprightOnStandUp)
+            SnapRootUpright();
+
         isKnocked = false;
         isStandingUp = false;
         standUpTimer = 0f;

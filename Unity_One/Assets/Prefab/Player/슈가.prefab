@@ -187,10 +187,14 @@ MonoBehaviour:
   rootRigidbody: {fileID: 2851017198822883728}
   charController: {fileID: 8782184542177483484}
   locomotionModule: {fileID: 7163163093271237374}
-  knockbackDuration: 1.2
+  knockbackDuration: 1
   standUpVelocityThreshold: 0.15
   useVelocityChange: 1
-  knockbackVelocityScale: 0.35
+  horizontalLaunchScale: 0.3
+  minimumUpwardLaunch: 1
+  upwardLaunchBonus: 0.5
+  tumbleTorque: 5
+  randomYawTorque: 1
   allowKnockRotation: 1
   animModule: {fileID: 6032066017176849164}
   useBackStandUp: 1
@@ -851,6 +855,9 @@ PrefabInstance:
     - targetCorrespondingSourceObject: {fileID: 919132149155446097, guid: 83fbe5706b3039349abb894620751b26, type: 3}
       insertIndex: -1
       addedObject: {fileID: 1692870032418172118}
+    - targetCorrespondingSourceObject: {fileID: 919132149155446097, guid: 83fbe5706b3039349abb894620751b26, type: 3}
+      insertIndex: -1
+      addedObject: {fileID: 3687582813934808801}
     - targetCorrespondingSourceObject: {fileID: 3877284837222275464, guid: 83fbe5706b3039349abb894620751b26, type: 3}
       insertIndex: -1
       addedObject: {fileID: 1403265306979268750}
@@ -1756,16 +1763,16 @@ MonoBehaviour:
   SyncPositionX: 1
   SyncPositionY: 1
   SyncPositionZ: 1
-  SyncRotAngleX: 0
+  SyncRotAngleX: 1
   SyncRotAngleY: 1
-  SyncRotAngleZ: 0
+  SyncRotAngleZ: 1
   SyncScaleX: 0
   SyncScaleY: 0
   SyncScaleZ: 0
   PositionThreshold: 0.02
   RotAngleThreshold: 0.5
   ScaleThreshold: 0.01
-  UseQuaternionSynchronization: 0
+  UseQuaternionSynchronization: 1
   UseQuaternionCompression: 0
   UseHalfFloatPrecision: 0
   InLocalSpace: 0
@@ -1952,6 +1959,23 @@ MonoBehaviour:
   - {x: 0.132, y: 0}
   globalFineOffset: {x: 0, y: 0}
   holdSeconds: 3.5
+--- !u!114 &3687582813934808801
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 5339340507742051071}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: f6c0be61502bb534f922ebb746851216, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  ShowTopMostFoldoutHeaderGroup: 1
+  NetworkRigidbodyBaseExpanded: 0
+  UseRigidBodyForMotion: 0
+  AutoUpdateKinematicState: 1
+  AutoSetKinematicOnDespawn: 1
 --- !u!1 &5565051002022854831 stripped
 GameObject:
   m_CorrespondingSourceObject: {fileID: 856603465497814785, guid: 83fbe5706b3039349abb894620751b26, type: 3}
