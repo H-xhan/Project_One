@@ -24,7 +24,7 @@ TagManager:
   - Grabbable
   - Outline
   - Hurtbox
-  - 
+  - BodyBlocker
   - 
   - 
   - 

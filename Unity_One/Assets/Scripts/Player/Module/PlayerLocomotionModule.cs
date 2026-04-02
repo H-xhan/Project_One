@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using UnityEngine;
 
 public class PlayerLocomotionModule : MonoBehaviour
@@ -19,6 +20,13 @@ public class PlayerLocomotionModule : MonoBehaviour
 
     [Header("Rotate")]
     [SerializeField] private float yawScale = 1f;
+
+    [Header("Body Separation")]
+    [SerializeField] private LayerMask bodyBlockerMask;
+    [SerializeField] private float separationProbeRadius = 0.18f;
+    [SerializeField] private float separationProbeHeight = 0.18f;
+    [SerializeField] private float separationPadding = 0.02f;
+    [SerializeField] private float maxSeparationMove = 0.08f;
 
     private CharacterController _cc;
     private Vector3 _planarVelocity; // 수평 속도 (X, Z)
@@ -91,6 +99,7 @@ public class PlayerLocomotionModule : MonoBehaviour
         finalMotion.y = _verticalVelocity;
 
         _cc.Move(finalMotion * dt);
+        ResolveBodyOverlapServer();
 
         return didJump;
     }
@@ -99,4 +108,74 @@ public class PlayerLocomotionModule : MonoBehaviour
         _planarVelocity = Vector3.zero;
         _verticalVelocity = 0f;
     }
+    private void ResolveBodyOverlapServer()
+    {
+        if (_cc == null) return;
+
+        Vector3 selfCenter = _cc.transform.position + Vector3.up * separationProbeHeight;
+
+        Collider[] hits = Physics.OverlapSphere(
+            selfCenter,
+            separationProbeRadius,
+            bodyBlockerMask,
+            QueryTriggerInteraction.Collide
+        );
+
+        if (hits == null || hits.Length == 0)
+            return;
+
+        Vector3 totalPush = Vector3.zero;
+        int validCount = 0;
+        HashSet<int> processedRoots = new HashSet<int>();
+
+        for (int i = 0; i < hits.Length; i++)
+        {
+            Collider hit = hits[i];
+            if (hit == null) continue;
+
+            Transform otherRoot = hit.transform.root;
+            if (otherRoot == _cc.transform.root)
+                continue;
+
+            int rootId = otherRoot.gameObject.GetInstanceID();
+            if (!processedRoots.Add(rootId))
+                continue;
+
+            Vector3 otherCenter = hit.bounds.center;
+            Vector3 delta = selfCenter - otherCenter;
+            delta.y = 0f;
+
+            float dist = delta.magnitude;
+
+            float otherRadius = Mathf.Max(hit.bounds.extents.x, hit.bounds.extents.z);
+            float targetDist = separationProbeRadius + otherRadius + separationPadding;
+
+            if (dist < 0.0001f)
+            {
+                delta = -_cc.transform.forward;
+                dist = 0.0001f;
+            }
+            else
+            {
+                delta /= dist;
+            }
+
+            if (dist >= targetDist)
+                continue;
+
+            float pushAmount = targetDist - dist;
+            totalPush += delta * pushAmount;
+            validCount++;
+        }
+
+        if (validCount <= 0)
+            return;
+
+        Vector3 push = totalPush / validCount;
+        push.y = 0f;
+        push = Vector3.ClampMagnitude(push, maxSeparationMove);
+
+        _cc.Move(push);
+    }
+
 }
