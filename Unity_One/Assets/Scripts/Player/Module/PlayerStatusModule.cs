@@ -13,12 +13,18 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
     [Tooltip("다운 상태 유지 시간(초)")]
     [SerializeField] private float knockbackDuration = 1.2f;
 
+    [Tooltip("기상 가능 판정으로 볼 Rigidbody 속도 임계값")]
+    [SerializeField] private float standUpVelocityThreshold = 0.15f;
+
+    [Tooltip("애니 이벤트가 누락됐을 때 강제로 standing 상태로 복귀시키는 최대 대기 시간")]
+    [SerializeField] private float standUpFallbackDuration = 1.2f;
+
     [Header("Hit Reaction")]
     [Tooltip("피격 트리거를 보낼 애니메이션 모듈")]
     [SerializeField] private PlayerAnimModule animModule;
 
     [Tooltip("데미지를 받으면 Hit 트리거를 보낼지")]
-    [SerializeField] private bool triggerHitOnDamage = true;
+    [SerializeField] private bool triggerHitOnDamage = false;
 
     [Tooltip("피격 트리거 최소 간격(초). 너무 짧으면 애니메이션이 과도하게 끊깁니다.")]
     [SerializeField] private float hitReactionCooldown = 0.12f;
@@ -31,18 +37,22 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
     [SerializeField] private float eliminationY = -15f;
 
     private bool isKnocked;
+    private bool isStandingUp;
     private bool isEliminated;
     private float knockTimer;
+    private float standUpTimer;
     private float nextHitReactionAt;
 
     private NetworkObject rootNetObj;
     private Transform rootTransform;
 
     public bool IsKnocked => isKnocked;
+    public bool IsStandingUp => isStandingUp;
     public bool IsEliminated => isEliminated;
-    public bool CanMove => !isKnocked && !isEliminated;
-    public bool CanAttack => !isKnocked && !isEliminated;
-    public bool CanInteract => !isKnocked && !isEliminated;
+
+    public bool CanMove => !isKnocked && !isStandingUp && !isEliminated;
+    public bool CanAttack => !isKnocked && !isStandingUp && !isEliminated;
+    public bool CanInteract => !isKnocked && !isStandingUp && !isEliminated;
 
     private void Awake()
     {
@@ -62,6 +72,7 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
         if (isEliminated) return;
 
         UpdateKnockState();
+        UpdateStandUpState();
         CheckElimination();
     }
 
@@ -69,7 +80,7 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
     {
         if (!IsServer) return;
         if (isEliminated) return;
-        if (isKnocked) return;
+        if (isKnocked || isStandingUp) return;
 
         if (rootRigidbody == null || charController == null)
         {
@@ -83,9 +94,16 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
     public void ForceRecoverServer()
     {
         if (!IsServer) return;
-        if (!isKnocked) return;
 
-        RecoverFromKnock();
+        if (isKnocked)
+        {
+            knockTimer = 0f;
+            BeginStandUpBack();
+            return;
+        }
+
+        if (isStandingUp)
+            FinishStandUp();
     }
 
     [ContextMenu("Auto Find Refs")]
@@ -111,8 +129,29 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
         if (!isKnocked) return;
 
         knockTimer -= Time.deltaTime;
-        if (knockTimer <= 0f)
-            RecoverFromKnock();
+        if (knockTimer > 0f)
+            return;
+
+        if (rootRigidbody != null)
+        {
+            float speed = rootRigidbody.linearVelocity.magnitude;
+            if (speed > standUpVelocityThreshold)
+                return;
+        }
+
+        BeginStandUpBack();
+    }
+
+    private void UpdateStandUpState()
+    {
+        if (!isStandingUp) return;
+
+        standUpTimer -= Time.deltaTime;
+        if (standUpTimer > 0f)
+            return;
+
+        Debug.LogWarning("[PlayerStatus] Stand up fallback fired.");
+        FinishStandUp();
     }
 
     private void CheckElimination()
@@ -127,7 +166,9 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
     private void BeginKnockback(Vector3 impulse)
     {
         isKnocked = true;
+        isStandingUp = false;
         knockTimer = knockbackDuration;
+        standUpTimer = 0f;
 
         if (charController != null && charController.enabled)
             charController.enabled = false;
@@ -137,9 +178,41 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
         rootRigidbody.AddForce(impulse, ForceMode.Impulse);
     }
 
-    private void RecoverFromKnock()
+    private void BeginStandUpBack()
     {
+        if (isStandingUp) return;
+
         isKnocked = false;
+        isStandingUp = true;
+        knockTimer = 0f;
+        standUpTimer = Mathf.Max(0.1f, standUpFallbackDuration);
+
+        if (rootRigidbody != null)
+        {
+            rootRigidbody.linearVelocity = Vector3.zero;
+            rootRigidbody.angularVelocity = Vector3.zero;
+            rootRigidbody.isKinematic = true;
+            rootRigidbody.Sleep();
+        }
+
+        // 기상 애니메이션이 끝날 때까지 CharacterController는 꺼둡니다.
+        if (charController != null && charController.enabled)
+            charController.enabled = false;
+
+        if (animModule != null)
+        {
+            animModule.TriggerStandUpBack();
+        }
+        else
+        {
+            Debug.LogWarning("[PlayerStatus] animModule is null. Stand up animation skipped.");
+            FinishStandUp();
+        }
+    }
+
+    private void FinishStandUp()
+    {
+        isStandingUp = false;
         ApplyStandingPhysicsState();
     }
 
@@ -165,6 +238,8 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
     {
         if (isEliminated) return;
         isEliminated = true;
+        isKnocked = false;
+        isStandingUp = false;
 
         Debug.Log($"[PlayerStatus] {name} eliminated.");
 
@@ -200,6 +275,14 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
 
         Debug.Log($"[PlayerStatus] TakeDamage -> {name}, damage:{damage}");
         TryTriggerHitReaction();
+    }
+
+    public void AnimEvent_StandUpBackFinished()
+    {
+        if (!IsServer) return;
+        if (!isStandingUp) return;
+
+        FinishStandUp();
     }
 
     private void TryTriggerHitReaction()

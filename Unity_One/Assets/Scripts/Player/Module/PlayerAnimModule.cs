@@ -53,6 +53,9 @@ public class PlayerAnimModule : MonoBehaviour
     [Tooltip("피격 Trigger 파라미터 이름(Animator에 없으면 자동 무시)")]
     [SerializeField] private string hitTrigger = "Hit";
 
+    [Tooltip("등으로 누운 뒤 기상 Trigger 파라미터 이름")]
+    [SerializeField] private string standUpBackTrigger = "StandUpBack";
+
     private int _speedHash;
     private int _groundHash;
     private int _weaponTypeHash;
@@ -60,6 +63,7 @@ public class PlayerAnimModule : MonoBehaviour
     private int _attackHash;
     private int _pickUpHash;
     private int _hitHash;
+    private int _standUpBackHash;
 
     private NetworkObject _netObj;
 
@@ -90,6 +94,7 @@ public class PlayerAnimModule : MonoBehaviour
         _attackHash = Animator.StringToHash(attackTrigger);
         _pickUpHash = Animator.StringToHash(pickUpTrigger);
         _hitHash = Animator.StringToHash(hitTrigger);
+        _standUpBackHash = Animator.StringToHash(standUpBackTrigger);
     }
 
     private void Update()
@@ -169,6 +174,11 @@ public class PlayerAnimModule : MonoBehaviour
     public void TriggerHit()
     {
         TriggerNetworked(_hitHash, hitTrigger, warnIfMissing: false);
+    }
+
+    public void TriggerStandUpBack()
+    {
+        TriggerNetworked(_standUpBackHash, standUpBackTrigger, warnIfMissing: true);
     }
 
     public void SetWeaponType(int weaponID)
