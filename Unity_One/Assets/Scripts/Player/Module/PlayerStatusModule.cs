@@ -35,7 +35,7 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
     [Tooltip("옆으로/앞뒤로 구르도록 주는 회전 토크 세기입니다.")]
     [SerializeField] private float tumbleTorque = 10f;
 
-    [Tooltip("약간의 랜덤 회전을 섞어 파티 애니멀즈처럼 덜 기계적으로 보이게 합니다.")]
+    [Tooltip("약간의 랜덤 회전을 섞어 덜 기계적으로 보이게 합니다.")]
     [SerializeField] private float randomYawTorque = 2.5f;
 
     [Tooltip("진짜 물리로 굴릴지 여부. 꺼두면 회전은 고정된 채로 밀려납니다.")]
@@ -44,6 +44,9 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
     [Header("Stand Up")]
     [Tooltip("기상 트리거를 보낼 애니메이션 모듈")]
     [SerializeField] private PlayerAnimModule animModule;
+
+    [Tooltip("기상 애니메이션 상태 확인에 사용할 Animator")]
+    [SerializeField] private Animator rootAnimator;
 
     [Tooltip("다운 종료 후 Back Stand Up 애니메이션으로 기상할지")]
     [SerializeField] private bool useBackStandUp = true;
@@ -56,6 +59,25 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
 
     [Tooltip("기상 시작 시 루트 회전을 지면 기준으로 바로 세웁니다.")]
     [SerializeField] private bool snapUprightOnStandUp = true;
+
+    [Header("Ground Snap")]
+    [Tooltip("기상 완료 시 루트를 바닥에 맞춰 한 번 내려붙일지")]
+    [SerializeField] private bool snapToGroundOnStandUpFinish = true;
+
+    [Tooltip("바닥 검사 시작 높이")]
+    [SerializeField] private float groundProbeHeight = 1.2f;
+
+    [Tooltip("바닥 검사 최대 거리")]
+    [SerializeField] private float groundProbeDistance = 3.0f;
+
+    [Tooltip("기상 후 바닥에 살짝 띄워둘 보정값")]
+    [SerializeField] private float groundContactOffset = 0.01f;
+
+    [Tooltip("바닥 스냅에 사용할 레이어 마스크. 비워두면 기본 Raycast 레이어를 사용합니다.")]
+    [SerializeField] private LayerMask groundMask;
+
+    [Tooltip("루트/자식 자신의 콜라이더는 바닥 판정에서 무시합니다.")]
+    [SerializeField] private bool ignoreOwnCollidersOnGroundSnap = true;
 
     [Header("Hit Reaction")]
     [Tooltip("데미지를 받으면 Hit 트리거를 보낼지")]
@@ -164,6 +186,9 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
         if (animModule == null)
             animModule = GetComponentInParent<PlayerAnimModule>();
 
+        if (rootAnimator == null)
+            rootAnimator = GetComponentInParent<Animator>();
+
         if (rootNetObj == null)
             rootNetObj = GetComponentInParent<NetworkObject>();
 
@@ -192,6 +217,17 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
     private void UpdateStandUpState()
     {
         if (!isStandingUp) return;
+
+        // 이벤트가 씹히더라도 실제 상태 재생이 거의 끝나면 먼저 복귀시켜 fallback 의존도를 줄입니다.
+        if (rootAnimator != null)
+        {
+            AnimatorStateInfo state = rootAnimator.GetCurrentAnimatorStateInfo(0);
+            if (state.IsName("Back Stand Up") && state.normalizedTime >= 0.92f)
+            {
+                FinishStandUpImmediate();
+                return;
+            }
+        }
 
         standUpTimer -= Time.deltaTime;
         if (standUpTimer > 0f)
@@ -329,6 +365,52 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
         rootTransform.rotation = upright;
     }
 
+    private void SnapRootToGround()
+    {
+        if (!snapToGroundOnStandUpFinish)
+            return;
+
+        if (rootTransform == null)
+            return;
+
+        Vector3 origin = rootTransform.position + Vector3.up * Mathf.Max(0.1f, groundProbeHeight);
+        float distance = Mathf.Max(0.2f, groundProbeDistance);
+        int mask = groundMask.value == 0 ? Physics.DefaultRaycastLayers : groundMask.value;
+
+        RaycastHit[] hits = Physics.RaycastAll(origin, Vector3.down, distance, mask, QueryTriggerInteraction.Ignore);
+        if (hits == null || hits.Length == 0)
+            return;
+
+        System.Array.Sort(hits, (a, b) => a.distance.CompareTo(b.distance));
+
+        for (int i = 0; i < hits.Length; i++)
+        {
+            RaycastHit hit = hits[i];
+            if (hit.collider == null)
+                continue;
+
+            if (ignoreOwnCollidersOnGroundSnap && hit.collider.transform.root == rootTransform)
+                continue;
+
+            float bottomOffset = 0f;
+            if (charController != null)
+            {
+                float halfHeight = Mathf.Max(charController.radius, charController.height * 0.5f);
+                bottomOffset = charController.center.y - halfHeight;
+            }
+
+            float snappedY = hit.point.y - bottomOffset + groundContactOffset;
+            Vector3 snappedPos = new Vector3(rootTransform.position.x, snappedY, rootTransform.position.z);
+
+            if (rootRigidbody != null)
+                rootRigidbody.position = snappedPos;
+
+            rootTransform.position = snappedPos;
+            Physics.SyncTransforms();
+            return;
+        }
+    }
+
     public void AnimEvent_StandUpFinished()
     {
         if (!IsServer) return;
@@ -346,6 +428,9 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
     {
         if (snapUprightOnStandUp)
             SnapRootUpright();
+
+        if (snapToGroundOnStandUpFinish)
+            SnapRootToGround();
 
         isKnocked = false;
         isStandingUp = false;
