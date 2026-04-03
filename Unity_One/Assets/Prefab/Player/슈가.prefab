@@ -199,7 +199,8 @@ MonoBehaviour:
   animModule: {fileID: 6032066017176849164}
   useBackStandUp: 1
   disableControllerDuringStandUp: 1
-  standUpFallbackTime: 2
+  standUpFallbackTime: 3.6
+  snapUprightOnStandUp: 1
   triggerHitOnDamage: 0
   hitReactionCooldown: 0.12
   triggerHitWhileKnocked: 0
