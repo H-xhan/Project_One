@@ -55,7 +55,7 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
     [SerializeField] private bool disableControllerDuringStandUp = true;
 
     [Tooltip("애니메이션 이벤트가 누락됐을 때 강제로 standing으로 복귀시키는 최대 대기 시간(초)")]
-    [SerializeField] private float standUpFallbackTime = 2.0f;
+    [SerializeField] private float standUpFallbackTime = 3.6f;
 
     [Tooltip("기상 시작 시 루트 회전을 지면 기준으로 바로 세웁니다.")]
     [SerializeField] private bool snapUprightOnStandUp = true;
@@ -63,6 +63,15 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
     [Header("Ground Snap")]
     [Tooltip("기상 완료 시 루트를 바닥에 맞춰 한 번 내려붙일지")]
     [SerializeField] private bool snapToGroundOnStandUpFinish = true;
+
+    [Tooltip("기상 애니 재생 중에도 루트를 바닥에 계속 붙일지")]
+    [SerializeField] private bool snapToGroundDuringStandUp = true;
+
+    [Tooltip("기상 애니에서 이 normalized time 이후부터 ground snap을 시작합니다.")]
+    [SerializeField] private float standUpSnapStartNormalized = 0.10f;
+
+    [Tooltip("기상 완료 직후 CharacterController를 켠 다음 아래로 살짝 눌러 바닥에 붙입니다.")]
+    [SerializeField] private float postStandUpDownNudge = 0.02f;
 
     [Tooltip("바닥 검사 시작 높이")]
     [SerializeField] private float groundProbeHeight = 1.2f;
@@ -103,6 +112,7 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
     private NetworkObject rootNetObj;
     private Transform rootTransform;
     private RigidbodyConstraints cachedConstraints;
+    private int backStandUpStateHash;
 
     public bool IsKnocked => isKnocked;
     public bool IsStandingUp => isStandingUp;
@@ -114,6 +124,7 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
     private void Awake()
     {
         ResolveRefs();
+        backStandUpStateHash = Animator.StringToHash("Back Stand Up");
         if (rootRigidbody != null)
             cachedConstraints = rootRigidbody.constraints;
         ApplyStandingPhysicsState();
@@ -124,6 +135,7 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
         base.OnNetworkSpawn();
 
         ResolveRefs();
+        backStandUpStateHash = Animator.StringToHash("Back Stand Up");
         if (rootRigidbody != null)
             cachedConstraints = rootRigidbody.constraints;
     }
@@ -218,14 +230,21 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
     {
         if (!isStandingUp) return;
 
-        // 이벤트가 씹히더라도 실제 상태 재생이 거의 끝나면 먼저 복귀시켜 fallback 의존도를 줄입니다.
         if (rootAnimator != null)
         {
             AnimatorStateInfo state = rootAnimator.GetCurrentAnimatorStateInfo(0);
-            if (state.IsName("Back Stand Up") && state.normalizedTime >= 0.92f)
+            bool inBackStandUp = state.shortNameHash == backStandUpStateHash || state.IsName("Base Layer.Back Stand Up") || state.IsName("Back Stand Up");
+
+            if (inBackStandUp)
             {
-                FinishStandUpImmediate();
-                return;
+                if (snapToGroundDuringStandUp && state.normalizedTime >= standUpSnapStartNormalized && state.normalizedTime < 0.98f)
+                    SnapRootToGround();
+
+                if (state.normalizedTime >= 0.92f)
+                {
+                    FinishStandUpImmediate();
+                    return;
+                }
             }
         }
 
@@ -329,6 +348,9 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
         if (snapUprightOnStandUp)
             SnapRootUpright();
 
+        if (snapToGroundDuringStandUp)
+            SnapRootToGround();
+
         if (disableControllerDuringStandUp && charController != null && charController.enabled)
             charController.enabled = false;
 
@@ -367,7 +389,7 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
 
     private void SnapRootToGround()
     {
-        if (!snapToGroundOnStandUpFinish)
+        if (!snapToGroundOnStandUpFinish && !snapToGroundDuringStandUp)
             return;
 
         if (rootTransform == null)
@@ -457,7 +479,11 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
         }
 
         if (charController != null && !charController.enabled)
+        {
             charController.enabled = true;
+            if (postStandUpDownNudge > 0f)
+                charController.Move(Vector3.down * postStandUpDownNudge);
+        }
     }
 
     private void HandleElimination()
@@ -521,6 +547,7 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
     private void OnValidate()
     {
         ResolveRefs();
+        backStandUpStateHash = Animator.StringToHash("Back Stand Up");
     }
 #endif
 }

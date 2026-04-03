@@ -197,10 +197,19 @@ MonoBehaviour:
   randomYawTorque: 1
   allowKnockRotation: 1
   animModule: {fileID: 6032066017176849164}
+  rootAnimator: {fileID: 1707666485735594559}
   useBackStandUp: 1
   disableControllerDuringStandUp: 1
   standUpFallbackTime: 3.6
   snapUprightOnStandUp: 1
+  snapToGroundOnStandUpFinish: 1
+  groundProbeHeight: 1.2
+  groundProbeDistance: 3
+  groundContactOffset: 0.01
+  groundMask:
+    serializedVersion: 2
+    m_Bits: 9
+  ignoreOwnCollidersOnGroundSnap: 1
   triggerHitOnDamage: 0
   hitReactionCooldown: 0.12
   triggerHitWhileKnocked: 0
