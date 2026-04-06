@@ -516,12 +516,29 @@ public class PlayerInteractModule : NetworkBehaviour
 
         if (_useLocalHeldVisual)
         {
-            SetWorldItemPresentationState(_heldCache, false);
-            EnsureLocalHeldVisual();
-            _attached = true;
-            _pendingAttach = false;
-            if (_cc != null && !_cc.enabled)
-                _cc.enabled = true;
+            bool visualReady = EnsureLocalHeldVisual();
+            if (visualReady)
+            {
+                SetWorldItemPresentationState(_heldCache, false);
+                _attached = true;
+                _pendingAttach = false;
+                if (_cc != null && !_cc.enabled)
+                    _cc.enabled = true;
+            }
+            else if (fallbackToWorldAttachWhenNoVisual)
+            {
+                Log("[PlayerInteract] Local held visual unavailable. Fallback to world attach.");
+                SetWorldItemPresentationState(_heldCache, true);
+                _pendingAttach = true;
+                _attached = false;
+                _pendingStartTime = Time.time;
+            }
+            else
+            {
+                SetWorldItemPresentationState(_heldCache, true);
+                _attached = true;
+                _pendingAttach = false;
+            }
         }
         else
         {
@@ -541,26 +558,34 @@ public class PlayerInteractModule : NetworkBehaviour
         }
     }
 
-    private void EnsureLocalHeldVisual()
+    private bool EnsureLocalHeldVisual()
     {
         if (!_useLocalHeldVisual)
-            return;
+            return false;
 
         if (_cachedEquippedVisualPrefab == null)
-            return;
+        {
+            Log("[PlayerInteract] No equippedModelPrefab assigned.");
+            return false;
+        }
 
         Transform handSocket = GetTargetHandSocket();
         if (handSocket == null)
-            return;
+        {
+            Log("[PlayerInteract] Hand socket not found.");
+            return false;
+        }
 
         if (_localHeldVisualInstance == null || _localHeldVisualSourcePrefab != _cachedEquippedVisualPrefab)
         {
             DestroyLocalHeldVisual();
             _localHeldVisualInstance = Instantiate(_cachedEquippedVisualPrefab, handSocket);
             _localHeldVisualSourcePrefab = _cachedEquippedVisualPrefab;
+            Log($"[PlayerInteract] Spawn local held visual: {_cachedEquippedVisualPrefab.name}");
         }
 
         UpdateLocalHeldVisualTransform();
+        return _localHeldVisualInstance != null;
     }
 
     private void UpdateLocalHeldVisualTransform()
@@ -577,7 +602,11 @@ public class PlayerInteractModule : NetworkBehaviour
 
         _localHeldVisualInstance.transform.localPosition = _cachedLocalPos;
         _localHeldVisualInstance.transform.localRotation = Quaternion.Euler(_cachedLocalEuler);
-        _localHeldVisualInstance.transform.localScale = _cachedLocalScale == Vector3.zero ? Vector3.one : _cachedLocalScale;
+        Vector3 scale = _cachedLocalScale == Vector3.zero ? Vector3.one : _cachedLocalScale;
+        if (Mathf.Approximately(scale.x, 0f)) scale.x = 1f;
+        if (Mathf.Approximately(scale.y, 0f)) scale.y = 1f;
+        if (Mathf.Approximately(scale.z, 0f)) scale.z = 1f;
+        _localHeldVisualInstance.transform.localScale = scale;
     }
 
     private void DestroyLocalHeldVisual()

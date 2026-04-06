@@ -23,7 +23,7 @@ MonoBehaviour:
     hitDistance: 1
     hitRadius: 0.8
     damage: 10
-  equippedModelPrefab: {fileID: 0}
+  equippedModelPrefab: {fileID: 1459886359065782981, guid: d29be6a54b6f49146898017ea976affb, type: 3}
   hand: 0
   equippedLocalPosition: {x: 3.03, y: 0.0005, z: 0}
   equippedLocalEulerAngles: {x: 30, y: 85, z: 0}
