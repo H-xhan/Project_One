@@ -66,9 +66,12 @@ public class ReadySystem : NetworkBehaviour
     }
 
     [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Everyone)]
-    private void ToggleReadyServerRpc(ulong clientId)
+    private void ToggleReadyServerRpc(ulong clientId, RpcParams rpcParams = default)
     {
         if (!IsServer) return;
+
+        ulong senderId = rpcParams.Receive.SenderClientId;
+        clientId = senderId;
 
         if (readyClients.Contains(clientId))
         {

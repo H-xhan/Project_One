@@ -7659,7 +7659,7 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: 
   ShowTopMostFoldoutHeaderGroup: 1
-  minPlayersToStart: 2
+  minPlayersToStart: 1
 --- !u!1001 &2027238305
 PrefabInstance:
   m_ObjectHideFlags: 0

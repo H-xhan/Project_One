@@ -1,0 +1,88 @@
+# Project One Codex config
+# Save as: .codex/config.toml
+# Notes:
+# - Project-scoped config is loaded only when the repo is trusted.
+# - Default profile = one_impl
+
+profile = "one_impl"
+
+model = "gpt-5.4"
+review_model = "gpt-5.4"
+model_provider = "openai"
+
+personality = "pragmatic"
+model_reasoning_effort = "medium"
+plan_mode_reasoning_effort = "high"
+model_reasoning_summary = "auto"
+model_verbosity = "medium"
+
+approval_policy = "on-request"
+sandbox_mode = "workspace-write"
+web_search = "cached"
+project_root_markers = [".git"]
+file_opener = "vscode"
+
+hide_agent_reasoning = true
+show_raw_agent_reasoning = false
+
+[sandbox_workspace_write]
+writable_roots = []
+network_access = false
+exclude_tmpdir_env_var = false
+exclude_slash_tmp = false
+
+[profiles.one_plan]
+model = "gpt-5.4"
+review_model = "gpt-5.4"
+personality = "pragmatic"
+approval_policy = "untrusted"
+sandbox_mode = "read-only"
+model_reasoning_effort = "high"
+plan_mode_reasoning_effort = "high"
+model_reasoning_summary = "auto"
+model_verbosity = "medium"
+service_tier = "flex"
+web_search = "cached"
+tools_view_image = true
+
+[profiles.one_impl]
+model = "gpt-5.4"
+review_model = "gpt-5.4"
+personality = "pragmatic"
+approval_policy = "on-request"
+sandbox_mode = "workspace-write"
+model_reasoning_effort = "medium"
+plan_mode_reasoning_effort = "high"
+model_reasoning_summary = "auto"
+model_verbosity = "medium"
+service_tier = "fast"
+web_search = "cached"
+tools_view_image = true
+
+[profiles.one_review]
+model = "gpt-5.4"
+review_model = "gpt-5.4"
+personality = "pragmatic"
+approval_policy = "untrusted"
+sandbox_mode = "read-only"
+model_reasoning_effort = "high"
+plan_mode_reasoning_effort = "high"
+model_reasoning_summary = "auto"
+model_verbosity = "low"
+service_tier = "flex"
+web_search = "disabled"
+tools_view_image = true
+
+[profiles.one_fastfix]
+model = "gpt-5.4"
+review_model = "gpt-5.4"
+personality = "pragmatic"
+approval_policy = "on-request"
+sandbox_mode = "workspace-write"
+model_reasoning_effort = "low"
+plan_mode_reasoning_effort = "medium"
+model_reasoning_summary = "auto"
+model_verbosity = "low"
+service_tier = "fast"
+web_search = "disabled"
+tools_view_image = true

@@ -136,14 +136,19 @@ MonoBehaviour:
     serializedVersion: 2
     m_Bits: 640
   rightHandBone: {fileID: 1755140454431793062}
+  leftHandBone: {fileID: 1174202748955771476}
   defaultHeldLocalPosition: {x: 0, y: 0, z: 0}
   defaultHeldLocalEulerAngles: {x: 0, y: 0, z: 0}
+  defaultHeldLocalScale: {x: 1, y: 1, z: 1}
+  preferLocalHeldVisual: 1
+  fallbackToWorldAttachWhenNoVisual: 1
   disableCharacterControllerWhilePickingUp: 1
   pickupPendingTime: 1.5
   throwForwardForce: 5
   throwUpForce: 2
   dropHandForwardOffset: 0.15
   dropHandUpOffset: 0.05
+  enableDebugLogs: 1
 --- !u!114 &7163163093271237374
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -203,6 +208,9 @@ MonoBehaviour:
   standUpFallbackTime: 3.6
   snapUprightOnStandUp: 1
   snapToGroundOnStandUpFinish: 1
+  snapToGroundDuringStandUp: 1
+  standUpSnapStartNormalized: 0.1
+  postStandUpDownNudge: 0.02
   groundProbeHeight: 1.2
   groundProbeDistance: 3
   groundContactOffset: 0.01
@@ -672,6 +680,10 @@ PrefabInstance:
       propertyPath: m_Layer
       value: 6
       objectReference: {fileID: 0}
+    - target: {fileID: -2675929458809481904, guid: 83fbe5706b3039349abb894620751b26, type: 3}
+      propertyPath: 'm_Materials.Array.data[0]'
+      value: 
+      objectReference: {fileID: 0}
     - target: {fileID: -2554614221931307657, guid: 83fbe5706b3039349abb894620751b26, type: 3}
       propertyPath: m_Layer
       value: 6
@@ -965,6 +977,11 @@ PrefabInstance:
       insertIndex: -1
       addedObject: {fileID: 1091990902054636800}
   m_SourcePrefab: {fileID: 100100000, guid: 83fbe5706b3039349abb894620751b26, type: 3}
+--- !u!4 &1174202748955771476 stripped
+Transform:
+  m_CorrespondingSourceObject: {fileID: 6238566420592420346, guid: 83fbe5706b3039349abb894620751b26, type: 3}
+  m_PrefabInstance: {fileID: 5104913976712275886}
+  m_PrefabAsset: {fileID: 0}
 --- !u!95 &1707666485735594559 stripped
 Animator:
   m_CorrespondingSourceObject: {fileID: 5866666021909216657, guid: 83fbe5706b3039349abb894620751b26, type: 3}
