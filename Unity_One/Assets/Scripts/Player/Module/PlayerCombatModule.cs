@@ -21,9 +21,6 @@ public class PlayerCombatModule : NetworkBehaviour
     [Tooltip("장착 무기 SO가 없을 때 사용할 기본 공격 거리")]
     [SerializeField] private float hitDistance = 1.5f;
 
-    [Tooltip("장착 무기 SO가 없을 때 사용할 기본 데미지")]
-    [SerializeField] private float fallbackDamage = 10f;
-
     [Tooltip("장착 무기 SO가 없을 때 사용할 기본 공격 쿨타임")]
     [SerializeField] private float fallbackCooldown = 0.6f;
 
@@ -43,7 +40,6 @@ public class PlayerCombatModule : NetworkBehaviour
         public float cooldown;
         public float distance;
         public float radius;
-        public float damage;
         public float hitForce;
         public float upwardForce;
     }
@@ -129,17 +125,6 @@ public class PlayerCombatModule : NetworkBehaviour
 
             Log($"[PlayerCombat] Hurtbox hit: {hit.name}, targetRoot: {targetRoot.name}");
 
-            IDamageable damageable = targetRoot.GetComponentInChildren<IDamageable>(true);
-            if (damageable != null)
-            {
-                Log($"[PlayerCombat] TakeDamage -> {targetRoot.name}, damage:{profile.damage}");
-                damageable.TakeDamage(profile.damage);
-            }
-            else
-            {
-                LogWarning($"[PlayerCombat] IDamageable not found on root: {targetRoot.name}");
-            }
-
             PlayerStatusModule targetStatus = targetRoot.GetComponentInChildren<PlayerStatusModule>(true);
             if (targetStatus == null)
             {
@@ -169,73 +154,19 @@ public class PlayerCombatModule : NetworkBehaviour
             cooldown = fallbackCooldown,
             distance = hitDistance,
             radius = hitRadius,
-            damage = fallbackDamage,
             hitForce = hitForce,
             upwardForce = upwardForce
         };
 
-        if (TryGetHeldWeaponData(out WeaponItemDataSO weaponData) && weaponData != null)
+        WeaponItemDataSO weaponData = interactModule != null ? interactModule.GetHeldWeaponData() : null;
+        if (weaponData != null)
         {
             profile.cooldown = Mathf.Max(0.01f, weaponData.weapon.cooldown);
             profile.distance = Mathf.Max(0f, weaponData.weapon.hitDistance);
             profile.radius = Mathf.Max(0.01f, weaponData.weapon.hitRadius);
-            profile.damage = Mathf.Max(0f, weaponData.weapon.damage);
         }
 
         return profile;
-    }
-
-    private bool TryGetHeldWeaponData(out WeaponItemDataSO weaponData)
-    {
-        weaponData = null;
-
-        if (interactModule == null)
-            return false;
-
-        if (!interactModule.HasHeldItem())
-            return false;
-
-        ItemPickupNetwork[] pickups = FindObjectsByType<ItemPickupNetwork>(FindObjectsSortMode.None);
-        for (int i = 0; i < pickups.Length; i++)
-        {
-            ItemPickupNetwork pickup = pickups[i];
-            if (pickup == null || !pickup.IsSpawned)
-                continue;
-
-            NetworkObject netObj = pickup.NetworkObject;
-            if (netObj == null || !netObj.IsSpawned)
-                continue;
-
-            if (netObj.OwnerClientId != OwnerClientId)
-                continue;
-
-            Rigidbody rb = pickup.GetComponent<Rigidbody>();
-            if (rb != null && !rb.isKinematic)
-                continue;
-
-            if (!AreAllCollidersDisabled(pickup.gameObject))
-                continue;
-
-            weaponData = pickup.GetWeaponData();
-            return weaponData != null;
-        }
-
-        return false;
-    }
-
-    private bool AreAllCollidersDisabled(GameObject target)
-    {
-        Collider[] cols = target.GetComponentsInChildren<Collider>(true);
-        if (cols == null || cols.Length == 0)
-            return false;
-
-        for (int i = 0; i < cols.Length; i++)
-        {
-            if (cols[i] != null && cols[i].enabled)
-                return false;
-        }
-
-        return true;
     }
 
     private void Log(string message)

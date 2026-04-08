@@ -74,6 +74,7 @@ public class PlayerInteractModule : NetworkBehaviour
 
     private NetworkObject _heldCache;
     private ItemPickupNetwork _heldPickup;
+    private ItemDataSO _heldItemData;
     private WeaponItemDataSO _heldWeaponData;
 
     private int _cachedWeaponAnimId;
@@ -139,17 +140,8 @@ public class PlayerInteractModule : NetworkBehaviour
     {
         RestorePreviousWorldItemVisual(previousValue);
 
-        _heldCache = null;
-        _heldPickup = null;
-        _heldWeaponData = null;
-
-        _hasCachedMeta = false;
-        _cachedWeaponAnimId = 0;
-        _cachedLocalPos = defaultHeldLocalPosition;
-        _cachedLocalEuler = defaultHeldLocalEulerAngles;
-        _cachedLocalScale = defaultHeldLocalScale;
-        _cachedEquippedVisualPrefab = null;
-        _useLocalHeldVisual = false;
+        ClearHeldRuntimeCache();
+        ResetHeldMetaCache();
 
         _pendingAttach = false;
         _attached = false;
@@ -205,6 +197,27 @@ public class PlayerInteractModule : NetworkBehaviour
     public bool HasHeldItem()
     {
         return ResolveHeldCache();
+    }
+
+    public WeaponItemDataSO GetHeldWeaponData()
+    {
+        if (!ResolveHeldCache())
+        {
+            ClearHeldRuntimeCache();
+            ResetHeldMetaCache();
+            return null;
+        }
+
+        if (_heldPickup == null)
+        {
+            ResetHeldMetaCache();
+            return null;
+        }
+
+        if (_heldItemData == null && _heldWeaponData == null)
+            CacheHeldMeta();
+
+        return _heldWeaponData;
     }
 
     public bool TryFindPickupTarget(out NetworkObjectReference target)
@@ -360,11 +373,12 @@ public class PlayerInteractModule : NetworkBehaviour
         {
             _heldCache = netObj;
             _heldPickup = _heldCache != null ? _heldCache.GetComponent<ItemPickupNetwork>() : null;
+            _heldItemData = _heldPickup != null ? _heldPickup.itemData : null;
+            _heldWeaponData = _heldItemData as WeaponItemDataSO;
             return _heldCache != null && _heldCache.IsSpawned;
         }
 
-        _heldCache = null;
-        _heldPickup = null;
+        ClearHeldRuntimeCache();
         return false;
     }
 
@@ -471,19 +485,13 @@ public class PlayerInteractModule : NetworkBehaviour
 
     private void CacheHeldMeta()
     {
-        _hasCachedMeta = false;
-        _heldWeaponData = null;
-        _cachedWeaponAnimId = 0;
-        _cachedLocalPos = defaultHeldLocalPosition;
-        _cachedLocalEuler = defaultHeldLocalEulerAngles;
-        _cachedLocalScale = defaultHeldLocalScale;
-        _cachedEquippedVisualPrefab = null;
-        _useLocalHeldVisual = false;
+        ResetHeldMetaCache();
 
         if (!ResolveHeldCache()) return;
         if (_heldPickup == null) return;
 
-        _heldWeaponData = _heldPickup.GetWeaponData();
+        _heldItemData = _heldPickup.itemData;
+        _heldWeaponData = _heldItemData as WeaponItemDataSO;
         if (_heldWeaponData == null) return;
 
         _cachedWeaponAnimId = _heldWeaponData.weaponAnimID;
@@ -493,6 +501,27 @@ public class PlayerInteractModule : NetworkBehaviour
         _cachedEquippedVisualPrefab = _heldWeaponData.equippedModelPrefab;
         _hasCachedMeta = true;
         _useLocalHeldVisual = ShouldUseLocalHeldVisual(_heldWeaponData);
+    }
+
+    private void ClearHeldRuntimeCache()
+    {
+        _heldCache = null;
+        _heldPickup = null;
+        _heldItemData = null;
+        _heldWeaponData = null;
+    }
+
+    private void ResetHeldMetaCache()
+    {
+        _hasCachedMeta = false;
+        _heldItemData = null;
+        _heldWeaponData = null;
+        _cachedWeaponAnimId = 0;
+        _cachedLocalPos = defaultHeldLocalPosition;
+        _cachedLocalEuler = defaultHeldLocalEulerAngles;
+        _cachedLocalScale = defaultHeldLocalScale;
+        _cachedEquippedVisualPrefab = null;
+        _useLocalHeldVisual = false;
     }
 
     private bool ShouldUseLocalHeldVisual(WeaponItemDataSO weaponData)
