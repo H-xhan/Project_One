@@ -1,4 +1,5 @@
 using Unity.Netcode;
+using Unity.Netcode.Components;
 using UnityEngine;
 
 public class ItemPickupNetwork : NetworkBehaviour
@@ -19,7 +20,17 @@ public class ItemPickupNetwork : NetworkBehaviour
             NetworkVariableWritePermission.Server
         );
 
+    private NetworkTransform _networkTransform;
+    private Vector3 _defaultLocalScale = Vector3.one;
+    private bool _hasDefaultLocalScale;
+
     public int ItemId => itemData != null ? itemData.itemId : 0;
+
+    private void Awake()
+    {
+        CacheDefaultScale();
+        _networkTransform = GetComponent<NetworkTransform>();
+    }
 
     public WeaponItemDataSO GetWeaponData()
     {
@@ -56,6 +67,21 @@ public class ItemPickupNetwork : NetworkBehaviour
         return _worldVisualVisible.Value;
     }
 
+    public Vector3 GetDefaultLocalScale()
+    {
+        CacheDefaultScale();
+        return _defaultLocalScale;
+    }
+
+    public void ApplyPose(Vector3 worldPosition, Quaternion worldRotation, Vector3 worldScale, bool syncNetworkTransform)
+    {
+        transform.SetPositionAndRotation(worldPosition, worldRotation);
+        transform.localScale = worldScale;
+
+        if (syncNetworkTransform && IsServer && _networkTransform != null)
+            _networkTransform.Teleport(worldPosition, worldRotation, worldScale);
+    }
+
     private void ApplyWorldVisual(bool visible)
     {
         GameObject root = worldVisualRoot != null ? worldVisualRoot : gameObject;
@@ -66,5 +92,17 @@ public class ItemPickupNetwork : NetworkBehaviour
             if (renderers[i] == null) continue;
             renderers[i].enabled = visible;
         }
+    }
+
+    private void CacheDefaultScale()
+    {
+        if (_hasDefaultLocalScale)
+            return;
+
+        _defaultLocalScale = transform.localScale;
+        if (_defaultLocalScale == Vector3.zero)
+            _defaultLocalScale = Vector3.one;
+
+        _hasDefaultLocalScale = true;
     }
 }

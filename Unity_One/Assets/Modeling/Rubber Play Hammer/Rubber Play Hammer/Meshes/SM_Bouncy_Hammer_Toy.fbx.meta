@@ -1,5 +1,12 @@
 fileFormatVersion: 2
 guid: d11051d437e18004298fa6ac051c8c8f
+AssetOrigin:
+  serializedVersion: 1
+  productId: 319268
+  packageName: Rubber Play Hammer
+  packageVersion: 1.0
+  assetPath: Assets/Rubber Play Hammer/Rubber Play Hammer/Meshes/SM_Bouncy_Hammer_Toy.fbx
+  uploadId: 754204
 ModelImporter:
   serializedVersion: 22200
   internalIDToNameTable: []
@@ -88,7 +95,7 @@ ModelImporter:
     armStretch: 0.05
     legStretch: 0.05
     feetSpacing: 0
-    globalScale: 1
+    globalScale: 0.01
     rootMotionBoneName: 
     hasTranslationDoF: 0
     hasExtraRoot: 0
@@ -105,10 +112,3 @@ ModelImporter:
   userData: 
   assetBundleName: 
   assetBundleVariant: 
-AssetOrigin:
-  serializedVersion: 1
-  productId: 319268
-  packageName: Rubber Play Hammer
-  packageVersion: 1.0
-  assetPath: Assets/Rubber Play Hammer/Rubber Play Hammer/Meshes/SM_Bouncy_Hammer_Toy.fbx
-  uploadId: 754204

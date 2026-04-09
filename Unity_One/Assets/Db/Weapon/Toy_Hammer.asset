@@ -26,6 +26,6 @@ MonoBehaviour:
   equippedModelPrefab: {fileID: 7688174680710531816, guid: e072c4b553d07fe41807f8c44d86bafd, type: 3}
   hand: 0
   equippedLocalPosition: {x: 0, y: 0, z: 0}
-  equippedLocalEulerAngles: {x: 0, y: 0, z: 0}
-  equippedLocalScale: {x: 1, y: 1, z: 1}
+  equippedLocalEulerAngles: {x: 0, y: 0, z: 100}
+  equippedLocalScale: {x: 0.3, y: 0.3, z: 0.3}
   weaponAnimID: 1

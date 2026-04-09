@@ -83,7 +83,6 @@ MonoBehaviour:
   upwardForce: 3
   hitRadius: 1.1
   hitDistance: 1.5
-  fallbackDamage: 10
   fallbackCooldown: 0.6
   targetMask:
     serializedVersion: 2
@@ -136,10 +135,10 @@ MonoBehaviour:
     serializedVersion: 2
     m_Bits: 640
   rightHandBone: {fileID: 1755140454431793062}
-  leftHandBone: {fileID: 1174202748955771476}
+  leftHandBone: {fileID: 7447463752640382508}
   defaultHeldLocalPosition: {x: 0, y: 0, z: 0}
   defaultHeldLocalEulerAngles: {x: 0, y: 0, z: 0}
-  defaultHeldLocalScale: {x: 1, y: 1, z: 1}
+  defaultHeldLocalScale: {x: 0.3, y: 0.3, z: 0.3}
   preferLocalHeldVisual: 1
   fallbackToWorldAttachWhenNoVisual: 1
   disableCharacterControllerWhilePickingUp: 1
@@ -338,7 +337,7 @@ GameObject:
   m_Component:
   - component: {fileID: 1755140454431793062}
   m_Layer: 6
-  m_Name: WeaponPoint
+  m_Name: WeaponPoint_R
   m_TagString: Untagged
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
@@ -354,7 +353,7 @@ Transform:
   serializedVersion: 2
   m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
   m_LocalPosition: {x: 0, y: 0, z: 0}
-  m_LocalScale: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
   m_ConstrainProportionsScale: 0
   m_Children: []
   m_Father: {fileID: 5924990268861978791}
@@ -412,6 +411,37 @@ BoxCollider:
   serializedVersion: 3
   m_Size: {x: 0.3, y: 0.2, z: 0.3}
   m_Center: {x: 0, y: 0.3, z: 0}
+--- !u!1 &8160321152416541606
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 7447463752640382508}
+  m_Layer: 6
+  m_Name: WeaponPoint_L
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!4 &7447463752640382508
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 8160321152416541606}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 4736682178353342857}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
 --- !u!1 &8706449523312183928
 GameObject:
   m_ObjectHideFlags: 0
@@ -846,6 +876,9 @@ PrefabInstance:
     - targetCorrespondingSourceObject: {fileID: -8679921383154817045, guid: 83fbe5706b3039349abb894620751b26, type: 3}
       insertIndex: -1
       addedObject: {fileID: 5194486988593146935}
+    - targetCorrespondingSourceObject: {fileID: -8690716452175475161, guid: 83fbe5706b3039349abb894620751b26, type: 3}
+      insertIndex: -1
+      addedObject: {fileID: 7447463752640382508}
     - targetCorrespondingSourceObject: {fileID: -7718739340897632503, guid: 83fbe5706b3039349abb894620751b26, type: 3}
       insertIndex: -1
       addedObject: {fileID: 1755140454431793062}
@@ -977,11 +1010,6 @@ PrefabInstance:
       insertIndex: -1
       addedObject: {fileID: 1091990902054636800}
   m_SourcePrefab: {fileID: 100100000, guid: 83fbe5706b3039349abb894620751b26, type: 3}
---- !u!4 &1174202748955771476 stripped
-Transform:
-  m_CorrespondingSourceObject: {fileID: 6238566420592420346, guid: 83fbe5706b3039349abb894620751b26, type: 3}
-  m_PrefabInstance: {fileID: 5104913976712275886}
-  m_PrefabAsset: {fileID: 0}
 --- !u!95 &1707666485735594559 stripped
 Animator:
   m_CorrespondingSourceObject: {fileID: 5866666021909216657, guid: 83fbe5706b3039349abb894620751b26, type: 3}
@@ -1602,6 +1630,11 @@ CharacterJoint:
 --- !u!4 &4707094265180831813 stripped
 Transform:
   m_CorrespondingSourceObject: {fileID: -8679921383154817045, guid: 83fbe5706b3039349abb894620751b26, type: 3}
+  m_PrefabInstance: {fileID: 5104913976712275886}
+  m_PrefabAsset: {fileID: 0}
+--- !u!4 &4736682178353342857 stripped
+Transform:
+  m_CorrespondingSourceObject: {fileID: -8690716452175475161, guid: 83fbe5706b3039349abb894620751b26, type: 3}
   m_PrefabInstance: {fileID: 5104913976712275886}
   m_PrefabAsset: {fileID: 0}
 --- !u!1 &4809658698496681831 stripped

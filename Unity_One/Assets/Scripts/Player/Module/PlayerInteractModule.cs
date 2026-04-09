@@ -91,6 +91,8 @@ public class PlayerInteractModule : NetworkBehaviour
     private GameObject _localHeldVisualInstance;
     private GameObject _localHeldVisualSourcePrefab;
 
+    private const float MinSocketLossyScale = 0.0001f;
+
     public void SetOwnerMode(bool active)
     {
         _ownerMode = active;
@@ -156,42 +158,17 @@ public class PlayerInteractModule : NetworkBehaviour
 
     private void Update()
     {
-        // 로컬 비주얼 기반 held state는 월드 아이템을 손에 붙일 필요가 없어서 서버 pending attach를 사용하지 않음
-        if (IsServer && !_useLocalHeldVisual && _pendingAttach && !_attached)
+        if (_pendingAttach && !_attached)
         {
-            if (Time.time - _pendingStartTime >= pickupPendingTime)
+            if (Time.time - _pendingStartTime >= pickupPendingTime || TryApplyHeldWorldPose(false))
                 ForceAttach();
-        }
-
-        // 씬 로드 타이밍 때문에 손 본/메타가 늦게 준비됐을 때 재시도
-        if (_heldItem.Value.TryGet(out _) && _useLocalHeldVisual && _localHeldVisualInstance == null)
-        {
-            RefreshHeldPresentation();
         }
     }
 
     private void LateUpdate()
     {
-        if (_useLocalHeldVisual)
-        {
-            UpdateLocalHeldVisualTransform();
-            return;
-        }
-
-        if (!IsServer) return;
         if (!_attached) return;
-
-        if (!ResolveHeldCache()) return;
-        Transform handSocket = GetTargetHandSocket();
-        if (handSocket == null) return;
-
-        Vector3 localPos = _hasCachedMeta ? _cachedLocalPos : defaultHeldLocalPosition;
-        Vector3 localEuler = _hasCachedMeta ? _cachedLocalEuler : defaultHeldLocalEulerAngles;
-
-        Vector3 worldPos = handSocket.TransformPoint(localPos);
-        Quaternion worldRot = handSocket.rotation * Quaternion.Euler(localEuler);
-
-        _heldCache.transform.SetPositionAndRotation(worldPos, worldRot);
+        TryApplyHeldWorldPose(false);
     }
 
     public bool HasHeldItem()
@@ -255,23 +232,16 @@ public class PlayerInteractModule : NetworkBehaviour
         bool useLocalVisual = ShouldUseLocalHeldVisual(weaponData);
 
         SetHeldPhysics(netObj, true);
-
-        // local visual을 쓸 때는 월드 아이템을 로컬마다 숨긴다. 드랍 시 다시 켠다.
-        if (useLocalVisual)
-            SetWorldItemPresentationState(netObj, false);
+        SetWorldItemPresentationState(netObj, true);
 
         _heldItem.Value = target;
 
         if (!useLocalVisual && disableCharacterControllerWhilePickingUp && _cc != null && _cc.enabled)
             _cc.enabled = false;
 
-        if (useLocalVisual)
-        {
-            _attached = true;
-            _pendingAttach = false;
-            if (_cc != null && !_cc.enabled)
-                _cc.enabled = true;
-        }
+        ResolveHeldCache();
+        CacheHeldMeta();
+        RefreshHeldPresentation();
 
         Log($"[PlayerInteract] ServerTryPickup -> {netObj.name}, localVisual:{useLocalVisual}");
         return true;
@@ -294,12 +264,12 @@ public class PlayerInteractModule : NetworkBehaviour
         if (TryGetHandWorldPose(out Vector3 handPos, out Quaternion handRot))
         {
             Vector3 dropPos = handPos + transform.forward * dropHandForwardOffset + Vector3.up * dropHandUpOffset;
-            netObj.transform.SetPositionAndRotation(dropPos, handRot);
+            ApplyWorldItemPose(netObj, dropPos, handRot, GetDefaultWorldItemScale());
         }
         else
         {
             Vector3 dropPos = transform.position + transform.forward * 1.2f + Vector3.up * 1.0f;
-            netObj.transform.SetPositionAndRotation(dropPos, Quaternion.identity);
+            ApplyWorldItemPose(netObj, dropPos, Quaternion.identity, GetDefaultWorldItemScale());
         }
 
         SetWorldItemPresentationState(netObj, true);
@@ -346,22 +316,18 @@ public class PlayerInteractModule : NetworkBehaviour
     {
         if (!ResolveHeldCache()) return;
 
-        if (_useLocalHeldVisual)
-        {
-            _pendingAttach = false;
-            _attached = true;
-            RefreshHeldPresentation();
-            return;
-        }
-
         _pendingAttach = false;
-        _attached = true;
 
         if (_cc != null && !_cc.enabled)
             _cc.enabled = true;
 
-        if (TryGetHandWorldPose(out Vector3 handPos, out Quaternion handRot))
-            _heldCache.transform.SetPositionAndRotation(handPos, handRot);
+        _attached = TryApplyHeldWorldPose(true);
+
+        if (!_attached)
+        {
+            _pendingAttach = true;
+            _pendingStartTime = Time.time;
+        }
     }
 
     private bool ResolveHeldCache()
@@ -402,14 +368,29 @@ public class PlayerInteractModule : NetworkBehaviour
     {
         AutoFindRefs();
 
-        if (_heldWeaponData != null && _heldWeaponData.hand == WeaponHand.Left && leftHandBone != null)
-            return leftHandBone;
+        Transform humanoidRightHand = GetHumanoidHandBone(HumanBodyBones.RightHand);
+        Transform humanoidLeftHand = GetHumanoidHandBone(HumanBodyBones.LeftHand);
 
-        if (rightHandBone != null)
+        if (_heldWeaponData != null && _heldWeaponData.hand == WeaponHand.Left)
+        {
+            if (IsValidHandSocket(leftHandBone))
+                return leftHandBone;
+
+            if (IsValidHandSocket(humanoidLeftHand))
+                return humanoidLeftHand;
+        }
+
+        if (IsValidHandSocket(rightHandBone))
             return rightHandBone;
 
-        if (leftHandBone != null)
+        if (IsValidHandSocket(humanoidRightHand))
+            return humanoidRightHand;
+
+        if (IsValidHandSocket(leftHandBone))
             return leftHandBone;
+
+        if (IsValidHandSocket(humanoidLeftHand))
+            return humanoidLeftHand;
 
         return null;
     }
@@ -450,25 +431,17 @@ public class PlayerInteractModule : NetworkBehaviour
     {
         if (netObj == null) return;
 
-        Renderer[] renderers = netObj.GetComponentsInChildren<Renderer>(true);
-        for (int i = 0; i < renderers.Length; i++)
-        {
-            if (renderers[i] != null)
-                renderers[i].enabled = visible;
-        }
+        ItemPickupNetwork pickup = netObj.GetComponent<ItemPickupNetwork>();
+        if (pickup != null)
+            pickup.SetWorldVisualVisibleServer(visible);
+        else
+            SetRendererEnabled(netObj, visible);
 
         Canvas[] canvases = netObj.GetComponentsInChildren<Canvas>(true);
         for (int i = 0; i < canvases.Length; i++)
         {
             if (canvases[i] != null)
                 canvases[i].enabled = visible;
-        }
-
-        Collider[] cols = netObj.GetComponentsInChildren<Collider>(true);
-        for (int i = 0; i < cols.Length; i++)
-        {
-            if (cols[i] != null)
-                cols[i].enabled = visible;
         }
     }
 
@@ -500,7 +473,7 @@ public class PlayerInteractModule : NetworkBehaviour
         _cachedLocalScale = _heldWeaponData.equippedLocalScale == Vector3.zero ? Vector3.one : _heldWeaponData.equippedLocalScale;
         _cachedEquippedVisualPrefab = _heldWeaponData.equippedModelPrefab;
         _hasCachedMeta = true;
-        _useLocalHeldVisual = ShouldUseLocalHeldVisual(_heldWeaponData);
+        _useLocalHeldVisual = false;
     }
 
     private void ClearHeldRuntimeCache()
@@ -526,13 +499,7 @@ public class PlayerInteractModule : NetworkBehaviour
 
     private bool ShouldUseLocalHeldVisual(WeaponItemDataSO weaponData)
     {
-        if (!preferLocalHeldVisual)
-            return false;
-
-        if (weaponData == null)
-            return false;
-
-        return weaponData.equippedModelPrefab != null;
+        return false;
     }
 
     private void RefreshHeldPresentation()
@@ -540,51 +507,12 @@ public class PlayerInteractModule : NetworkBehaviour
         if (!ResolveHeldCache())
         {
             DestroyLocalHeldVisual();
+            ApplyHeldPresentationTransition(false, false, false);
             return;
         }
 
-        if (_useLocalHeldVisual)
-        {
-            bool visualReady = EnsureLocalHeldVisual();
-            if (visualReady)
-            {
-                SetWorldItemPresentationState(_heldCache, false);
-                _attached = true;
-                _pendingAttach = false;
-                if (_cc != null && !_cc.enabled)
-                    _cc.enabled = true;
-            }
-            else if (fallbackToWorldAttachWhenNoVisual)
-            {
-                Log("[PlayerInteract] Local held visual unavailable. Fallback to world attach.");
-                SetWorldItemPresentationState(_heldCache, true);
-                _pendingAttach = true;
-                _attached = false;
-                _pendingStartTime = Time.time;
-            }
-            else
-            {
-                SetWorldItemPresentationState(_heldCache, true);
-                _attached = true;
-                _pendingAttach = false;
-            }
-        }
-        else
-        {
-            DestroyLocalHeldVisual();
-
-            if (fallbackToWorldAttachWhenNoVisual)
-            {
-                _pendingAttach = true;
-                _attached = false;
-                _pendingStartTime = Time.time;
-            }
-            else
-            {
-                _pendingAttach = false;
-                _attached = true;
-            }
-        }
+        DestroyLocalHeldVisual();
+        ApplyHeldPresentationTransition(true, true, false);
     }
 
     private bool EnsureLocalHeldVisual()
@@ -631,11 +559,130 @@ public class PlayerInteractModule : NetworkBehaviour
 
         _localHeldVisualInstance.transform.localPosition = _cachedLocalPos;
         _localHeldVisualInstance.transform.localRotation = Quaternion.Euler(_cachedLocalEuler);
-        Vector3 scale = _cachedLocalScale == Vector3.zero ? Vector3.one : _cachedLocalScale;
-        if (Mathf.Approximately(scale.x, 0f)) scale.x = 1f;
-        if (Mathf.Approximately(scale.y, 0f)) scale.y = 1f;
-        if (Mathf.Approximately(scale.z, 0f)) scale.z = 1f;
-        _localHeldVisualInstance.transform.localScale = scale;
+        _localHeldVisualInstance.transform.localScale = SanitizeVisualScale(_cachedLocalScale);
+    }
+
+    private bool TryAttachWorldHeldItemImmediate()
+    {
+        return TryApplyHeldWorldPose(true);
+    }
+
+    private void ApplyHeldPresentationTransition(bool hasHeldItem, bool worldVisible, bool allowWorldAttachFallback)
+    {
+        if (!hasHeldItem || _heldCache == null)
+        {
+            _pendingAttach = false;
+            _attached = false;
+            return;
+        }
+
+        SetWorldItemPresentationState(_heldCache, worldVisible);
+        _attached = TryAttachWorldHeldItemImmediate();
+        _pendingAttach = !_attached;
+
+        if (_pendingAttach)
+            _pendingStartTime = Time.time;
+
+        if (_cc != null && !_cc.enabled)
+            _cc.enabled = true;
+    }
+
+    private void SetRendererEnabled(NetworkObject netObj, bool visible)
+    {
+        Renderer[] renderers = netObj.GetComponentsInChildren<Renderer>(true);
+        for (int i = 0; i < renderers.Length; i++)
+        {
+            if (renderers[i] != null)
+                renderers[i].enabled = visible;
+        }
+    }
+
+    private Transform GetHumanoidHandBone(HumanBodyBones handBone)
+    {
+        if (_anim == null || !_anim.isHuman)
+            return null;
+
+        return _anim.GetBoneTransform(handBone);
+    }
+
+    private bool IsValidHandSocket(Transform handSocket)
+    {
+        if (handSocket == null)
+            return false;
+
+        Vector3 lossyScale = handSocket.lossyScale;
+        if (!IsFinite(lossyScale.x) || !IsFinite(lossyScale.y) || !IsFinite(lossyScale.z))
+            return false;
+
+        return Mathf.Abs(lossyScale.x) > MinSocketLossyScale
+            && Mathf.Abs(lossyScale.y) > MinSocketLossyScale
+            && Mathf.Abs(lossyScale.z) > MinSocketLossyScale;
+    }
+
+    private Vector3 SanitizeVisualScale(Vector3 scale)
+    {
+        if (scale == Vector3.zero)
+            return Vector3.one;
+
+        if (!IsFinite(scale.x) || Mathf.Approximately(scale.x, 0f))
+            scale.x = 1f;
+
+        if (!IsFinite(scale.y) || Mathf.Approximately(scale.y, 0f))
+            scale.y = 1f;
+
+        if (!IsFinite(scale.z) || Mathf.Approximately(scale.z, 0f))
+            scale.z = 1f;
+
+        return scale;
+    }
+
+    private bool TryApplyHeldWorldPose(bool syncNetworkTransform)
+    {
+        if (!ResolveHeldCache())
+            return false;
+
+        if (!TryGetHandWorldPose(out Vector3 handPos, out Quaternion handRot))
+            return false;
+
+        ApplyWorldItemPose(_heldCache, handPos, handRot, GetHeldWorldScale(), syncNetworkTransform);
+        return true;
+    }
+
+    private void ApplyWorldItemPose(NetworkObject netObj, Vector3 worldPos, Quaternion worldRot, Vector3 worldScale, bool syncNetworkTransform = true)
+    {
+        if (netObj == null)
+            return;
+
+        ItemPickupNetwork pickup = netObj.GetComponent<ItemPickupNetwork>();
+        if (pickup != null)
+        {
+            pickup.ApplyPose(worldPos, worldRot, worldScale, syncNetworkTransform);
+            return;
+        }
+
+        netObj.transform.SetPositionAndRotation(worldPos, worldRot);
+        netObj.transform.localScale = worldScale;
+    }
+
+    private Vector3 GetHeldWorldScale()
+    {
+        return SanitizeVisualScale(_hasCachedMeta ? _cachedLocalScale : defaultHeldLocalScale);
+    }
+
+    private Vector3 GetDefaultWorldItemScale()
+    {
+        if (_heldPickup != null)
+            return SanitizeVisualScale(_heldPickup.GetDefaultLocalScale());
+
+        if (_heldCache != null)
+            return SanitizeVisualScale(_heldCache.transform.localScale);
+
+        return Vector3.one;
+    }
+
+    private bool IsFinite(float value)
+    {
+        return !float.IsNaN(value) && !float.IsInfinity(value);
     }
 
     private void DestroyLocalHeldVisual()
