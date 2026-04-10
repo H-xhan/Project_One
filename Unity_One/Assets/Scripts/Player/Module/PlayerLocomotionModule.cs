@@ -28,9 +28,13 @@ public class PlayerLocomotionModule : MonoBehaviour
     [SerializeField] private float separationPadding = 0.02f;
     [SerializeField] private float maxSeparationMove = 0.08f;
 
+    private const int BodyOverlapBufferSize = 16;
+
     private CharacterController _cc;
     private Vector3 _planarVelocity; // 수평 속도 (X, Z)
     private float _verticalVelocity; // 수직 속도 (Y)
+    private readonly Collider[] _bodyOverlapHits = new Collider[BodyOverlapBufferSize];
+    private readonly HashSet<int> _processedOverlapRoots = new HashSet<int>(BodyOverlapBufferSize);
 
     public bool IsGrounded => _cc != null && _cc.isGrounded;
     public float PlanarSpeed => new Vector2(_planarVelocity.x, _planarVelocity.z).magnitude;
@@ -112,33 +116,48 @@ public class PlayerLocomotionModule : MonoBehaviour
     {
         if (_cc == null) return;
 
-        Vector3 selfCenter = _cc.transform.position + Vector3.up * separationProbeHeight;
+        Transform ccTransform = _cc.transform;
+        Transform selfRoot = ccTransform.root;
+        Vector3 selfCenter = ccTransform.position + Vector3.up * separationProbeHeight;
 
-        Collider[] hits = Physics.OverlapSphere(
+        int hitCount = Physics.OverlapSphereNonAlloc(
             selfCenter,
             separationProbeRadius,
+            _bodyOverlapHits,
             bodyBlockerMask,
             QueryTriggerInteraction.Collide
         );
 
-        if (hits == null || hits.Length == 0)
+        Collider[] hits = _bodyOverlapHits;
+        if (hitCount >= _bodyOverlapHits.Length)
+        {
+            hits = Physics.OverlapSphere(
+                selfCenter,
+                separationProbeRadius,
+                bodyBlockerMask,
+                QueryTriggerInteraction.Collide
+            );
+            hitCount = hits != null ? hits.Length : 0;
+        }
+
+        if (hitCount <= 0)
             return;
 
         Vector3 totalPush = Vector3.zero;
         int validCount = 0;
-        HashSet<int> processedRoots = new HashSet<int>();
+        _processedOverlapRoots.Clear();
 
-        for (int i = 0; i < hits.Length; i++)
+        for (int i = 0; i < hitCount; i++)
         {
             Collider hit = hits[i];
             if (hit == null) continue;
 
             Transform otherRoot = hit.transform.root;
-            if (otherRoot == _cc.transform.root)
+            if (otherRoot == selfRoot)
                 continue;
 
             int rootId = otherRoot.gameObject.GetInstanceID();
-            if (!processedRoots.Add(rootId))
+            if (!_processedOverlapRoots.Add(rootId))
                 continue;
 
             Vector3 otherCenter = hit.bounds.center;
@@ -152,7 +171,7 @@ public class PlayerLocomotionModule : MonoBehaviour
 
             if (dist < 0.0001f)
             {
-                delta = -_cc.transform.forward;
+                delta = -ccTransform.forward;
                 dist = 0.0001f;
             }
             else
