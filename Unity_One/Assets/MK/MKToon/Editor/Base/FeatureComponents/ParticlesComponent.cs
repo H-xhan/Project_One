@@ -117,7 +117,9 @@ namespace MK.Toon.Editor
 
             foreach (var obj in  materialEditor.targets)
             {
-                #if UNITY_2023_1_OR_NEWER
+                #if UNITY_6000_5_OR_NEWER
+                ParticleSystemRenderer[] renderers = UnityEngine.Object.FindObjectsByType<ParticleSystemRenderer>();
+                #elif UNITY_2023_1_OR_NEWER
                 ParticleSystemRenderer[] renderers = UnityEngine.Object.FindObjectsByType<ParticleSystemRenderer>(FindObjectsSortMode.InstanceID);
                 #else
                 ParticleSystemRenderer[] renderers = UnityEngine.Object.FindObjectsOfType(typeof(ParticleSystemRenderer)) as ParticleSystemRenderer[];
