@@ -23,9 +23,9 @@ MonoBehaviour:
     hitDistance: 1
     hitRadius: 0.8
     damage: 10
-  equippedModelPrefab: {fileID: 1459886359065782981, guid: d29be6a54b6f49146898017ea976affb, type: 3}
+  equippedModelPrefab: {fileID: 8493323302479041937, guid: 54ee2aa20ace19840b642ccf40954033, type: 3}
   hand: 0
-  equippedLocalPosition: {x: 3.03, y: 0.0005, z: 0}
-  equippedLocalEulerAngles: {x: 30, y: 85, z: 0}
-  equippedLocalScale: {x: 1, y: 1, z: 1}
+  equippedLocalPosition: {x: 0, y: 0, z: 0}
+  equippedLocalEulerAngles: {x: 190, y: 0, z: 0}
+  equippedLocalScale: {x: 0.5, y: 0.5, z: 0.5}
   weaponAnimID: 1

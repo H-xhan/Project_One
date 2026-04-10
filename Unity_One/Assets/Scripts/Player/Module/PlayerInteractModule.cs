@@ -6,6 +6,7 @@ public class PlayerInteractModule : NetworkBehaviour
     private const float RequestedPosePositionEpsilon = 0.0005f;
     private const float RequestedPoseRotationEpsilon = 0.1f;
     private const float RequestedPoseScaleEpsilon = 0.0005f;
+    private const string RightWeaponSocketName = "RightWeaponSocket";
 
     [Header("Raycast")]
     [Tooltip("오너가 사용하는 카메라")]
@@ -94,6 +95,7 @@ public class PlayerInteractModule : NetworkBehaviour
 
     private GameObject _localHeldVisualInstance;
     private GameObject _localHeldVisualSourcePrefab;
+    private Transform _resolvedRightWeaponSocket;
     private Vector3 _lastRequestedHeldWorldPosition;
     private Quaternion _lastRequestedHeldWorldRotation = Quaternion.identity;
     private Vector3 _lastRequestedHeldWorldScale = Vector3.one;
@@ -135,15 +137,6 @@ public class PlayerInteractModule : NetworkBehaviour
 
         if (_anim == null)
             _anim = GetComponentInParent<Animator>();
-
-        if (_anim != null && _anim.isHuman)
-        {
-            if (rightHandBone == null)
-                rightHandBone = _anim.GetBoneTransform(HumanBodyBones.RightHand);
-
-            if (leftHandBone == null)
-                leftHandBone = _anim.GetBoneTransform(HumanBodyBones.LeftHand);
-        }
     }
 
     private void OnHeldItemChanged(NetworkObjectReference previousValue, NetworkObjectReference newValue)
@@ -240,8 +233,13 @@ public class PlayerInteractModule : NetworkBehaviour
         WeaponItemDataSO weaponData = pickup != null ? pickup.GetWeaponData() : null;
         bool useLocalVisual = ShouldUseLocalHeldVisual(weaponData);
 
-        SetHeldPhysics(netObj, true);
-        SetWorldItemPresentationState(netObj, true);
+        if (pickup != null)
+            pickup.SetHeldStateServer(true);
+        else
+        {
+            SetHeldPhysics(netObj, true);
+            SetWorldItemPresentationState(netObj, false);
+        }
 
         _heldItem.Value = target;
 
@@ -282,8 +280,13 @@ public class PlayerInteractModule : NetworkBehaviour
             ApplyWorldItemPose(netObj, dropPos, Quaternion.identity, GetDefaultWorldItemScale());
         }
 
-        SetWorldItemPresentationState(netObj, true);
-        SetHeldPhysics(netObj, false);
+        if (_heldPickup != null)
+            _heldPickup.SetHeldStateServer(false);
+        else
+        {
+            SetWorldItemPresentationState(netObj, true);
+            SetHeldPhysics(netObj, false);
+        }
 
         Rigidbody rb = netObj.GetComponent<Rigidbody>();
         if (rb != null)
@@ -379,6 +382,10 @@ public class PlayerInteractModule : NetworkBehaviour
     {
         AutoFindRefs();
 
+        Transform rightWeaponSocket = GetRightWeaponSocket();
+        if (IsValidHandSocket(rightWeaponSocket))
+            return rightWeaponSocket;
+
         Transform humanoidRightHand = GetHumanoidHandBone(HumanBodyBones.RightHand);
         Transform humanoidLeftHand = GetHumanoidHandBone(HumanBodyBones.LeftHand);
 
@@ -420,22 +427,16 @@ public class PlayerInteractModule : NetworkBehaviour
                 }
 
                 rb.isKinematic = true;
-                rb.detectCollisions = false;
                 rb.Sleep();
             }
             else
             {
                 rb.isKinematic = false;
-                rb.detectCollisions = true;
                 rb.linearVelocity = Vector3.zero;
                 rb.angularVelocity = Vector3.zero;
                 rb.WakeUp();
             }
         }
-
-        Collider[] cols = netObj.GetComponentsInChildren<Collider>(true);
-        for (int i = 0; i < cols.Length; i++)
-            cols[i].enabled = !held;
     }
 
     private void SetWorldItemPresentationState(NetworkObject netObj, bool visible)
@@ -484,7 +485,7 @@ public class PlayerInteractModule : NetworkBehaviour
         _cachedLocalScale = _heldWeaponData.equippedLocalScale == Vector3.zero ? Vector3.one : _heldWeaponData.equippedLocalScale;
         _cachedEquippedVisualPrefab = _heldWeaponData.equippedModelPrefab;
         _hasCachedMeta = true;
-        _useLocalHeldVisual = false;
+        _useLocalHeldVisual = ShouldUseLocalHeldVisual(_heldWeaponData);
     }
 
     private void ClearHeldRuntimeCache()
@@ -511,7 +512,25 @@ public class PlayerInteractModule : NetworkBehaviour
 
     private bool ShouldUseLocalHeldVisual(WeaponItemDataSO weaponData)
     {
-        return false;
+        if (!preferLocalHeldVisual)
+            return false;
+
+        if (weaponData == null || weaponData.equippedModelPrefab == null)
+            return false;
+
+        if (weaponData.equippedModelPrefab.GetComponentInChildren<NetworkObject>(true) != null)
+        {
+            Log($"[PlayerInteract] Equipped visual prefab '{weaponData.equippedModelPrefab.name}' contains NetworkObject. Local visual skipped.");
+            return false;
+        }
+
+        if (weaponData.equippedModelPrefab.GetComponentInChildren<NetworkBehaviour>(true) != null)
+        {
+            Log($"[PlayerInteract] Equipped visual prefab '{weaponData.equippedModelPrefab.name}' contains NetworkBehaviour. Local visual skipped.");
+            return false;
+        }
+
+        return true;
     }
 
     private void RefreshHeldPresentation()
@@ -523,8 +542,14 @@ public class PlayerInteractModule : NetworkBehaviour
             return;
         }
 
+        if (EnsureLocalHeldVisual())
+        {
+            ApplyHeldPresentationTransition(true, false, false);
+            return;
+        }
+
         DestroyLocalHeldVisual();
-        ApplyHeldPresentationTransition(true, true, false);
+        ApplyHeldPresentationTransition(true, true, fallbackToWorldAttachWhenNoVisual);
     }
 
     private bool EnsureLocalHeldVisual()
@@ -538,18 +563,20 @@ public class PlayerInteractModule : NetworkBehaviour
             return false;
         }
 
-        Transform handSocket = GetTargetHandSocket();
+        Transform handSocket = GetRightWeaponSocket();
         if (handSocket == null)
         {
-            Log("[PlayerInteract] Hand socket not found.");
+            Log("[PlayerInteract] RightWeaponSocket not found. Local held visual skipped.");
             return false;
         }
 
         if (_localHeldVisualInstance == null || _localHeldVisualSourcePrefab != _cachedEquippedVisualPrefab)
         {
             DestroyLocalHeldVisual();
-            _localHeldVisualInstance = Instantiate(_cachedEquippedVisualPrefab, handSocket);
+            _localHeldVisualInstance = Instantiate(_cachedEquippedVisualPrefab);
+            _localHeldVisualInstance.transform.SetParent(handSocket, false);
             _localHeldVisualSourcePrefab = _cachedEquippedVisualPrefab;
+            DisableLocalHeldVisualPhysics(_localHeldVisualInstance);
             Log($"[PlayerInteract] Spawn local held visual: {_cachedEquippedVisualPrefab.name}");
         }
 
@@ -562,7 +589,7 @@ public class PlayerInteractModule : NetworkBehaviour
         if (_localHeldVisualInstance == null)
             return;
 
-        Transform handSocket = GetTargetHandSocket();
+        Transform handSocket = GetRightWeaponSocket();
         if (handSocket == null)
             return;
 
@@ -572,6 +599,31 @@ public class PlayerInteractModule : NetworkBehaviour
         _localHeldVisualInstance.transform.localPosition = _cachedLocalPos;
         _localHeldVisualInstance.transform.localRotation = Quaternion.Euler(_cachedLocalEuler);
         _localHeldVisualInstance.transform.localScale = SanitizeVisualScale(_cachedLocalScale);
+    }
+
+    private void DisableLocalHeldVisualPhysics(GameObject visualRoot)
+    {
+        if (visualRoot == null)
+            return;
+
+        Collider[] colliders = visualRoot.GetComponentsInChildren<Collider>(true);
+        for (int i = 0; i < colliders.Length; i++)
+        {
+            if (colliders[i] != null)
+                colliders[i].enabled = false;
+        }
+
+        Rigidbody[] rigidbodies = visualRoot.GetComponentsInChildren<Rigidbody>(true);
+        for (int i = 0; i < rigidbodies.Length; i++)
+        {
+            if (rigidbodies[i] == null)
+                continue;
+
+            rigidbodies[i].isKinematic = true;
+            rigidbodies[i].useGravity = false;
+            rigidbodies[i].linearVelocity = Vector3.zero;
+            rigidbodies[i].angularVelocity = Vector3.zero;
+        }
     }
 
     private bool TryAttachWorldHeldItemImmediate()
@@ -589,8 +641,8 @@ public class PlayerInteractModule : NetworkBehaviour
         }
 
         SetWorldItemPresentationState(_heldCache, worldVisible);
-        _attached = TryAttachWorldHeldItemImmediate();
-        _pendingAttach = !_attached;
+        _attached = allowWorldAttachFallback && TryAttachWorldHeldItemImmediate();
+        _pendingAttach = allowWorldAttachFallback && !_attached;
 
         if (_pendingAttach)
             _pendingStartTime = Time.time;
@@ -629,6 +681,48 @@ public class PlayerInteractModule : NetworkBehaviour
         return Mathf.Abs(lossyScale.x) > MinSocketLossyScale
             && Mathf.Abs(lossyScale.y) > MinSocketLossyScale
             && Mathf.Abs(lossyScale.z) > MinSocketLossyScale;
+    }
+
+    private Transform GetRightWeaponSocket()
+    {
+        AutoFindRefs();
+
+        if (IsConfiguredRightWeaponSocket(rightHandBone))
+        {
+            _resolvedRightWeaponSocket = rightHandBone;
+            return _resolvedRightWeaponSocket;
+        }
+
+        if (IsValidHandSocket(_resolvedRightWeaponSocket))
+            return _resolvedRightWeaponSocket;
+
+        Transform[] childTransforms = GetComponentsInChildren<Transform>(true);
+        for (int i = 0; i < childTransforms.Length; i++)
+        {
+            Transform candidate = childTransforms[i];
+            if (candidate == null || candidate.name != RightWeaponSocketName)
+                continue;
+
+            if (!IsValidHandSocket(candidate))
+                continue;
+
+            _resolvedRightWeaponSocket = candidate;
+            return _resolvedRightWeaponSocket;
+        }
+
+        return null;
+    }
+
+    private bool IsConfiguredRightWeaponSocket(Transform candidate)
+    {
+        if (!IsValidHandSocket(candidate))
+            return false;
+
+        Transform humanoidRightHand = GetHumanoidHandBone(HumanBodyBones.RightHand);
+        if (candidate == humanoidRightHand)
+            return false;
+
+        return true;
     }
 
     private Vector3 SanitizeVisualScale(Vector3 scale)

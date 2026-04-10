@@ -24,9 +24,26 @@ public class ItemPickupNetwork : NetworkBehaviour
             NetworkVariableWritePermission.Server
         );
 
+    private readonly NetworkVariable<bool> _heldState =
+        new NetworkVariable<bool>(
+            false,
+            NetworkVariableReadPermission.Everyone,
+            NetworkVariableWritePermission.Server
+        );
+
     private NetworkTransform _networkTransform;
     private Vector3 _defaultLocalScale = Vector3.one;
     private bool _hasDefaultLocalScale;
+    private Renderer[] _cachedRenderers;
+    private bool[] _cachedRendererEnabledStates;
+    private Collider[] _cachedColliders;
+    private bool[] _cachedColliderEnabledStates;
+    private bool _hasCachedHeldDisabledState;
+    private Rigidbody _cachedRigidbody;
+    private bool _cachedIsKinematic;
+    private bool _cachedUseGravity;
+    private bool _cachedDetectCollisions;
+    private bool _hasCachedRigidbodyState;
     private Vector3 _lastAppliedWorldPosition;
     private Quaternion _lastAppliedWorldRotation = Quaternion.identity;
     private Vector3 _lastAppliedWorldScale = Vector3.one;
@@ -49,19 +66,33 @@ public class ItemPickupNetwork : NetworkBehaviour
     {
         base.OnNetworkSpawn();
         _worldVisualVisible.OnValueChanged += OnWorldVisualChanged;
+        _heldState.OnValueChanged += OnHeldStateChanged;
         ApplyWorldVisual(_worldVisualVisible.Value);
+        ApplyHeldStateLocal(_heldState.Value);
+
+        if (IsServer)
+            ApplyHeldPhysicsAuthoritatively(_heldState.Value);
     }
 
     public override void OnNetworkDespawn()
     {
         _worldVisualVisible.OnValueChanged -= OnWorldVisualChanged;
+        _heldState.OnValueChanged -= OnHeldStateChanged;
         _hasLastAppliedPose = false;
         base.OnNetworkDespawn();
     }
 
     private void OnWorldVisualChanged(bool previousValue, bool newValue)
     {
+        if (_heldState.Value)
+            return;
+
         ApplyWorldVisual(newValue);
+    }
+
+    private void OnHeldStateChanged(bool previousValue, bool newValue)
+    {
+        ApplyHeldStateLocal(newValue);
     }
 
     public void SetWorldVisualVisibleServer(bool visible)
@@ -74,6 +105,22 @@ public class ItemPickupNetwork : NetworkBehaviour
     public bool IsWorldVisualVisible()
     {
         return _worldVisualVisible.Value;
+    }
+
+    internal void SetHeldStateServer(bool held)
+    {
+        if (!IsServer)
+            return;
+
+        if (_heldState.Value == held)
+        {
+            ApplyHeldPhysicsAuthoritatively(held);
+            ApplyHeldStateLocal(held);
+            return;
+        }
+
+        _heldState.Value = held;
+        ApplyHeldPhysicsAuthoritatively(held);
     }
 
     public Vector3 GetDefaultLocalScale()
@@ -119,6 +166,137 @@ public class ItemPickupNetwork : NetworkBehaviour
         {
             if (renderers[i] == null) continue;
             renderers[i].enabled = visible;
+        }
+    }
+
+    private void ApplyHeldStateLocal(bool held)
+    {
+        if (held)
+        {
+            CacheHeldDisabledState();
+            SetCachedRenderersEnabled(false);
+            SetCachedCollidersEnabled(false);
+            return;
+        }
+
+        RestoreCachedRenderers();
+        RestoreCachedColliders();
+    }
+
+    private void ApplyHeldPhysicsAuthoritatively(bool held)
+    {
+        Rigidbody rb = GetComponent<Rigidbody>();
+        if (rb == null)
+            return;
+
+        if (held)
+        {
+            if (!_hasCachedRigidbodyState)
+            {
+                _cachedRigidbody = rb;
+                _cachedIsKinematic = rb.isKinematic;
+                _cachedUseGravity = rb.useGravity;
+                _cachedDetectCollisions = rb.detectCollisions;
+                _hasCachedRigidbodyState = true;
+            }
+
+            if (!rb.isKinematic)
+            {
+                rb.linearVelocity = Vector3.zero;
+                rb.angularVelocity = Vector3.zero;
+            }
+
+            rb.useGravity = false;
+            rb.isKinematic = true;
+            rb.detectCollisions = false;
+            rb.Sleep();
+            return;
+        }
+
+        if (!_hasCachedRigidbodyState || _cachedRigidbody == null)
+            return;
+
+        rb.useGravity = _cachedUseGravity;
+        rb.isKinematic = _cachedIsKinematic;
+        rb.detectCollisions = _cachedDetectCollisions;
+        rb.linearVelocity = Vector3.zero;
+        rb.angularVelocity = Vector3.zero;
+        rb.WakeUp();
+        _hasCachedRigidbodyState = false;
+        _cachedRigidbody = null;
+    }
+
+    private void CacheHeldDisabledState()
+    {
+        if (_hasCachedHeldDisabledState)
+            return;
+
+        _cachedRenderers = GetComponentsInChildren<Renderer>(true);
+        _cachedRendererEnabledStates = new bool[_cachedRenderers.Length];
+        for (int i = 0; i < _cachedRenderers.Length; i++)
+        {
+            Renderer renderer = _cachedRenderers[i];
+            _cachedRendererEnabledStates[i] = renderer != null && renderer.enabled;
+        }
+
+        _cachedColliders = GetComponentsInChildren<Collider>(true);
+        _cachedColliderEnabledStates = new bool[_cachedColliders.Length];
+        for (int i = 0; i < _cachedColliders.Length; i++)
+        {
+            Collider collider = _cachedColliders[i];
+            _cachedColliderEnabledStates[i] = collider != null && collider.enabled;
+        }
+
+        _hasCachedHeldDisabledState = true;
+    }
+
+    private void RestoreCachedRenderers()
+    {
+        if (_cachedRenderers == null || _cachedRendererEnabledStates == null)
+            return;
+
+        for (int i = 0; i < _cachedRenderers.Length; i++)
+        {
+            if (_cachedRenderers[i] != null)
+                _cachedRenderers[i].enabled = _cachedRendererEnabledStates[i];
+        }
+    }
+
+    private void RestoreCachedColliders()
+    {
+        if (_cachedColliders == null || _cachedColliderEnabledStates == null)
+            return;
+
+        for (int i = 0; i < _cachedColliders.Length; i++)
+        {
+            if (_cachedColliders[i] != null)
+                _cachedColliders[i].enabled = _cachedColliderEnabledStates[i];
+        }
+
+        _hasCachedHeldDisabledState = false;
+    }
+
+    private void SetCachedRenderersEnabled(bool enabled)
+    {
+        if (_cachedRenderers == null)
+            return;
+
+        for (int i = 0; i < _cachedRenderers.Length; i++)
+        {
+            if (_cachedRenderers[i] != null)
+                _cachedRenderers[i].enabled = enabled;
+        }
+    }
+
+    private void SetCachedCollidersEnabled(bool enabled)
+    {
+        if (_cachedColliders == null)
+            return;
+
+        for (int i = 0; i < _cachedColliders.Length; i++)
+        {
+            if (_cachedColliders[i] != null)
+                _cachedColliders[i].enabled = enabled;
         }
     }
 

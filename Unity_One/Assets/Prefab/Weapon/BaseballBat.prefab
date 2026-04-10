@@ -18,7 +18,7 @@ GameObject:
   - component: {fileID: 9027519655525707838}
   - component: {fileID: -572693991534862960}
   m_Layer: 9
-  m_Name: BaseballBat_01
+  m_Name: BaseballBat
   m_TagString: Item
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
@@ -131,7 +131,7 @@ MonoBehaviour:
   m_EditorClassIdentifier: 
   ShowTopMostFoldoutHeaderGroup: 1
   itemData: {fileID: 11400000, guid: 77968b6e9abadf74eb91ecce29b72226, type: 2}
-  worldVisualRoot: {fileID: 0}
+  worldVisualRoot: {fileID: 1459886359065782981}
   hideWorldVisualWhenHeld: 0
 --- !u!54 &4667506620498172237
 Rigidbody:
