@@ -3,6 +3,10 @@ using UnityEngine;
 
 public class PlayerInteractModule : NetworkBehaviour
 {
+    private const float RequestedPosePositionEpsilon = 0.0005f;
+    private const float RequestedPoseRotationEpsilon = 0.1f;
+    private const float RequestedPoseScaleEpsilon = 0.0005f;
+
     [Header("Raycast")]
     [Tooltip("오너가 사용하는 카메라")]
     [SerializeField] private Camera ownerCamera;
@@ -90,6 +94,10 @@ public class PlayerInteractModule : NetworkBehaviour
 
     private GameObject _localHeldVisualInstance;
     private GameObject _localHeldVisualSourcePrefab;
+    private Vector3 _lastRequestedHeldWorldPosition;
+    private Quaternion _lastRequestedHeldWorldRotation = Quaternion.identity;
+    private Vector3 _lastRequestedHeldWorldScale = Vector3.one;
+    private bool _hasLastRequestedHeldPose;
 
     private const float MinSocketLossyScale = 0.0001f;
 
@@ -148,6 +156,7 @@ public class PlayerInteractModule : NetworkBehaviour
         _pendingAttach = false;
         _attached = false;
         _pendingStartTime = Time.time;
+        _hasLastRequestedHeldPose = false;
 
         DestroyLocalHeldVisual();
 
@@ -257,6 +266,7 @@ public class PlayerInteractModule : NetworkBehaviour
 
         _attached = false;
         _pendingAttach = false;
+        _hasLastRequestedHeldPose = false;
 
         if (!_hasCachedMeta)
             CacheHeldMeta();
@@ -345,6 +355,7 @@ public class PlayerInteractModule : NetworkBehaviour
         }
 
         ClearHeldRuntimeCache();
+        _hasLastRequestedHeldPose = false;
         return false;
     }
 
@@ -482,6 +493,7 @@ public class PlayerInteractModule : NetworkBehaviour
         _heldPickup = null;
         _heldItemData = null;
         _heldWeaponData = null;
+        _hasLastRequestedHeldPose = false;
     }
 
     private void ResetHeldMetaCache()
@@ -644,7 +656,28 @@ public class PlayerInteractModule : NetworkBehaviour
         if (!TryGetHandWorldPose(out Vector3 handPos, out Quaternion handRot))
             return false;
 
-        ApplyWorldItemPose(_heldCache, handPos, handRot, GetHeldWorldScale(), syncNetworkTransform);
+        Vector3 heldWorldScale = GetHeldWorldScale();
+        bool isStableHeld = _attached && !_pendingAttach;
+
+        if (!syncNetworkTransform && isStableHeld && _hasLastRequestedHeldPose)
+        {
+            float positionDeltaSqr = (_lastRequestedHeldWorldPosition - handPos).sqrMagnitude;
+            float rotationDelta = Quaternion.Angle(_lastRequestedHeldWorldRotation, handRot);
+            float scaleDeltaSqr = (_lastRequestedHeldWorldScale - heldWorldScale).sqrMagnitude;
+
+            if (positionDeltaSqr <= RequestedPosePositionEpsilon * RequestedPosePositionEpsilon &&
+                rotationDelta <= RequestedPoseRotationEpsilon &&
+                scaleDeltaSqr <= RequestedPoseScaleEpsilon * RequestedPoseScaleEpsilon)
+            {
+                return true;
+            }
+        }
+
+        ApplyWorldItemPose(_heldCache, handPos, handRot, heldWorldScale, syncNetworkTransform);
+        _lastRequestedHeldWorldPosition = handPos;
+        _lastRequestedHeldWorldRotation = handRot;
+        _lastRequestedHeldWorldScale = heldWorldScale;
+        _hasLastRequestedHeldPose = true;
         return true;
     }
 

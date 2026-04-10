@@ -4,6 +4,10 @@ using UnityEngine;
 
 public class ItemPickupNetwork : NetworkBehaviour
 {
+    private const float AppliedPosePositionEpsilon = 0.0005f;
+    private const float AppliedPoseRotationEpsilon = 0.1f;
+    private const float AppliedPoseScaleEpsilon = 0.0005f;
+
     [Tooltip("아이템 데이터 (SO 파일 연결 필수)")]
     [SerializeField] public ItemDataSO itemData;
 
@@ -23,6 +27,10 @@ public class ItemPickupNetwork : NetworkBehaviour
     private NetworkTransform _networkTransform;
     private Vector3 _defaultLocalScale = Vector3.one;
     private bool _hasDefaultLocalScale;
+    private Vector3 _lastAppliedWorldPosition;
+    private Quaternion _lastAppliedWorldRotation = Quaternion.identity;
+    private Vector3 _lastAppliedWorldScale = Vector3.one;
+    private bool _hasLastAppliedPose;
 
     public int ItemId => itemData != null ? itemData.itemId : 0;
 
@@ -47,6 +55,7 @@ public class ItemPickupNetwork : NetworkBehaviour
     public override void OnNetworkDespawn()
     {
         _worldVisualVisible.OnValueChanged -= OnWorldVisualChanged;
+        _hasLastAppliedPose = false;
         base.OnNetworkDespawn();
     }
 
@@ -75,11 +84,30 @@ public class ItemPickupNetwork : NetworkBehaviour
 
     public void ApplyPose(Vector3 worldPosition, Quaternion worldRotation, Vector3 worldScale, bool syncNetworkTransform)
     {
+        if (!syncNetworkTransform && _hasLastAppliedPose)
+        {
+            float positionDeltaSqr = (_lastAppliedWorldPosition - worldPosition).sqrMagnitude;
+            float rotationDelta = Quaternion.Angle(_lastAppliedWorldRotation, worldRotation);
+            float scaleDeltaSqr = (_lastAppliedWorldScale - worldScale).sqrMagnitude;
+
+            if (positionDeltaSqr <= AppliedPosePositionEpsilon * AppliedPosePositionEpsilon &&
+                rotationDelta <= AppliedPoseRotationEpsilon &&
+                scaleDeltaSqr <= AppliedPoseScaleEpsilon * AppliedPoseScaleEpsilon)
+            {
+                return;
+            }
+        }
+
         transform.SetPositionAndRotation(worldPosition, worldRotation);
         transform.localScale = worldScale;
 
         if (syncNetworkTransform && IsServer && _networkTransform != null)
             _networkTransform.Teleport(worldPosition, worldRotation, worldScale);
+
+        _lastAppliedWorldPosition = worldPosition;
+        _lastAppliedWorldRotation = worldRotation;
+        _lastAppliedWorldScale = worldScale;
+        _hasLastAppliedPose = true;
     }
 
     private void ApplyWorldVisual(bool visible)
