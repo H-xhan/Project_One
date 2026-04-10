@@ -5,10 +5,6 @@ using UnityEngine.SceneManagement;
 
 public class PlayerHub : NetworkBehaviour
 {
-    private const float SendInterval = 0.05f;
-    private const float InputDeadZoneSqr = 0.0001f;
-    private const float YawDeadZone = 0.0001f;
-
     [Header("Refs")]
     [Tooltip("로컬 소유자만 활성화할 카메라 루트")]
     [SerializeField] private GameObject cameraRoot;
@@ -62,11 +58,6 @@ public class PlayerHub : NetworkBehaviour
     private float _pitchDelta;
     private bool _jumpPressed;
     private bool _sprintHeld;
-    private Vector2 _pendingMoveInput;
-    private float _pendingYawDelta;
-    private bool _pendingSprintHeld;
-    private float _sendTimer = SendInterval;
-    private bool _idleInputSent;
 
     private bool _attackLockedServer;
     private bool _attackBufferedServer;
@@ -227,7 +218,10 @@ public class PlayerHub : NetworkBehaviour
             pitchDelta = 0f;
         }
 
+        _moveInput = move;
+        _yawDelta = yawDelta;
         _pitchDelta = pitchDelta;
+        _sprintHeld = sprintHeld;
 
         if (allowLook)
         {
@@ -236,38 +230,12 @@ public class PlayerHub : NetworkBehaviour
 
         if (!CanMoveNow())
         {
-            move = Vector2.zero;
-            yawDelta = 0f;
-            sprintHeld = false;
+            _moveInput = Vector2.zero;
+            _yawDelta = 0f;
+            _sprintHeld = false;
         }
 
-        if (IsServer)
-        {
-            _moveInput = move;
-            _yawDelta = yawDelta;
-            _sprintHeld = sprintHeld;
-        }
-
-        _pendingMoveInput = move;
-        _pendingYawDelta += yawDelta;
-        _pendingSprintHeld = sprintHeld;
-        _sendTimer += Time.deltaTime;
-
-        bool hasMoveInput = _pendingMoveInput.sqrMagnitude > InputDeadZoneSqr;
-        bool hasYawInput = Mathf.Abs(_pendingYawDelta) > YawDeadZone;
-        bool hasActiveInput = _pendingSprintHeld || hasMoveInput || hasYawInput;
-        bool shouldSendActiveInput = hasActiveInput && _sendTimer >= SendInterval;
-        bool shouldSendIdleState = !hasActiveInput && !_idleInputSent;
-
-        if (shouldSendActiveInput || shouldSendIdleState)
-        {
-            float sentYawDelta = _pendingYawDelta;
-            SubmitInputServerRpc(_pendingMoveInput, sentYawDelta, _pendingSprintHeld);
-
-            _pendingYawDelta = 0f;
-            _sendTimer = 0f;
-            _idleInputSent = !hasActiveInput;
-        }
+        SubmitInputServerRpc(_moveInput, _yawDelta, _sprintHeld);
 
         if (jumpPressed && CanMoveNow())
             QueueJumpServerRpc();
