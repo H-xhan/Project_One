@@ -44,6 +44,7 @@ public class ItemPickupNetwork : NetworkBehaviour
     private bool _cachedUseGravity;
     private bool _cachedDetectCollisions;
     private bool _hasCachedRigidbodyState;
+    private bool _dropRestoreInProgress;
     private Vector3 _lastAppliedWorldPosition;
     private Quaternion _lastAppliedWorldRotation = Quaternion.identity;
     private Vector3 _lastAppliedWorldScale = Vector3.one;
@@ -121,6 +122,41 @@ public class ItemPickupNetwork : NetworkBehaviour
 
         _heldState.Value = held;
         ApplyHeldPhysicsAuthoritatively(held);
+    }
+
+    internal bool TryRestoreDroppedStateServer(
+        Vector3 worldPosition,
+        Quaternion worldRotation,
+        Vector3 worldScale,
+        Vector3 carrierVelocity,
+        Vector3 dropImpulse)
+    {
+        if (!IsServer || _dropRestoreInProgress || !_heldState.Value)
+            return false;
+
+        _dropRestoreInProgress = true;
+
+        Rigidbody rb = GetComponent<Rigidbody>();
+        ApplyPose(worldPosition, worldRotation, worldScale, true);
+
+        if (rb != null)
+        {
+            rb.linearVelocity = Vector3.zero;
+            rb.angularVelocity = Vector3.zero;
+        }
+
+        _heldState.Value = false;
+        ApplyHeldPhysicsAuthoritatively(false);
+
+        if (rb != null)
+        {
+            rb.linearVelocity = carrierVelocity;
+            rb.angularVelocity = Vector3.zero;
+            rb.AddForce(dropImpulse, ForceMode.Impulse);
+        }
+
+        _dropRestoreInProgress = false;
+        return true;
     }
 
     public Vector3 GetDefaultLocalScale()

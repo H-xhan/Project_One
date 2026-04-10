@@ -7,6 +7,7 @@ public class PlayerInteractModule : NetworkBehaviour
     private const float RequestedPoseRotationEpsilon = 0.1f;
     private const float RequestedPoseScaleEpsilon = 0.0005f;
     private const string RightWeaponSocketName = "RightWeaponSocket";
+    private const string ItemDropAnchorName = "ItemDropAnchor";
 
     [Header("Raycast")]
     [Tooltip("오너가 사용하는 카메라")]
@@ -75,6 +76,7 @@ public class PlayerInteractModule : NetworkBehaviour
     private bool _ownerMode;
     private bool _pendingAttach;
     private bool _attached;
+    private bool _dropInProgress;
     private float _pendingStartTime;
 
     private NetworkObject _heldCache;
@@ -96,6 +98,7 @@ public class PlayerInteractModule : NetworkBehaviour
     private GameObject _localHeldVisualInstance;
     private GameObject _localHeldVisualSourcePrefab;
     private Transform _resolvedRightWeaponSocket;
+    private Transform _resolvedDropAnchor;
     private Vector3 _lastRequestedHeldWorldPosition;
     private Quaternion _lastRequestedHeldWorldRotation = Quaternion.identity;
     private Vector3 _lastRequestedHeldWorldScale = Vector3.one;
@@ -148,6 +151,7 @@ public class PlayerInteractModule : NetworkBehaviour
 
         _pendingAttach = false;
         _attached = false;
+        _dropInProgress = false;
         _pendingStartTime = Time.time;
         _hasLastRequestedHeldPose = false;
 
@@ -160,7 +164,7 @@ public class PlayerInteractModule : NetworkBehaviour
 
     private void Update()
     {
-        if (_pendingAttach && !_attached)
+        if (_pendingAttach && !_attached && ShouldMaintainWorldAttachFallback())
         {
             if (Time.time - _pendingStartTime >= pickupPendingTime || TryApplyHeldWorldPose(false))
                 ForceAttach();
@@ -169,7 +173,7 @@ public class PlayerInteractModule : NetworkBehaviour
 
     private void LateUpdate()
     {
-        if (!_attached) return;
+        if (!_attached || !ShouldMaintainWorldAttachFallback()) return;
         TryApplyHeldWorldPose(false);
     }
 
@@ -261,6 +265,7 @@ public class PlayerInteractModule : NetworkBehaviour
 
         NetworkObject netObj = _heldCache;
         bool usedLocalVisual = _useLocalHeldVisual;
+        _dropInProgress = true;
 
         _attached = false;
         _pendingAttach = false;
@@ -269,36 +274,49 @@ public class PlayerInteractModule : NetworkBehaviour
         if (!_hasCachedMeta)
             CacheHeldMeta();
 
-        if (TryGetHandWorldPose(out Vector3 handPos, out Quaternion handRot))
-        {
-            Vector3 dropPos = handPos + transform.forward * dropHandForwardOffset + Vector3.up * dropHandUpOffset;
-            ApplyWorldItemPose(netObj, dropPos, handRot, GetDefaultWorldItemScale());
-        }
-        else
-        {
-            Vector3 dropPos = transform.position + transform.forward * 1.2f + Vector3.up * 1.0f;
-            ApplyWorldItemPose(netObj, dropPos, Quaternion.identity, GetDefaultWorldItemScale());
-        }
+        DestroyLocalHeldVisual();
+
+        GetDropAnchorWorldPose(out Vector3 dropPos, out Quaternion dropRot);
 
         if (_heldPickup != null)
-            _heldPickup.SetHeldStateServer(false);
+        {
+            Vector3 carrierVelocity = GetCarrierVelocity();
+            Vector3 dropImpulse = transform.forward * throwForwardForce + Vector3.up * throwUpForce;
+            bool restored = _heldPickup.TryRestoreDroppedStateServer(dropPos, dropRot, GetDefaultWorldItemScale(), carrierVelocity, dropImpulse);
+            if (!restored)
+            {
+                ApplyWorldItemPose(netObj, dropPos, dropRot, GetDefaultWorldItemScale());
+                _heldPickup.SetHeldStateServer(false);
+
+                Rigidbody rb = netObj.GetComponent<Rigidbody>();
+                if (rb != null)
+                {
+                    rb.linearVelocity = carrierVelocity;
+                    rb.angularVelocity = Vector3.zero;
+                    rb.AddForce(dropImpulse, ForceMode.Impulse);
+                }
+            }
+        }
         else
         {
+            ApplyWorldItemPose(netObj, dropPos, dropRot, GetDefaultWorldItemScale());
             SetWorldItemPresentationState(netObj, true);
             SetHeldPhysics(netObj, false);
-        }
 
-        Rigidbody rb = netObj.GetComponent<Rigidbody>();
-        if (rb != null)
-        {
-            Vector3 force = transform.forward * throwForwardForce + Vector3.up * throwUpForce;
-            rb.AddForce(force, ForceMode.Impulse);
+            Rigidbody rb = netObj.GetComponent<Rigidbody>();
+            if (rb != null)
+            {
+                rb.linearVelocity = GetCarrierVelocity();
+                rb.angularVelocity = Vector3.zero;
+                rb.AddForce(transform.forward * throwForwardForce + Vector3.up * throwUpForce, ForceMode.Impulse);
+            }
         }
 
         if (NetworkManager != null)
             netObj.ChangeOwnership(NetworkManager.ServerClientId);
 
         _heldItem.Value = default;
+        _dropInProgress = false;
 
         if (_cc != null && !_cc.enabled)
             _cc.enabled = true;
@@ -328,6 +346,7 @@ public class PlayerInteractModule : NetworkBehaviour
     private void ForceAttach()
     {
         if (!ResolveHeldCache()) return;
+        if (!ShouldMaintainWorldAttachFallback()) return;
 
         _pendingAttach = false;
 
@@ -376,6 +395,28 @@ public class PlayerInteractModule : NetworkBehaviour
         pos = handSocket.TransformPoint(localPos);
         rot = handSocket.rotation * Quaternion.Euler(localEuler);
         return true;
+    }
+
+    private void GetDropAnchorWorldPose(out Vector3 pos, out Quaternion rot)
+    {
+        Transform dropAnchor = GetDropAnchorTransform();
+        if (dropAnchor != null)
+        {
+            pos = dropAnchor.position + transform.forward * dropHandForwardOffset + Vector3.up * dropHandUpOffset;
+            rot = dropAnchor.rotation;
+            return;
+        }
+
+        Transform rightWeaponSocket = GetRightWeaponSocket();
+        if (rightWeaponSocket != null)
+        {
+            pos = rightWeaponSocket.position + transform.forward * dropHandForwardOffset + Vector3.up * dropHandUpOffset;
+            rot = rightWeaponSocket.rotation;
+            return;
+        }
+
+        pos = transform.position + transform.forward * 1.2f + Vector3.up * 1.0f;
+        rot = Quaternion.LookRotation(transform.forward, Vector3.up);
     }
 
     private Transform GetTargetHandSocket()
@@ -533,6 +574,23 @@ public class PlayerInteractModule : NetworkBehaviour
         return true;
     }
 
+    private bool ShouldMaintainWorldAttachFallback()
+    {
+        return !_useLocalHeldVisual;
+    }
+
+    private bool IsStableHeldState()
+    {
+        if (_dropInProgress)
+            return false;
+
+        if (!ResolveHeldCache())
+            return false;
+
+        bool heldStateActive = _attached || _useLocalHeldVisual;
+        return heldStateActive && !_pendingAttach;
+    }
+
     private void RefreshHeldPresentation()
     {
         if (!ResolveHeldCache())
@@ -628,6 +686,9 @@ public class PlayerInteractModule : NetworkBehaviour
 
     private bool TryAttachWorldHeldItemImmediate()
     {
+        if (!ShouldMaintainWorldAttachFallback())
+            return false;
+
         return TryApplyHeldWorldPose(true);
     }
 
@@ -713,6 +774,28 @@ public class PlayerInteractModule : NetworkBehaviour
         return null;
     }
 
+    private Transform GetDropAnchorTransform()
+    {
+        if (IsValidHandSocket(_resolvedDropAnchor))
+            return _resolvedDropAnchor;
+
+        Transform[] childTransforms = GetComponentsInChildren<Transform>(true);
+        for (int i = 0; i < childTransforms.Length; i++)
+        {
+            Transform candidate = childTransforms[i];
+            if (candidate == null || candidate.name != ItemDropAnchorName)
+                continue;
+
+            if (!IsValidHandSocket(candidate))
+                continue;
+
+            _resolvedDropAnchor = candidate;
+            return _resolvedDropAnchor;
+        }
+
+        return null;
+    }
+
     private bool IsConfiguredRightWeaponSocket(Transform candidate)
     {
         if (!IsValidHandSocket(candidate))
@@ -742,9 +825,20 @@ public class PlayerInteractModule : NetworkBehaviour
         return scale;
     }
 
+    private Vector3 GetCarrierVelocity()
+    {
+        if (_cc != null)
+            return _cc.velocity;
+
+        return Vector3.zero;
+    }
+
     private bool TryApplyHeldWorldPose(bool syncNetworkTransform)
     {
         if (!ResolveHeldCache())
+            return false;
+
+        if (!ShouldMaintainWorldAttachFallback() && IsStableHeldState())
             return false;
 
         if (!TryGetHandWorldPose(out Vector3 handPos, out Quaternion handRot))
