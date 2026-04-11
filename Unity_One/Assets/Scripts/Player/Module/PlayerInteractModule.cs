@@ -97,6 +97,7 @@ public class PlayerInteractModule : NetworkBehaviour
 
     private GameObject _localHeldVisualInstance;
     private GameObject _localHeldVisualSourcePrefab;
+    private bool _localHeldVisualReady;
     private Transform _resolvedRightWeaponSocket;
     private Transform _resolvedDropAnchor;
     private Vector3 _lastRequestedHeldWorldPosition;
@@ -429,7 +430,7 @@ public class PlayerInteractModule : NetworkBehaviour
             return false;
 
         Transform visualRoot = _localHeldVisualInstance.transform;
-        if (visualRoot == null || !visualRoot.gameObject.activeInHierarchy)
+        if (!_localHeldVisualReady || visualRoot == null || !visualRoot.gameObject.activeInHierarchy)
             return false;
 
         pos = visualRoot.position;
@@ -684,6 +685,7 @@ public class PlayerInteractModule : NetworkBehaviour
             _localHeldVisualInstance = Instantiate(_cachedEquippedVisualPrefab);
             _localHeldVisualInstance.transform.SetParent(handSocket, false);
             _localHeldVisualSourcePrefab = _cachedEquippedVisualPrefab;
+            _localHeldVisualReady = false;
             DisableLocalHeldVisualPhysics(_localHeldVisualInstance);
             Log($"[PlayerInteract] Spawn local held visual: {_cachedEquippedVisualPrefab.name}");
         }
@@ -707,6 +709,7 @@ public class PlayerInteractModule : NetworkBehaviour
         _localHeldVisualInstance.transform.localPosition = _cachedLocalPos;
         _localHeldVisualInstance.transform.localRotation = Quaternion.Euler(_cachedLocalEuler);
         _localHeldVisualInstance.transform.localScale = SanitizeVisualScale(_cachedLocalScale);
+        _localHeldVisualReady = true;
     }
 
     private void DisableLocalHeldVisualPhysics(GameObject visualRoot)
@@ -958,6 +961,8 @@ public class PlayerInteractModule : NetworkBehaviour
 
     private void DestroyLocalHeldVisual()
     {
+        _localHeldVisualReady = false;
+
         if (_localHeldVisualInstance == null)
             return;
 
