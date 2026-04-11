@@ -274,9 +274,8 @@ public class PlayerInteractModule : NetworkBehaviour
         if (!_hasCachedMeta)
             CacheHeldMeta();
 
-        DestroyLocalHeldVisual();
-
         GetDropAnchorWorldPose(out Vector3 dropPos, out Quaternion dropRot);
+        DestroyLocalHeldVisual();
         Vector3 heldCurrentPos = netObj.transform.position;
         Quaternion heldCurrentRot = netObj.transform.rotation;
 
@@ -289,7 +288,11 @@ public class PlayerInteractModule : NetworkBehaviour
             if (heldRb != null)
                 rbKinematicBefore = heldRb.isKinematic;
 
-            Log($"[PlayerInteract][DropDebug] source={_lastDropAnchorSource} dropPos={dropPos} dropRot={dropRot.eulerAngles} heldCurrentPos={heldCurrentPos} heldCurrentRot={heldCurrentRot.eulerAngles}");
+            string localVisualInfo = string.Empty;
+            if (_lastDropAnchorSource == "LocalHeldVisual" && _localHeldVisualInstance != null)
+                localVisualInfo = $" localVisualPos={_localHeldVisualInstance.transform.position}";
+
+            Log($"[PlayerInteract][DropDebug] source={_lastDropAnchorSource} dropPos={dropPos} dropRot={dropRot.eulerAngles} heldCurrentPos={heldCurrentPos} heldCurrentRot={heldCurrentRot.eulerAngles}{localVisualInfo}");
             bool restored = _heldPickup.TryRestoreDroppedStateServer(dropPos, dropRot, GetDefaultWorldItemScale(), carrierVelocity, dropImpulse);
             if (restored)
             {
@@ -312,7 +315,11 @@ public class PlayerInteractModule : NetworkBehaviour
         }
         else
         {
-            Log($"[PlayerInteract][DropDebug] source={_lastDropAnchorSource} dropPos={dropPos} dropRot={dropRot.eulerAngles} heldCurrentPos={heldCurrentPos} heldCurrentRot={heldCurrentRot.eulerAngles}");
+            string localVisualInfo = string.Empty;
+            if (_lastDropAnchorSource == "LocalHeldVisual" && _localHeldVisualInstance != null)
+                localVisualInfo = $" localVisualPos={_localHeldVisualInstance.transform.position}";
+
+            Log($"[PlayerInteract][DropDebug] source={_lastDropAnchorSource} dropPos={dropPos} dropRot={dropRot.eulerAngles} heldCurrentPos={heldCurrentPos} heldCurrentRot={heldCurrentRot.eulerAngles}{localVisualInfo}");
             ApplyWorldItemPose(netObj, dropPos, dropRot, GetDefaultWorldItemScale());
             SetWorldItemPresentationState(netObj, true);
             SetHeldPhysics(netObj, false);
@@ -413,8 +420,32 @@ public class PlayerInteractModule : NetworkBehaviour
 
     private string _lastDropAnchorSource = "Unknown";
 
+    private bool TryGetLocalHeldVisualWorldPose(out Vector3 pos, out Quaternion rot)
+    {
+        pos = Vector3.zero;
+        rot = Quaternion.identity;
+
+        if (_localHeldVisualInstance == null)
+            return false;
+
+        Transform visualRoot = _localHeldVisualInstance.transform;
+        if (visualRoot == null || !visualRoot.gameObject.activeInHierarchy)
+            return false;
+
+        pos = visualRoot.position;
+        rot = visualRoot.rotation;
+        return true;
+    }
+
     private void GetDropAnchorWorldPose(out Vector3 pos, out Quaternion rot)
     {
+        if (TryGetLocalHeldVisualWorldPose(out pos, out rot))
+        {
+            _lastDropAnchorSource = "LocalHeldVisual";
+            pos += transform.forward * dropHandForwardOffset + Vector3.up * dropHandUpOffset;
+            return;
+        }
+
         Transform dropAnchor = GetDropAnchorTransform();
         if (dropAnchor != null)
         {
