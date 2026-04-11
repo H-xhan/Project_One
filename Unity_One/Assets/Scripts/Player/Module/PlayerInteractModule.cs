@@ -277,12 +277,25 @@ public class PlayerInteractModule : NetworkBehaviour
         DestroyLocalHeldVisual();
 
         GetDropAnchorWorldPose(out Vector3 dropPos, out Quaternion dropRot);
+        Vector3 heldCurrentPos = netObj.transform.position;
+        Quaternion heldCurrentRot = netObj.transform.rotation;
 
         if (_heldPickup != null)
         {
             Vector3 carrierVelocity = GetCarrierVelocity();
             Vector3 dropImpulse = transform.forward * throwForwardForce + Vector3.up * throwUpForce;
+            bool rbKinematicBefore = false;
+            Rigidbody heldRb = netObj.GetComponent<Rigidbody>();
+            if (heldRb != null)
+                rbKinematicBefore = heldRb.isKinematic;
+
+            Log($"[PlayerInteract][DropDebug] source={_lastDropAnchorSource} dropPos={dropPos} dropRot={dropRot.eulerAngles} heldCurrentPos={heldCurrentPos} heldCurrentRot={heldCurrentRot.eulerAngles}");
             bool restored = _heldPickup.TryRestoreDroppedStateServer(dropPos, dropRot, GetDefaultWorldItemScale(), carrierVelocity, dropImpulse);
+            if (restored)
+            {
+                bool rbKinematicAfter = heldRb != null && heldRb.isKinematic;
+                Log($"[PlayerInteract][DropDebug] restoreTarget={dropPos} postRestorePos={netObj.transform.position} rbKinematicBefore={rbKinematicBefore} rbKinematicAfter={rbKinematicAfter}");
+            }
             if (!restored)
             {
                 ApplyWorldItemPose(netObj, dropPos, dropRot, GetDefaultWorldItemScale());
@@ -299,6 +312,7 @@ public class PlayerInteractModule : NetworkBehaviour
         }
         else
         {
+            Log($"[PlayerInteract][DropDebug] source={_lastDropAnchorSource} dropPos={dropPos} dropRot={dropRot.eulerAngles} heldCurrentPos={heldCurrentPos} heldCurrentRot={heldCurrentRot.eulerAngles}");
             ApplyWorldItemPose(netObj, dropPos, dropRot, GetDefaultWorldItemScale());
             SetWorldItemPresentationState(netObj, true);
             SetHeldPhysics(netObj, false);
@@ -397,11 +411,14 @@ public class PlayerInteractModule : NetworkBehaviour
         return true;
     }
 
+    private string _lastDropAnchorSource = "Unknown";
+
     private void GetDropAnchorWorldPose(out Vector3 pos, out Quaternion rot)
     {
         Transform dropAnchor = GetDropAnchorTransform();
         if (dropAnchor != null)
         {
+            _lastDropAnchorSource = "ItemDropAnchor";
             pos = dropAnchor.position + transform.forward * dropHandForwardOffset + Vector3.up * dropHandUpOffset;
             rot = dropAnchor.rotation;
             return;
@@ -410,11 +427,13 @@ public class PlayerInteractModule : NetworkBehaviour
         Transform rightWeaponSocket = GetRightWeaponSocket();
         if (rightWeaponSocket != null)
         {
+            _lastDropAnchorSource = "RightWeaponSocket";
             pos = rightWeaponSocket.position + transform.forward * dropHandForwardOffset + Vector3.up * dropHandUpOffset;
             rot = rightWeaponSocket.rotation;
             return;
         }
 
+        _lastDropAnchorSource = "RootFallback";
         pos = transform.position + transform.forward * 1.2f + Vector3.up * 1.0f;
         rot = Quaternion.LookRotation(transform.forward, Vector3.up);
     }

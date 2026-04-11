@@ -135,28 +135,34 @@ public class ItemPickupNetwork : NetworkBehaviour
             return false;
 
         _dropRestoreInProgress = true;
-
-        Rigidbody rb = GetComponent<Rigidbody>();
-        ApplyPose(worldPosition, worldRotation, worldScale, true);
-
-        if (rb != null)
+        try
         {
-            rb.linearVelocity = Vector3.zero;
-            rb.angularVelocity = Vector3.zero;
+            Rigidbody rb = GetComponent<Rigidbody>();
+            ApplyPose(worldPosition, worldRotation, worldScale, true);
+
+            _heldState.Value = false;
+            ApplyHeldPhysicsAuthoritatively(false);
+
+            if (rb != null)
+            {
+                if (rb.isKinematic)
+                {
+                    Debug.LogWarning($"[ItemPickupNetwork] Drop restore skipped velocity/impulse because Rigidbody remained kinematic on {name}.");
+                }
+                else
+                {
+                    rb.linearVelocity = carrierVelocity;
+                    rb.angularVelocity = Vector3.zero;
+                    rb.AddForce(dropImpulse, ForceMode.Impulse);
+                }
+            }
+
+            return true;
         }
-
-        _heldState.Value = false;
-        ApplyHeldPhysicsAuthoritatively(false);
-
-        if (rb != null)
+        finally
         {
-            rb.linearVelocity = carrierVelocity;
-            rb.angularVelocity = Vector3.zero;
-            rb.AddForce(dropImpulse, ForceMode.Impulse);
+            _dropRestoreInProgress = false;
         }
-
-        _dropRestoreInProgress = false;
-        return true;
     }
 
     public Vector3 GetDefaultLocalScale()
