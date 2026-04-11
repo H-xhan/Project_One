@@ -424,6 +424,41 @@ public class PlayerInteractModule : NetworkBehaviour
     private string _lastDropAnchorSource = "Unknown";
     private string _lastDropAnchorSourceDetail = string.Empty;
 
+    private Transform TryGetLocalHeldVisualAnchor(Transform visualRoot)
+    {
+        if (visualRoot == null)
+            return null;
+
+        string[] anchorNames =
+        {
+            "DropAnchor",
+            "VisualDropAnchor",
+            "HeldVisualAnchor"
+        };
+
+        for (int i = 0; i < anchorNames.Length; i++)
+        {
+            Transform anchor = visualRoot.Find(anchorNames[i]);
+            if (anchor != null)
+                return anchor;
+        }
+
+        for (int i = 0; i < visualRoot.childCount; i++)
+        {
+            Transform child = visualRoot.GetChild(i);
+            if (child == null)
+                continue;
+
+            for (int j = 0; j < anchorNames.Length; j++)
+            {
+                if (child.name == anchorNames[j])
+                    return child;
+            }
+        }
+
+        return null;
+    }
+
     private bool IsLocalHeldVisualSettledAgainstSocket(Transform visualRoot)
     {
         if (visualRoot == null)
@@ -458,8 +493,27 @@ public class PlayerInteractModule : NetworkBehaviour
         if (!IsLocalHeldVisualSettledAgainstSocket(visualRoot))
             return false;
 
+        Transform anchor = TryGetLocalHeldVisualAnchor(visualRoot);
+        if (anchor != null)
+        {
+            pos = anchor.position;
+            rot = anchor.rotation;
+            _lastDropAnchorSourceDetail = "(Anchor)";
+            return true;
+        }
+
+        Renderer renderer = _localHeldVisualInstance.GetComponentInChildren<Renderer>(true);
+        if (renderer != null)
+        {
+            pos = renderer.bounds.center;
+            rot = visualRoot.rotation;
+            _lastDropAnchorSourceDetail = "(RendererBounds)";
+            return true;
+        }
+
         pos = visualRoot.position;
         rot = visualRoot.rotation;
+        _lastDropAnchorSourceDetail = "(RootFallback)";
         return true;
     }
 
