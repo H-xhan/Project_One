@@ -124,6 +124,14 @@ public class ItemPickupNetwork : NetworkBehaviour
         ApplyHeldPhysicsAuthoritatively(held);
     }
 
+    private static string FormatDropDebugRigidbodyState(Rigidbody rb)
+    {
+        if (rb == null)
+            return "rb=null";
+
+        return $"rbKinematic={rb.isKinematic} rbUseGravity={rb.useGravity} rbLinearVelocity={rb.linearVelocity} rbAngularVelocity={rb.angularVelocity}";
+    }
+
     internal bool TryRestoreDroppedStateServer(
         Vector3 worldPosition,
         Quaternion worldRotation,
@@ -138,23 +146,43 @@ public class ItemPickupNetwork : NetworkBehaviour
         try
         {
             Rigidbody rb = GetComponent<Rigidbody>();
+            Debug.Log(
+                $"[ItemPickup][DropDebug] restoreBegin item={name} restoreTargetPos={worldPosition} restoreTargetRot={worldRotation.eulerAngles} " +
+                $"currentPosBeforeRestore={transform.position} currentRotBeforeRestore={transform.rotation.eulerAngles} {FormatDropDebugRigidbodyState(rb)}");
+
             ApplyPose(worldPosition, worldRotation, worldScale, true);
+            Debug.Log(
+                $"[ItemPickup][DropDebug] afterApplyPose item={name} posAfterApplyPose={transform.position} rotAfterApplyPose={transform.rotation.eulerAngles}");
 
             _heldState.Value = false;
             ApplyHeldPhysicsAuthoritatively(false);
+            Debug.Log(
+                $"[ItemPickup][DropDebug] afterPhysicsRestore item={name} posAfterPhysicsRestore={transform.position} rotAfterPhysicsRestore={transform.rotation.eulerAngles} {FormatDropDebugRigidbodyState(rb)}");
 
             if (rb != null)
             {
                 if (rb.isKinematic)
                 {
                     Debug.LogWarning($"[ItemPickupNetwork] Drop restore skipped velocity/impulse because Rigidbody remained kinematic on {name}.");
+                    Debug.Log(
+                        $"[ItemPickup][DropDebug] afterImpulse item={name} carrierVelocity={carrierVelocity} dropImpulse={dropImpulse} " +
+                        $"posAfterImpulse={transform.position} rotAfterImpulse={transform.rotation.eulerAngles} skippedImpulse=true reason=rbKinematic {FormatDropDebugRigidbodyState(rb)}");
                 }
                 else
                 {
                     rb.linearVelocity = carrierVelocity;
                     rb.angularVelocity = Vector3.zero;
                     rb.AddForce(dropImpulse, ForceMode.Impulse);
+                    Debug.Log(
+                        $"[ItemPickup][DropDebug] afterImpulse item={name} carrierVelocity={carrierVelocity} dropImpulse={dropImpulse} " +
+                        $"posAfterImpulse={transform.position} rotAfterImpulse={transform.rotation.eulerAngles} {FormatDropDebugRigidbodyState(rb)}");
                 }
+            }
+            else
+            {
+                Debug.Log(
+                    $"[ItemPickup][DropDebug] afterImpulse item={name} carrierVelocity={carrierVelocity} dropImpulse={dropImpulse} " +
+                    $"posAfterImpulse={transform.position} rotAfterImpulse={transform.rotation.eulerAngles} skippedImpulse=true reason=noRigidbody {FormatDropDebugRigidbodyState(rb)}");
             }
 
             return true;
