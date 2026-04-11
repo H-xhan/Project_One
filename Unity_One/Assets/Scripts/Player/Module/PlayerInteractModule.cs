@@ -6,6 +6,8 @@ public class PlayerInteractModule : NetworkBehaviour
     private const float RequestedPosePositionEpsilon = 0.0005f;
     private const float RequestedPoseRotationEpsilon = 0.1f;
     private const float RequestedPoseScaleEpsilon = 0.0005f;
+    private const float LocalHeldVisualSettlePositionEpsilon = 0.03f;
+    private const float LocalHeldVisualSettleRotationEpsilon = 5f;
     private const string RightWeaponSocketName = "RightWeaponSocket";
     private const string ItemDropAnchorName = "ItemDropAnchor";
 
@@ -293,7 +295,7 @@ public class PlayerInteractModule : NetworkBehaviour
             if (_lastDropAnchorSource == "LocalHeldVisual" && _localHeldVisualInstance != null)
                 localVisualInfo = $" localVisualPos={_localHeldVisualInstance.transform.position}";
 
-            Log($"[PlayerInteract][DropDebug] source={_lastDropAnchorSource} dropPos={dropPos} dropRot={dropRot.eulerAngles} heldCurrentPos={heldCurrentPos} heldCurrentRot={heldCurrentRot.eulerAngles}{localVisualInfo}");
+            Log($"[PlayerInteract][DropDebug] source={_lastDropAnchorSource}{_lastDropAnchorSourceDetail} dropPos={dropPos} dropRot={dropRot.eulerAngles} heldCurrentPos={heldCurrentPos} heldCurrentRot={heldCurrentRot.eulerAngles}{localVisualInfo}");
             bool restored = _heldPickup.TryRestoreDroppedStateServer(dropPos, dropRot, GetDefaultWorldItemScale(), carrierVelocity, dropImpulse);
             if (restored)
             {
@@ -320,7 +322,7 @@ public class PlayerInteractModule : NetworkBehaviour
             if (_lastDropAnchorSource == "LocalHeldVisual" && _localHeldVisualInstance != null)
                 localVisualInfo = $" localVisualPos={_localHeldVisualInstance.transform.position}";
 
-            Log($"[PlayerInteract][DropDebug] source={_lastDropAnchorSource} dropPos={dropPos} dropRot={dropRot.eulerAngles} heldCurrentPos={heldCurrentPos} heldCurrentRot={heldCurrentRot.eulerAngles}{localVisualInfo}");
+            Log($"[PlayerInteract][DropDebug] source={_lastDropAnchorSource}{_lastDropAnchorSourceDetail} dropPos={dropPos} dropRot={dropRot.eulerAngles} heldCurrentPos={heldCurrentPos} heldCurrentRot={heldCurrentRot.eulerAngles}{localVisualInfo}");
             ApplyWorldItemPose(netObj, dropPos, dropRot, GetDefaultWorldItemScale());
             SetWorldItemPresentationState(netObj, true);
             SetHeldPhysics(netObj, false);
@@ -420,6 +422,26 @@ public class PlayerInteractModule : NetworkBehaviour
     }
 
     private string _lastDropAnchorSource = "Unknown";
+    private string _lastDropAnchorSourceDetail = string.Empty;
+
+    private bool IsLocalHeldVisualSettledAgainstSocket(Transform visualRoot)
+    {
+        if (visualRoot == null)
+            return false;
+
+        Transform handSocket = GetRightWeaponSocket();
+        if (handSocket == null)
+            return false;
+
+        Vector3 expectedWorldPos = handSocket.TransformPoint(_cachedLocalPos);
+        Quaternion expectedWorldRot = handSocket.rotation * Quaternion.Euler(_cachedLocalEuler);
+
+        float positionDelta = Vector3.Distance(visualRoot.position, expectedWorldPos);
+        float rotationDelta = Quaternion.Angle(visualRoot.rotation, expectedWorldRot);
+
+        return positionDelta <= LocalHeldVisualSettlePositionEpsilon &&
+               rotationDelta <= LocalHeldVisualSettleRotationEpsilon;
+    }
 
     private bool TryGetLocalHeldVisualWorldPose(out Vector3 pos, out Quaternion rot)
     {
@@ -433,6 +455,9 @@ public class PlayerInteractModule : NetworkBehaviour
         if (!_localHeldVisualReady || visualRoot == null || !visualRoot.gameObject.activeInHierarchy)
             return false;
 
+        if (!IsLocalHeldVisualSettledAgainstSocket(visualRoot))
+            return false;
+
         pos = visualRoot.position;
         rot = visualRoot.rotation;
         return true;
@@ -440,12 +465,16 @@ public class PlayerInteractModule : NetworkBehaviour
 
     private void GetDropAnchorWorldPose(out Vector3 pos, out Quaternion rot)
     {
+        _lastDropAnchorSourceDetail = string.Empty;
         if (TryGetLocalHeldVisualWorldPose(out pos, out rot))
         {
             _lastDropAnchorSource = "LocalHeldVisual";
             pos += transform.forward * dropHandForwardOffset + Vector3.up * dropHandUpOffset;
             return;
         }
+
+        if (_localHeldVisualInstance != null && _localHeldVisualReady)
+            _lastDropAnchorSourceDetail = "(localVisualUnsettled)";
 
         Transform dropAnchor = GetDropAnchorTransform();
         if (dropAnchor != null)
