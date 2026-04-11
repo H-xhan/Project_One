@@ -277,6 +277,8 @@ public class PlayerInteractModule : NetworkBehaviour
         if (!_hasCachedMeta)
             CacheHeldMeta();
 
+        RefreshDropAnchorPoseImmediately();
+        Log($"[PlayerInteract][DropDebug] refreshedDropPoseBeforeSample=true localVisualReady={_localHeldVisualReady}");
         GetDropAnchorWorldPose(out Vector3 dropPos, out Quaternion dropRot);
         DestroyLocalHeldVisual();
         Vector3 heldCurrentPos = netObj.transform.position;
@@ -295,7 +297,7 @@ public class PlayerInteractModule : NetworkBehaviour
             if (_lastDropAnchorSource == "LocalHeldVisual" && _localHeldVisualInstance != null)
                 localVisualInfo = $" localVisualPos={_localHeldVisualInstance.transform.position}";
 
-            Log($"[PlayerInteract][DropDebug] source={_lastDropAnchorSource}{_lastDropAnchorSourceDetail} dropPos={dropPos} dropRot={dropRot.eulerAngles} heldCurrentPos={heldCurrentPos} heldCurrentRot={heldCurrentRot.eulerAngles}{localVisualInfo}");
+            Log($"[PlayerInteract][DropDebug] source={_lastDropAnchorSource}{_lastDropAnchorSourceDetail} dropPos={dropPos} dropRot={dropRot.eulerAngles} heldCurrentPos={heldCurrentPos} heldCurrentRot={heldCurrentRot.eulerAngles} appliedForwardOffset={_lastAppliedDropForwardOffset} appliedUpOffset={_lastAppliedDropUpOffset}{localVisualInfo}");
             bool restored = _heldPickup.TryRestoreDroppedStateServer(dropPos, dropRot, GetDefaultWorldItemScale(), carrierVelocity, dropImpulse);
             if (restored)
             {
@@ -322,7 +324,7 @@ public class PlayerInteractModule : NetworkBehaviour
             if (_lastDropAnchorSource == "LocalHeldVisual" && _localHeldVisualInstance != null)
                 localVisualInfo = $" localVisualPos={_localHeldVisualInstance.transform.position}";
 
-            Log($"[PlayerInteract][DropDebug] source={_lastDropAnchorSource}{_lastDropAnchorSourceDetail} dropPos={dropPos} dropRot={dropRot.eulerAngles} heldCurrentPos={heldCurrentPos} heldCurrentRot={heldCurrentRot.eulerAngles}{localVisualInfo}");
+            Log($"[PlayerInteract][DropDebug] source={_lastDropAnchorSource}{_lastDropAnchorSourceDetail} dropPos={dropPos} dropRot={dropRot.eulerAngles} heldCurrentPos={heldCurrentPos} heldCurrentRot={heldCurrentRot.eulerAngles} appliedForwardOffset={_lastAppliedDropForwardOffset} appliedUpOffset={_lastAppliedDropUpOffset}{localVisualInfo}");
             ApplyWorldItemPose(netObj, dropPos, dropRot, GetDefaultWorldItemScale());
             SetWorldItemPresentationState(netObj, true);
             SetHeldPhysics(netObj, false);
@@ -346,6 +348,17 @@ public class PlayerInteractModule : NetworkBehaviour
             _cc.enabled = true;
 
         Log($"[PlayerInteract] ServerTryDrop -> {netObj.name}, localVisual:{usedLocalVisual}");
+    }
+
+    private void RefreshDropAnchorPoseImmediately()
+    {
+        if (_useLocalHeldVisual && _localHeldVisualInstance != null)
+        {
+            GetRightWeaponSocket();
+            UpdateLocalHeldVisualTransform();
+        }
+
+        GetDropAnchorTransform();
     }
 
     public int GetCurrentWeaponAnimID()
@@ -423,6 +436,15 @@ public class PlayerInteractModule : NetworkBehaviour
 
     private string _lastDropAnchorSource = "Unknown";
     private string _lastDropAnchorSourceDetail = string.Empty;
+    private float _lastAppliedDropForwardOffset;
+    private float _lastAppliedDropUpOffset;
+
+    private Vector3 ApplyDropOffsetBySource(Vector3 basePosition, bool suppressHandOffset)
+    {
+        _lastAppliedDropForwardOffset = suppressHandOffset ? 0f : dropHandForwardOffset;
+        _lastAppliedDropUpOffset = suppressHandOffset ? 0f : dropHandUpOffset;
+        return basePosition + transform.forward * _lastAppliedDropForwardOffset + Vector3.up * _lastAppliedDropUpOffset;
+    }
 
     private Transform TryGetLocalHeldVisualAnchor(Transform visualRoot)
     {
@@ -523,7 +545,7 @@ public class PlayerInteractModule : NetworkBehaviour
         if (TryGetLocalHeldVisualWorldPose(out pos, out rot))
         {
             _lastDropAnchorSource = "LocalHeldVisual";
-            pos += transform.forward * dropHandForwardOffset + Vector3.up * dropHandUpOffset;
+            pos = ApplyDropOffsetBySource(pos, _lastDropAnchorSourceDetail == "(Anchor)");
             return;
         }
 
@@ -534,7 +556,7 @@ public class PlayerInteractModule : NetworkBehaviour
         if (dropAnchor != null)
         {
             _lastDropAnchorSource = "ItemDropAnchor";
-            pos = dropAnchor.position + transform.forward * dropHandForwardOffset + Vector3.up * dropHandUpOffset;
+            pos = ApplyDropOffsetBySource(dropAnchor.position, false);
             rot = dropAnchor.rotation;
             return;
         }
@@ -543,12 +565,14 @@ public class PlayerInteractModule : NetworkBehaviour
         if (rightWeaponSocket != null)
         {
             _lastDropAnchorSource = "RightWeaponSocket";
-            pos = rightWeaponSocket.position + transform.forward * dropHandForwardOffset + Vector3.up * dropHandUpOffset;
+            pos = ApplyDropOffsetBySource(rightWeaponSocket.position, false);
             rot = rightWeaponSocket.rotation;
             return;
         }
 
         _lastDropAnchorSource = "RootFallback";
+        _lastAppliedDropForwardOffset = 0f;
+        _lastAppliedDropUpOffset = 0f;
         pos = transform.position + transform.forward * 1.2f + Vector3.up * 1.0f;
         rot = Quaternion.LookRotation(transform.forward, Vector3.up);
     }
