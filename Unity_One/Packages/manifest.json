@@ -18,7 +18,6 @@
     "com.unity.services.authentication": "3.6.0",
     "com.unity.services.multiplayer": "2.2.0",
     "com.unity.shadergraph": "17.0.4",
-    "com.unity.springbone": "https://github.com/unity3d-jp/UnityChanSpringBone.git",
     "com.unity.test-framework": "1.6.0",
     "com.unity.timeline": "1.8.10",
     "com.unity.toonshader": "0.13.4-preview",
