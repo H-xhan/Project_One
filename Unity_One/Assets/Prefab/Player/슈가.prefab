@@ -87,7 +87,7 @@ MonoBehaviour:
   targetMask:
     serializedVersion: 2
     m_Bits: 2048
-  hitVfxPrefab: {fileID: 2574634462998114931, guid: 631042a5b88d19749a89d2df62193cff, type: 3}
+  hitVfxPrefab: {fileID: 5501628190135194678, guid: b7a18035444df4e48a96614773e02086, type: 3}
   hitVfxYOffset: 0.2
   enableDebugLogs: 1
 --- !u!114 &8598645012782326681
