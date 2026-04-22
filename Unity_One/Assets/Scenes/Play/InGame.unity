@@ -5899,8 +5899,14 @@ MonoBehaviour:
   teleportPlayersOnEnterLobby: 1
   teleportPlayersOnEnterPlaying: 1
   StateValue:
+    UpdateTraits:
+      MinSecondsBetweenUpdates: 0
+      MaxSecondsBetweenUpdates: 0
     m_InternalValue: 0
   StateTimer:
+    UpdateTraits:
+      MinSecondsBetweenUpdates: 0
+      MaxSecondsBetweenUpdates: 0
     m_InternalValue: 0
 --- !u!1001 &1478944396
 PrefabInstance:

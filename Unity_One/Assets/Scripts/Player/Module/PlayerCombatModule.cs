@@ -27,6 +27,10 @@ public class PlayerCombatModule : NetworkBehaviour
     [Tooltip("공격 대상 레이어 마스크")]
     [SerializeField] private LayerMask targetMask;
 
+    [Header("Hit VFX")]
+    [SerializeField] private GameObject hitVfxPrefab;
+    [SerializeField] private float hitVfxYOffset = 0.2f;
+
     [Header("Debug")]
     [Tooltip("공격 판정 디버그 로그 출력 여부")]
     [SerializeField] private bool enableDebugLogs = true;
@@ -144,6 +148,9 @@ public class PlayerCombatModule : NetworkBehaviour
 
             Log($"[PlayerCombat] ApplyKnockback -> {targetStatus.name}, impulse:{impulse}");
             targetStatus.ApplyKnockbackServer(impulse);
+
+            Vector3 hitVfxPosition = GetHitVfxPosition(hit, originTf.position, targetRoot);
+            PlayHitVfxClientRpc(hitVfxPosition);
         }
     }
 
@@ -190,6 +197,38 @@ public class PlayerCombatModule : NetworkBehaviour
             return hit.attachedRigidbody.transform;
 
         return hit.transform.root;
+    }
+
+    private Vector3 GetHitVfxPosition(Collider hitCollider, Vector3 attackOrigin, Transform targetRoot)
+    {
+        if (hitCollider != null)
+        {
+            Vector3 closestPoint = hitCollider.ClosestPoint(attackOrigin);
+            if (!float.IsNaN(closestPoint.x) && !float.IsNaN(closestPoint.y) && !float.IsNaN(closestPoint.z))
+            {
+                if ((closestPoint - attackOrigin).sqrMagnitude > 0.0001f)
+                    return closestPoint;
+            }
+
+            Bounds bounds = hitCollider.bounds;
+            Vector3 boundsCenter = bounds.center;
+            if (!float.IsNaN(boundsCenter.x) && !float.IsNaN(boundsCenter.y) && !float.IsNaN(boundsCenter.z))
+                return boundsCenter;
+        }
+
+        if (targetRoot != null)
+            return targetRoot.position + Vector3.up * hitVfxYOffset;
+
+        return attackOrigin + Vector3.up * hitVfxYOffset;
+    }
+
+    [ClientRpc]
+    private void PlayHitVfxClientRpc(Vector3 position)
+    {
+        if (hitVfxPrefab == null)
+            return;
+
+        Instantiate(hitVfxPrefab, position, Quaternion.identity);
     }
 
 #if UNITY_EDITOR
