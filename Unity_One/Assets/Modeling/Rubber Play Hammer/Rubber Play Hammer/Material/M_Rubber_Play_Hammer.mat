@@ -42,8 +42,12 @@ Material:
   m_ModifiedSerializedProperties: 0
   m_ValidKeywords:
   - _MK_ALBEDO_MAP
+  - _MK_ARTISTIC_DRAWN
+  - _MK_COLOR_GRADING_ALBEDO
   - _MK_ENVIRONMENT_REFLECTIONS_AMBIENT
-  - _MK_LIGHT_CEL
+  - _MK_GOOCH_RAMP
+  - _MK_LIGHT_BANDED
+  - _MK_OUTLINE_DATA_UV7
   - _MK_OUTLINE_HULL_CLIP
   - _MK_OUTLINE_MAP
   - _MK_RECEIVE_SHADOWS
@@ -129,7 +133,7 @@ Material:
         m_Scale: {x: 1, y: 1}
         m_Offset: {x: 0, y: 0}
     - _DrawnMap:
-        m_Texture: {fileID: 0}
+        m_Texture: {fileID: 2800000, guid: d2c03face496ae44faa3e1bf6bb1f2cd, type: 3}
         m_Scale: {x: 1, y: 1}
         m_Offset: {x: 0, y: 0}
     - _EmissionMap:
@@ -141,7 +145,7 @@ Material:
         m_Scale: {x: 1, y: 1}
         m_Offset: {x: 0, y: 0}
     - _GoochRamp:
-        m_Texture: {fileID: 0}
+        m_Texture: {fileID: 2800000, guid: d2c03face496ae44faa3e1bf6bb1f2cd, type: 3}
         m_Scale: {x: 1, y: 1}
         m_Offset: {x: 0, y: 0}
     - _HatchingBrightMap:
@@ -209,7 +213,7 @@ Material:
         m_Scale: {x: 1, y: 1}
         m_Offset: {x: 0, y: 0}
     - _SketchMap:
-        m_Texture: {fileID: 0}
+        m_Texture: {fileID: 2800000, guid: d2c03face496ae44faa3e1bf6bb1f2cd, type: 3}
         m_Scale: {x: 1, y: 1}
         m_Offset: {x: 0, y: 0}
     - _SpecGlossMap:
@@ -279,7 +283,7 @@ Material:
     - _ATDistance: 1
     - _AddPrecomputedVelocity: 0
     - _AdditionalLightsFalloff: 0.85
-    - _AdditionalLightsThreshold: 0.58
+    - _AdditionalLightsThreshold: 0.68
     - _AdvancedTab: 1
     - _AlbedoAffectEmissive: 0
     - _AlbedoMapIntensity: 1
@@ -297,8 +301,8 @@ Material:
     - _AlphaSrcBlend: 1
     - _AlphaToMask: 0
     - _Anisotropy: 0
-    - _Artistic: 0
-    - _ArtisticFrequency: 1
+    - _Artistic: 1
+    - _ArtisticFrequency: 3
     - _ArtisticProjection: 0
     - _ArtisticShadowFilter: 0
     - _Blend: 0
@@ -308,13 +312,13 @@ Material:
     - _BlendModePreserveSpecular: 1
     - _BlendSrc: 1
     - _BlendSrcAlpha: 1
-    - _Brightness: 1
+    - _Brightness: 2
     - _BumpScale: 1
     - _ClearCoatMask: 0
     - _ClearCoatSmoothness: 0
     - _CoatMask: 0
-    - _ColorGrading: 0
-    - _Contrast: 1
+    - _ColorGrading: 1
+    - _Contrast: 2
     - _Cull: 2
     - _CullMode: 2
     - _CullModeForward: 2
@@ -342,7 +346,7 @@ Material:
     - _DoubleSidedNormalMode: 1
     - _DrawnClampMax: 1
     - _DrawnClampMin: 0
-    - _DrawnMapScale: 1
+    - _DrawnMapScale: 3
     - _DstBlend: 0
     - _DstBlend2: 0
     - _DstBlendAlpha: 0
@@ -373,7 +377,7 @@ Material:
     - _HeightTessAmplitude: 2
     - _HeightTessCenter: 0.5
     - _Hue: 0
-    - _IndirectFade: 1
+    - _IndirectFade: 0.23
     - _Initialized: 0
     - _InputTab: 1
     - _InvTilingScale: 1
@@ -384,10 +388,10 @@ Material:
     - _IridescenceSmoothness: 0.5
     - _IridescenceThickness: 1
     - _IridescenceThresholdOffset: 0
-    - _Light: 1
-    - _LightBands: 4
+    - _Light: 2
+    - _LightBands: 3
     - _LightBandsScale: 0.5
-    - _LightThreshold: 0.58
+    - _LightThreshold: 0.68
     - _LinkDetailsWithBase: 1
     - _MaterialID: 1
     - _Metallic: 0
@@ -404,11 +408,11 @@ Material:
     - _Outline: 3
     - _OutlineClipOffset: 0
     - _OutlineConstantSize: 0
-    - _OutlineData: 0
+    - _OutlineData: 1
     - _OutlineFadeMax: 2
     - _OutlineFadeMin: 0.25
     - _OutlineNoise: 0
-    - _OutlineSize: 2.2
+    - _OutlineSize: 10
     - _OutlineTab: 1
     - _PPDLodThreshold: 5
     - _PPDMaxSamples: 15
@@ -429,9 +433,9 @@ Material:
     - _RimSize: 1
     - _RimSmoothness: 0.5
     - _RimThresholdOffset: 0.25
-    - _Saturation: 1
+    - _Saturation: 2
     - _SketchMapScale: 1
-    - _Smoothness: 0.16
+    - _Smoothness: 0.12
     - _SmoothnessRemapMax: 1
     - _SmoothnessRemapMin: 0
     - _SmoothnessTextureChannel: 0
@@ -502,12 +506,12 @@ Material:
     - _EmissionColor: {r: 0, g: 0, b: 0, a: 1}
     - _EmissiveColor: {r: 0, g: 0, b: 0, a: 1}
     - _EmissiveColorLDR: {r: 0, g: 0, b: 0, a: 1}
-    - _GoochBrightColor: {r: 1, g: 1, b: 1, a: 1}
+    - _GoochBrightColor: {r: 0.5660378, g: 0.5526878, b: 0.5526878, a: 1}
     - _GoochDarkColor: {r: 0, g: 0, b: 0, a: 1}
     - _InvPrimScale: {r: 1, g: 1, b: 0, a: 0}
     - _IridescenceColor: {r: 1, g: 1, b: 1, a: 0.5}
     - _IridescenceThicknessRemap: {r: 0, g: 1, b: 0, a: 0}
-    - _OutlineColor: {r: 0.30980393, g: 0.3372549, b: 0.41960785, a: 1}
+    - _OutlineColor: {r: 0, g: 0, b: 0, a: 1}
     - _RimBrightColor: {r: 1, g: 1, b: 1, a: 1}
     - _RimColor: {r: 1, g: 1, b: 1, a: 1}
     - _RimDarkColor: {r: 0, g: 0, b: 0, a: 1}
