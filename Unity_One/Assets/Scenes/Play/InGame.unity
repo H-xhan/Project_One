@@ -5126,6 +5126,127 @@ CanvasRenderer:
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 1222429147}
   m_CullTransparentMesh: 1
+--- !u!1 &1243381391
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 1243381392}
+  - component: {fileID: 1243381393}
+  - component: {fileID: 1243381394}
+  - component: {fileID: 1243381395}
+  m_Layer: 0
+  m_Name: DeskGimmickHub
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!4 &1243381392
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1243381391}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 0}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!114 &1243381393
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1243381391}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: d5a57f767e5e46a458fc5d3c628d0cbb, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  GlobalObjectIdHash: 2277430482
+  InScenePlacedSourceGlobalObjectIdHash: 0
+  DeferredDespawnTick: 0
+  Ownership: 1
+  AlwaysReplicateAsRoot: 0
+  SynchronizeTransform: 1
+  ActiveSceneSynchronization: 0
+  SceneMigrationSynchronization: 0
+  SpawnWithObservers: 1
+  DontDestroyWithOwner: 0
+  AutoObjectParentSync: 1
+  SyncOwnerTransformWhenParented: 1
+  AllowOwnerToParent: 0
+--- !u!114 &1243381394
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1243381391}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: e8c40ac92f739484ba611655b79bb4d1, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  telegraphDuration: 1.5
+  responseDuration: 2
+  scanSampleDuration: 0.35
+  resolveDuration: 1
+  scanVelocityThreshold: 0.35
+  scanAngularVelocityThreshold: 1.2
+  knockbackForce: 14
+  upwardForce: 4
+  audioSource: {fileID: 0}
+  telegraphClip: {fileID: 0}
+  responseClip: {fileID: 0}
+  scanClip: {fileID: 0}
+  resolveClip: {fileID: 0}
+  endClip: {fileID: 0}
+  telegraphVfxPrefab: {fileID: 0}
+  responseVfxPrefab: {fileID: 0}
+  scanVfxPrefab: {fileID: 0}
+  resolveVfxPrefab: {fileID: 0}
+  vfxSpawnPoint: {fileID: 0}
+  onTelegraph:
+    m_PersistentCalls:
+      m_Calls: []
+  onResponse:
+    m_PersistentCalls:
+      m_Calls: []
+  onScan:
+    m_PersistentCalls:
+      m_Calls: []
+  onResolve:
+    m_PersistentCalls:
+      m_Calls: []
+  onEnd:
+    m_PersistentCalls:
+      m_Calls: []
+  enableDebugLogs: 1
+--- !u!114 &1243381395
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1243381391}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: a513caca429dfe441a55bd4606fc970c, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  ShowTopMostFoldoutHeaderGroup: 1
+  developerIntrusion: {fileID: 1243381394}
+  enableDebugLogs: 1
 --- !u!1001 &1248238501
 PrefabInstance:
   m_ObjectHideFlags: 0
@@ -8281,3 +8402,4 @@ SceneRoots:
   - {fileID: 1478549239}
   - {fileID: 2126273895}
   - {fileID: 1005675106}
+  - {fileID: 1243381392}
