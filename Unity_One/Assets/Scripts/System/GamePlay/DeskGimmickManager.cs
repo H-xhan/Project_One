@@ -183,19 +183,38 @@ public class DeskGimmickManager : NetworkBehaviour
         PlayerStatusModule[] found = FindPlayerStatusModules();
 
         if (found == null)
+        {
+            LogWarning("[DeskGimmickManager] CollectActivePlayers found null result.");
             return players;
+        }
+
+        int nullCount = 0;
+        int eliminatedCount = 0;
 
         for (int i = 0; i < found.Length; i++)
         {
             PlayerStatusModule status = found[i];
             if (status == null)
+            {
+                nullCount++;
                 continue;
+            }
 
             if (status.IsEliminated)
+            {
+                eliminatedCount++;
+                Log($"[DeskGimmickManager] Collect skip eliminated player:{DescribePlayer(status)}");
                 continue;
+            }
 
             players.Add(status);
+            Log($"[DeskGimmickManager] Collect valid player index:{players.Count - 1} {DescribePlayer(status)}");
         }
+
+        Log($"[DeskGimmickManager] CollectActivePlayers summary found:{found.Length} valid:{players.Count} null:{nullCount} eliminated:{eliminatedCount}");
+
+        if (found.Length >= 2 && players.Count < 2)
+            LogWarning($"[DeskGimmickManager] Expected 2+ valid players but collected {players.Count}. Check PlayerStatusModule spawn/elimination state.");
 
         return players;
     }
@@ -233,6 +252,18 @@ public class DeskGimmickManager : NetworkBehaviour
             return null;
 
         return found[0];
+    }
+
+    private string DescribePlayer(PlayerStatusModule status)
+    {
+        if (status == null)
+            return "null";
+
+        NetworkObject netObj = status.NetworkObject;
+        if (netObj != null)
+            return $"name:{status.name} owner:{netObj.OwnerClientId} netId:{netObj.NetworkObjectId} spawned:{netObj.IsSpawned} eliminated:{status.IsEliminated}";
+
+        return $"name:{status.name} owner:n/a netId:n/a spawned:false eliminated:{status.IsEliminated}";
     }
 
     private void Log(string message)

@@ -1,5 +1,6 @@
 using System.Collections;
 using System.Collections.Generic;
+using TMPro;
 using UnityEngine;
 using UnityEngine.Events;
 
@@ -47,6 +48,10 @@ public class DeveloperIntrusionGimmick : MonoBehaviour
     [SerializeField] private UnityEvent onResolve;
     [SerializeField] private UnityEvent onEnd;
 
+    [Header("Minimal Telegraph Text")]
+    [SerializeField] private TMP_Text telegraphText;
+    [SerializeField] private string telegraphMessage = "STOP. Developer is watching.";
+
     [Header("Debug")]
     [SerializeField] private bool enableDebugLogs = true;
 
@@ -64,6 +69,8 @@ public class DeveloperIntrusionGimmick : MonoBehaviour
         public PlayerStatusModule Status;
         public float AverageSpeed;
         public float AverageAngularSpeed;
+        public bool HasGroundedInfo;
+        public bool IsGrounded;
         public bool Failed;
         public string Reason;
     }
@@ -77,7 +84,12 @@ public class DeveloperIntrusionGimmick : MonoBehaviour
         public Vector3 previousPosition;
         public float speedSum;
         public float angularSpeedSum;
+        public float maxFrameSpeed;
+        public float maxFrameAngularSpeed;
         public int sampleCount;
+        public bool hasGroundedInfo;
+        public bool isGrounded;
+        public string maxSpeedSource;
         public bool invalidStateDetected;
         public string invalidStateReason;
     }
@@ -108,6 +120,7 @@ public class DeveloperIntrusionGimmick : MonoBehaviour
     public void PlayTelegraphPresentation()
     {
         Log("[DeveloperIntrusion] Telegraph");
+        ShowTelegraphText();
         PlayOneShot(telegraphClip);
         SpawnVfx(telegraphVfxPrefab);
         onTelegraph?.Invoke();
@@ -116,6 +129,7 @@ public class DeveloperIntrusionGimmick : MonoBehaviour
     public void PlayResponsePresentation()
     {
         Log("[DeveloperIntrusion] Response");
+        HideTelegraphText();
         PlayOneShot(responseClip);
         SpawnVfx(responseVfxPrefab);
         onResponse?.Invoke();
@@ -140,6 +154,7 @@ public class DeveloperIntrusionGimmick : MonoBehaviour
     public void PlayEndPresentation()
     {
         Log("[DeveloperIntrusion] End");
+        HideTelegraphText();
         PlayOneShot(endClip);
         onEnd?.Invoke();
     }
@@ -216,6 +231,8 @@ public class DeveloperIntrusionGimmick : MonoBehaviour
             CharacterController cc = status.GetComponentInParent<CharacterController>();
             Rigidbody rb = status.GetComponentInParent<Rigidbody>();
             Transform trackingTransform = ResolveTrackingTransform(status, cc, rb);
+            bool hasGroundedInfo = cc != null && cc.enabled;
+            bool isGrounded = !hasGroundedInfo || cc.isGrounded;
             bool invalidState = IsInvalidState(status, cc, out string invalidStateReason);
 
             _samples.Add(new PlayerSample
@@ -227,7 +244,12 @@ public class DeveloperIntrusionGimmick : MonoBehaviour
                 previousPosition = trackingTransform != null ? trackingTransform.position : status.transform.position,
                 speedSum = 0f,
                 angularSpeedSum = 0f,
+                maxFrameSpeed = 0f,
+                maxFrameAngularSpeed = 0f,
                 sampleCount = 0,
+                hasGroundedInfo = hasGroundedInfo,
+                isGrounded = isGrounded,
+                maxSpeedSource = "None",
                 invalidStateDetected = invalidState,
                 invalidStateReason = invalidStateReason
             });
@@ -259,23 +281,48 @@ public class DeveloperIntrusionGimmick : MonoBehaviour
             Vector3 positionDelta = currentPosition - sample.previousPosition;
             positionDelta.y = 0f;
 
-            float speed = positionDelta.magnitude / dt;
+            float transformDeltaSpeed = positionDelta.magnitude / dt;
+            float speed = transformDeltaSpeed;
             float angularSpeed = 0f;
+            string speedSource = "TransformDelta";
 
             if (sample.rigidbody != null && !sample.rigidbody.isKinematic)
             {
-                speed = Mathf.Max(speed, HorizontalMagnitude(GetRigidbodyVelocity(sample.rigidbody)));
+                float rigidbodySpeed = HorizontalMagnitude(GetRigidbodyVelocity(sample.rigidbody));
+                if (rigidbodySpeed > speed)
+                {
+                    speed = rigidbodySpeed;
+                    speedSource = "Rigidbody";
+                }
+
                 angularSpeed = sample.rigidbody.angularVelocity.magnitude;
             }
 
             if (sample.characterController != null && sample.characterController.enabled)
             {
                 Vector3 ccVelocity = sample.characterController.velocity;
-                speed = Mathf.Max(speed, HorizontalMagnitude(ccVelocity));
+                float characterControllerSpeed = HorizontalMagnitude(ccVelocity);
+                if (characterControllerSpeed > speed)
+                {
+                    speed = characterControllerSpeed;
+                    speedSource = "CharacterController";
+                }
+
+                sample.hasGroundedInfo = true;
+                sample.isGrounded = sample.characterController.isGrounded;
             }
 
             sample.speedSum += speed;
             sample.angularSpeedSum += angularSpeed;
+            if (speed > sample.maxFrameSpeed)
+            {
+                sample.maxFrameSpeed = speed;
+                sample.maxSpeedSource = speedSource;
+            }
+
+            if (angularSpeed > sample.maxFrameAngularSpeed)
+                sample.maxFrameAngularSpeed = angularSpeed;
+
             sample.sampleCount++;
             sample.trackingTransform = trackingTransform;
             sample.previousPosition = currentPosition;
@@ -324,12 +371,14 @@ public class DeveloperIntrusionGimmick : MonoBehaviour
                 Status = sample.status,
                 AverageSpeed = averageSpeed,
                 AverageAngularSpeed = averageAngularSpeed,
+                HasGroundedInfo = sample.hasGroundedInfo,
+                IsGrounded = sample.isGrounded,
                 Failed = failed,
                 Reason = reason
             };
 
             _lastScanResults.Add(result);
-            Log($"[DeveloperIntrusion] Scan result player:{sample.status.name} failed:{failed} speed:{averageSpeed:0.00} angular:{averageAngularSpeed:0.00} reason:{reason}");
+            Log($"[DeveloperIntrusion] Scan result player:{sample.status.name} failed:{failed} avgSpeed:{averageSpeed:0.00}/{scanVelocityThreshold:0.00} avgAngular:{averageAngularSpeed:0.00}/{scanAngularVelocityThreshold:0.00} grounded:{FormatGrounded(sample.hasGroundedInfo, sample.isGrounded)} maxFrameSpeed:{sample.maxFrameSpeed:0.00} maxAngular:{sample.maxFrameAngularSpeed:0.00} maxSpeedSource:{sample.maxSpeedSource} reason:{reason}");
         }
     }
 
@@ -452,6 +501,31 @@ public class DeveloperIntrusionGimmick : MonoBehaviour
 
         Transform spawn = vfxSpawnPoint != null ? vfxSpawnPoint : transform;
         Instantiate(prefab, spawn.position, spawn.rotation);
+    }
+
+    private void ShowTelegraphText()
+    {
+        if (telegraphText == null)
+            return;
+
+        telegraphText.text = telegraphMessage;
+        telegraphText.gameObject.SetActive(true);
+    }
+
+    private void HideTelegraphText()
+    {
+        if (telegraphText == null)
+            return;
+
+        telegraphText.gameObject.SetActive(false);
+    }
+
+    private string FormatGrounded(bool hasGroundedInfo, bool isGrounded)
+    {
+        if (!hasGroundedInfo)
+            return "n/a";
+
+        return isGrounded ? "true" : "false";
     }
 
     private void Log(string message)
