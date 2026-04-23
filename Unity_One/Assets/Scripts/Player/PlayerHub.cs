@@ -13,6 +13,18 @@ public class PlayerHub : NetworkBehaviour
     [SerializeField] private AudioListener audioListener;
 
     [Header("Camera Settings")]
+    [Tooltip("기본 세미 고정 쿼터뷰 피치 각도입니다. 값이 클수록 더 아래를 내려다봅니다.")]
+    [SerializeField] private float defaultQuarterViewPitch = 28f;
+
+    [Tooltip("입력이 없을 때 기본 쿼터뷰 구도로 복귀하는 속도입니다.")]
+    [SerializeField] private float cameraPitchReturnSpeed = 4f;
+
+    [Tooltip("수동 피치 입력에 곱할 배율입니다. 값이 낮을수록 카메라 조작 피로도가 줄어듭니다.")]
+    [SerializeField] private float manualPitchInputScale = 0.35f;
+
+    [Tooltip("이 값보다 작은 피치 입력은 무입력으로 간주하고 기본 구도로 복귀합니다.")]
+    [SerializeField] private float cameraPitchInputDeadzone = 0.01f;
+
     [Tooltip("위로 올려다보는 최대 각도")]
     [SerializeField] private float topClamp = 70f;
 
@@ -80,6 +92,7 @@ public class PlayerHub : NetworkBehaviour
     private void Awake()
     {
         ResolveRefs();
+        ApplyDefaultCameraPitchImmediate();
     }
 
     public override void OnNetworkSpawn()
@@ -88,6 +101,7 @@ public class PlayerHub : NetworkBehaviour
 
         ResolveRefs();
         ApplyOwnerVisuals();
+        ApplyDefaultCameraPitchImmediate();
 
         if (!IsOwner && inputModule != null)
             inputModule.enabled = false;
@@ -240,6 +254,10 @@ public class PlayerHub : NetworkBehaviour
         {
             HandleCameraRotation(_pitchDelta);
         }
+        else
+        {
+            HandleCameraRotation(0f);
+        }
 
         if (!CanMoveNow())
         {
@@ -284,9 +302,31 @@ public class PlayerHub : NetworkBehaviour
     {
         if (cameraRoot == null) return;
 
-        _cameraPitchVelocity -= pitchDelta;
+        float scaledPitchDelta = pitchDelta * Mathf.Max(0f, manualPitchInputScale);
+        _cameraPitchVelocity -= scaledPitchDelta;
+
+        if (Mathf.Abs(pitchDelta) <= Mathf.Max(0f, cameraPitchInputDeadzone))
+        {
+            float targetPitch = GetClampedDefaultQuarterViewPitch();
+            float recenterStep = Mathf.Max(0f, cameraPitchReturnSpeed) * Time.deltaTime;
+            _cameraPitchVelocity = Mathf.MoveTowards(_cameraPitchVelocity, targetPitch, recenterStep);
+        }
+
         _cameraPitchVelocity = Mathf.Clamp(_cameraPitchVelocity, bottomClamp, topClamp);
         cameraRoot.transform.localRotation = Quaternion.Euler(_cameraPitchVelocity, 0f, 0f);
+    }
+
+    private void ApplyDefaultCameraPitchImmediate()
+    {
+        _cameraPitchVelocity = GetClampedDefaultQuarterViewPitch();
+
+        if (cameraRoot != null)
+            cameraRoot.transform.localRotation = Quaternion.Euler(_cameraPitchVelocity, 0f, 0f);
+    }
+
+    private float GetClampedDefaultQuarterViewPitch()
+    {
+        return Mathf.Clamp(defaultQuarterViewPitch, bottomClamp, topClamp);
     }
 
     private void TickServer()

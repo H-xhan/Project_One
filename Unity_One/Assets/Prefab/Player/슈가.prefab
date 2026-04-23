@@ -106,7 +106,6 @@ MonoBehaviour:
   allowCursorToggle: 1
   toggleCursorKey: 60
   forceCursorUnlockedScenes:
-  - RoomLobby
   - MainMenu
   mouseSensitivityX: 0.2
   mouseSensitivityY: 0.2
@@ -163,10 +162,10 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: 
   walkSpeed: 4
-  sprintSpeed: 6.5
-  acceleration: 12
+  sprintSpeed: 6
+  acceleration: 5
   deceleration: 30
-  jumpHeight: 1.3
+  jumpHeight: 1
   gravity: -18
   stickToGroundForce: -5
   yawScale: 1
