@@ -39,12 +39,25 @@ public class PlayerHub : NetworkBehaviour
     [SerializeField] private string[] skipInitialSpawnScenes = new[] { "InGame" };
 
     [Header("Modules (자동 연결됨)")]
+    [Tooltip("플레이어 입력을 읽는 모듈입니다. 비워두면 자식에서 자동 탐색합니다.")]
     [SerializeField] private PlayerInputModule inputModule;
+
+    [Tooltip("서버 이동과 점프를 처리하는 모듈입니다. 비워두면 자식에서 자동 탐색합니다.")]
     [SerializeField] private PlayerLocomotionModule locomotionModule;
+
+    [Tooltip("애니메이션 파라미터와 트리거를 처리하는 모듈입니다. 비워두면 자식에서 자동 탐색합니다.")]
     [SerializeField] private PlayerAnimModule animModule;
+
+    [Tooltip("공격 판정과 타격 처리를 담당하는 모듈입니다. 비워두면 자식에서 자동 탐색합니다.")]
     [SerializeField] private PlayerCombatModule combatModule;
+
+    [Tooltip("아이템 상호작용과 장착 표현을 담당하는 모듈입니다. 비워두면 자식에서 자동 탐색합니다.")]
     [SerializeField] private PlayerInteractModule interactModule;
+
+    [Tooltip("넉백, 기상, 탈락 등 플레이어 상태를 담당하는 모듈입니다. 비워두면 자식에서 자동 탐색합니다.")]
     [SerializeField] private PlayerStatusModule statusModule;
+
+    [Tooltip("현재 게임 상태를 확인할 매니저입니다. 비워두면 씬에서 자동 탐색합니다.")]
     [SerializeField] private GameStateManager gameStateManager;
 
     public bool IsCursorLocked => inputModule != null && inputModule.IsCursorLocked;

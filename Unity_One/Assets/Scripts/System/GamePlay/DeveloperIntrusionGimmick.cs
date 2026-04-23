@@ -6,6 +6,8 @@ using UnityEngine.Events;
 
 public class DeveloperIntrusionGimmick : MonoBehaviour
 {
+    private const string LogPrefix = "[DEV_INTRUSION]";
+
     public enum Phase
     {
         Idle = 0,
@@ -17,42 +19,90 @@ public class DeveloperIntrusionGimmick : MonoBehaviour
     }
 
     [Header("Timing")]
+    [Tooltip("전조 단계 지속 시간(초)입니다. 플레이어에게 곧 멈춰야 함을 알리는 시간입니다.")]
     [SerializeField] private float telegraphDuration = 1.5f;
+
+    [Tooltip("대응 단계 지속 시간(초)입니다. 플레이어가 입력을 멈출 수 있는 시간입니다.")]
     [SerializeField] private float responseDuration = 2.0f;
+
+    [Tooltip("스캔 판정에 사용할 샘플링 시간(초)입니다. 짧은 평균 속도로 억울한 판정을 줄입니다.")]
     [SerializeField] private float scanSampleDuration = 0.35f;
+
+    [Tooltip("실패 처리 후 정리 단계 지속 시간(초)입니다.")]
     [SerializeField] private float resolveDuration = 1.0f;
 
     [Header("Scan")]
+    [Tooltip("스캔 실패로 볼 평균 수평 속도 임계값입니다. 값이 낮을수록 더 엄격하게 판정합니다.")]
     [SerializeField] private float scanVelocityThreshold = 0.35f;
+
+    [Tooltip("스캔 실패로 볼 평균 각속도 임계값입니다. 값이 낮을수록 회전에 더 민감합니다.")]
     [SerializeField] private float scanAngularVelocityThreshold = 1.2f;
 
     [Header("Resolve")]
+    [Tooltip("실패자에게 적용할 수평 넉백 힘입니다. 값이 높을수록 더 멀리 밀려납니다.")]
     [SerializeField] private float knockbackForce = 14f;
+
+    [Tooltip("실패자에게 적용할 위쪽 넉백 힘입니다. 값이 높을수록 더 높이 뜹니다.")]
     [SerializeField] private float upwardForce = 4f;
 
     [Header("Presentation Hooks")]
+    [Tooltip("기믹 연출 사운드를 재생할 AudioSource입니다. 비워두면 사운드 재생을 건너뜁니다.")]
     [SerializeField] private AudioSource audioSource;
+
+    [Tooltip("전조 단계 시작 시 재생할 사운드 클립입니다.")]
     [SerializeField] private AudioClip telegraphClip;
+
+    [Tooltip("대응 단계 시작 시 재생할 사운드 클립입니다.")]
     [SerializeField] private AudioClip responseClip;
+
+    [Tooltip("스캔 단계 시작 시 재생할 사운드 클립입니다.")]
     [SerializeField] private AudioClip scanClip;
+
+    [Tooltip("실패 처리 단계 시작 시 재생할 사운드 클립입니다.")]
     [SerializeField] private AudioClip resolveClip;
+
+    [Tooltip("기믹 종료 시 재생할 사운드 클립입니다.")]
     [SerializeField] private AudioClip endClip;
+
+    [Tooltip("전조 단계 시작 시 생성할 VFX 프리팹입니다.")]
     [SerializeField] private GameObject telegraphVfxPrefab;
+
+    [Tooltip("대응 단계 시작 시 생성할 VFX 프리팹입니다.")]
     [SerializeField] private GameObject responseVfxPrefab;
+
+    [Tooltip("스캔 단계 시작 시 생성할 VFX 프리팹입니다.")]
     [SerializeField] private GameObject scanVfxPrefab;
+
+    [Tooltip("실패 처리 단계 시작 시 생성할 VFX 프리팹입니다.")]
     [SerializeField] private GameObject resolveVfxPrefab;
+
+    [Tooltip("VFX를 생성할 위치입니다. 비워두면 이 오브젝트 위치를 사용합니다.")]
     [SerializeField] private Transform vfxSpawnPoint;
+
+    [Tooltip("전조 단계 시작 시 호출할 추가 연출 이벤트입니다.")]
     [SerializeField] private UnityEvent onTelegraph;
+
+    [Tooltip("대응 단계 시작 시 호출할 추가 연출 이벤트입니다.")]
     [SerializeField] private UnityEvent onResponse;
+
+    [Tooltip("스캔 단계 시작 시 호출할 추가 연출 이벤트입니다.")]
     [SerializeField] private UnityEvent onScan;
+
+    [Tooltip("실패 처리 단계 시작 시 호출할 추가 연출 이벤트입니다.")]
     [SerializeField] private UnityEvent onResolve;
+
+    [Tooltip("기믹 종료 시 호출할 추가 연출 이벤트입니다.")]
     [SerializeField] private UnityEvent onEnd;
 
     [Header("Minimal Telegraph Text")]
+    [Tooltip("전조 메시지를 표시할 TMP 텍스트입니다. 비워두면 텍스트 표시를 건너뜁니다.")]
     [SerializeField] private TMP_Text telegraphText;
+
+    [Tooltip("전조 단계에서 화면에 표시할 경고 문구입니다.")]
     [SerializeField] private string telegraphMessage = "STOP. Developer is watching.";
 
     [Header("Debug")]
+    [Tooltip("개발자 난입 기믹의 디버그 로그를 출력할지 여부입니다.")]
     [SerializeField] private bool enableDebugLogs = true;
 
     private readonly List<PlayerSample> _samples = new List<PlayerSample>();
@@ -98,7 +148,7 @@ public class DeveloperIntrusionGimmick : MonoBehaviour
     {
         if (IsRunning)
         {
-            Log("[DeveloperIntrusion] Start ignored. Gimmick is already running.");
+            Log($"{LogPrefix} Start ignored. Gimmick is already running.");
             return _runningRoutine;
         }
 
@@ -115,11 +165,12 @@ public class DeveloperIntrusionGimmick : MonoBehaviour
         }
 
         SetPhase(Phase.Idle);
+        CleanupPresentationState();
     }
 
     public void PlayTelegraphPresentation()
     {
-        Log("[DeveloperIntrusion] Telegraph");
+        Log($"{LogPrefix} Telegraph");
         ShowTelegraphText();
         PlayOneShot(telegraphClip);
         SpawnVfx(telegraphVfxPrefab);
@@ -128,7 +179,7 @@ public class DeveloperIntrusionGimmick : MonoBehaviour
 
     public void PlayResponsePresentation()
     {
-        Log("[DeveloperIntrusion] Response");
+        Log($"{LogPrefix} Response");
         HideTelegraphText();
         PlayOneShot(responseClip);
         SpawnVfx(responseVfxPrefab);
@@ -137,7 +188,7 @@ public class DeveloperIntrusionGimmick : MonoBehaviour
 
     public void PlayScanPresentation()
     {
-        Log("[DeveloperIntrusion] Scan");
+        Log($"{LogPrefix} Scan");
         PlayOneShot(scanClip);
         SpawnVfx(scanVfxPrefab);
         onScan?.Invoke();
@@ -145,7 +196,8 @@ public class DeveloperIntrusionGimmick : MonoBehaviour
 
     public void PlayResolvePresentation()
     {
-        Log("[DeveloperIntrusion] Resolve");
+        int failedCount = CountFailedResults();
+        Log($"{LogPrefix} Resolve presentation failedCount:{failedCount}");
         PlayOneShot(resolveClip);
         SpawnVfx(resolveVfxPrefab);
         onResolve?.Invoke();
@@ -153,8 +205,8 @@ public class DeveloperIntrusionGimmick : MonoBehaviour
 
     public void PlayEndPresentation()
     {
-        Log("[DeveloperIntrusion] End");
-        HideTelegraphText();
+        Log($"{LogPrefix} End");
+        CleanupPresentationState();
         PlayOneShot(endClip);
         onEnd?.Invoke();
     }
@@ -224,7 +276,7 @@ public class DeveloperIntrusionGimmick : MonoBehaviour
 
             if (status.IsEliminated)
             {
-                Log($"[DeveloperIntrusion] Skip eliminated player:{status.name}");
+                Log($"{LogPrefix} Skip eliminated player:{status.name}");
                 continue;
             }
 
@@ -378,12 +430,18 @@ public class DeveloperIntrusionGimmick : MonoBehaviour
             };
 
             _lastScanResults.Add(result);
-            Log($"[DeveloperIntrusion] Scan result player:{sample.status.name} failed:{failed} avgSpeed:{averageSpeed:0.00}/{scanVelocityThreshold:0.00} avgAngular:{averageAngularSpeed:0.00}/{scanAngularVelocityThreshold:0.00} grounded:{FormatGrounded(sample.hasGroundedInfo, sample.isGrounded)} maxFrameSpeed:{sample.maxFrameSpeed:0.00} maxAngular:{sample.maxFrameAngularSpeed:0.00} maxSpeedSource:{sample.maxSpeedSource} reason:{reason}");
+            Log($"{LogPrefix} Scan result player:{sample.status.name} failed:{failed} avgSpeed:{averageSpeed:0.00}/{scanVelocityThreshold:0.00} avgAngular:{averageAngularSpeed:0.00}/{scanAngularVelocityThreshold:0.00} grounded:{FormatGrounded(sample.hasGroundedInfo, sample.isGrounded)} maxFrameSpeed:{sample.maxFrameSpeed:0.00} maxAngular:{sample.maxFrameAngularSpeed:0.00} maxSpeedSource:{sample.maxSpeedSource} reason:{reason}");
         }
     }
 
     private void ResolveFailures()
     {
+        int failedCount = CountFailedResults();
+        if (failedCount > 0)
+            LogWarning($"{LogPrefix} Resolve failure feedback failedCount:{failedCount}. Applying knockback to failed players.");
+        else
+            Log($"{LogPrefix} Resolve failure feedback failedCount:0. No knockback targets.");
+
         for (int i = 0; i < _lastScanResults.Count; i++)
         {
             ScanResult result = _lastScanResults[i];
@@ -392,7 +450,7 @@ public class DeveloperIntrusionGimmick : MonoBehaviour
 
             if (result.Status.IsEliminated)
             {
-                Log($"[DeveloperIntrusion] Skip knockback. Player already eliminated:{result.Status.name}");
+                Log($"{LogPrefix} Skip knockback. Player already eliminated:{result.Status.name}");
                 continue;
             }
 
@@ -406,7 +464,7 @@ public class DeveloperIntrusionGimmick : MonoBehaviour
 
             Vector3 impulse = direction * knockbackForce + Vector3.up * upwardForce;
             result.Status.ApplyKnockbackServer(impulse);
-            Log($"[DeveloperIntrusion] Apply failure knockback player:{result.Status.name} impulse:{impulse} reason:{result.Reason}");
+            LogWarning($"{LogPrefix} Failure resolved player:{result.Status.name} impulse:{impulse} avgSpeed:{result.AverageSpeed:0.00}/{scanVelocityThreshold:0.00} avgAngular:{result.AverageAngularSpeed:0.00}/{scanAngularVelocityThreshold:0.00} grounded:{FormatGrounded(result.HasGroundedInfo, result.IsGrounded)} reason:{result.Reason}");
         }
     }
 
@@ -520,6 +578,29 @@ public class DeveloperIntrusionGimmick : MonoBehaviour
         telegraphText.gameObject.SetActive(false);
     }
 
+    private void CleanupPresentationState()
+    {
+        HideTelegraphText();
+    }
+
+    private int CountFailedResults()
+    {
+        int failedCount = 0;
+        for (int i = 0; i < _lastScanResults.Count; i++)
+        {
+            ScanResult result = _lastScanResults[i];
+            if (!result.Failed || result.Status == null)
+                continue;
+
+            if (result.Status.IsEliminated)
+                continue;
+
+            failedCount++;
+        }
+
+        return failedCount;
+    }
+
     private string FormatGrounded(bool hasGroundedInfo, bool isGrounded)
     {
         if (!hasGroundedInfo)
@@ -534,5 +615,13 @@ public class DeveloperIntrusionGimmick : MonoBehaviour
             return;
 
         Debug.Log(message, this);
+    }
+
+    private void LogWarning(string message)
+    {
+        if (!enableDebugLogs)
+            return;
+
+        Debug.LogWarning(message, this);
     }
 }

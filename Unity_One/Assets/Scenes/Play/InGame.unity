@@ -4111,6 +4111,8 @@ MonoBehaviour:
   onEnd:
     m_PersistentCalls:
       m_Calls: []
+  telegraphText: {fileID: 0}
+  telegraphMessage: STOP. Developer is watching.
   enableDebugLogs: 1
 --- !u!114 &1243381395
 MonoBehaviour:
@@ -4126,6 +4128,10 @@ MonoBehaviour:
   m_EditorClassIdentifier: 
   ShowTopMostFoldoutHeaderGroup: 1
   developerIntrusion: {fileID: 1243381394}
+  gameStateManager: {fileID: 0}
+  autoTriggerOnPlaying: 1
+  autoTriggerDelay: 10
+  minAutoTriggerPlayers: 1
   enableDebugLogs: 1
 --- !u!1001 &1248238501
 PrefabInstance:

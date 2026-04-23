@@ -38,7 +38,10 @@ public class GameStateManager : NetworkBehaviour
     [SerializeField, Tooltip("Playing 진입 시 플레이어를 게임 존으로 보낼지 여부")]
     private bool teleportPlayersOnEnterPlaying = true;
 
+    [Tooltip("현재 게임 상태를 네트워크로 동기화하는 값입니다.")]
     public NetworkVariable<int> StateValue = new NetworkVariable<int>((int)GameState.Lobby);
+
+    [Tooltip("현재 게임 상태의 남은 시간을 네트워크로 동기화하는 값입니다.")]
     public NetworkVariable<float> StateTimer = new NetworkVariable<float>(0f);
 
     public GameState GetState()

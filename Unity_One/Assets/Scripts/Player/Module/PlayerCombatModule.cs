@@ -28,7 +28,10 @@ public class PlayerCombatModule : NetworkBehaviour
     [SerializeField] private LayerMask targetMask;
 
     [Header("Hit VFX")]
+    [Tooltip("타격 성공 시 모든 클라이언트에서 생성할 VFX 프리팹입니다.")]
     [SerializeField] private GameObject hitVfxPrefab;
+
+    [Tooltip("타격 VFX 위치를 위로 보정할 높이입니다.")]
     [SerializeField] private float hitVfxYOffset = 0.2f;
 
     [Header("Debug")]

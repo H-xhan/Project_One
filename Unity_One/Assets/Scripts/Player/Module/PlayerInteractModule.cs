@@ -66,6 +66,7 @@ public class PlayerInteractModule : NetworkBehaviour
     [SerializeField] private float dropHandUpOffset = 0.05f;
 
     [Header("Debug")]
+    [Tooltip("상호작용/장착 처리 디버그 로그를 출력할지 여부입니다.")]
     [SerializeField] private bool enableDebugLogs = false;
 
     private readonly NetworkVariable<NetworkObjectReference> _heldItem =

@@ -4,7 +4,10 @@ using UnityEngine;
 public class PlayerLocomotionModule : MonoBehaviour
 {
     [Header("Move Settings")]
+    [Tooltip("걷기 이동 속도입니다. 값이 높을수록 기본 이동이 빨라집니다.")]
     [SerializeField] private float walkSpeed = 4f;
+
+    [Tooltip("달리기 이동 속도입니다. 값이 높을수록 sprint 입력 시 더 빠르게 이동합니다.")]
     [SerializeField] private float sprintSpeed = 7f;
 
     [Tooltip("출발할 때 얼마나 빨리 최고 속도에 도달하는지")]
@@ -14,18 +17,33 @@ public class PlayerLocomotionModule : MonoBehaviour
     [SerializeField] private float deceleration = 30f; // [추가] 멈출 때는 2배 더 강력하게!
 
     [Header("Jump/Gravity")]
+    [Tooltip("점프 높이입니다. 값이 높을수록 점프가 더 높아집니다.")]
     [SerializeField] private float jumpHeight = 1.5f;
+
+    [Tooltip("중력 가속도입니다. 더 음수일수록 더 빠르게 떨어집니다.")]
     [SerializeField] private float gravity = -25f;
+
+    [Tooltip("지면에 붙어 있도록 아래로 누르는 힘입니다. 값이 낮을수록 지면 접지가 강해집니다.")]
     [SerializeField] private float stickToGroundForce = -5f;
 
     [Header("Rotate")]
+    [Tooltip("서버 회전 입력 배율입니다. 값이 높을수록 같은 입력으로 더 빠르게 회전합니다.")]
     [SerializeField] private float yawScale = 1f;
 
     [Header("Body Separation")]
+    [Tooltip("플레이어 몸 분리 검사에 사용할 충돌 레이어 마스크입니다.")]
     [SerializeField] private LayerMask bodyBlockerMask;
+
+    [Tooltip("몸 겹침을 검사할 구체 반경입니다. 값이 클수록 더 넓게 밀어냅니다.")]
     [SerializeField] private float separationProbeRadius = 0.18f;
+
+    [Tooltip("몸 겹침 검사 중심의 높이 오프셋입니다.")]
     [SerializeField] private float separationProbeHeight = 0.18f;
+
+    [Tooltip("몸 분리 시 추가로 확보할 여유 거리입니다.")]
     [SerializeField] private float separationPadding = 0.02f;
+
+    [Tooltip("한 번의 분리 처리에서 이동할 수 있는 최대 거리입니다.")]
     [SerializeField] private float maxSeparationMove = 0.08f;
 
     private const int BodyOverlapBufferSize = 16;
