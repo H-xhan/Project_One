@@ -113,6 +113,12 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
     private Transform rootTransform;
     private RigidbodyConstraints cachedConstraints;
     private int backStandUpStateHash;
+    private GameStateManager gameStateManager;
+    private float nextGameStateManagerLookupAt;
+    private bool hasLoggedMissingGameStateManager;
+    private bool hasLoggedEliminationGateState;
+    private bool hasReachedSafePlayingPosition;
+    private GameStateManager.GameState lastLoggedGameState;
 
     public bool IsKnocked => isKnocked;
     public bool IsStandingUp => isStandingUp;
@@ -204,6 +210,9 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
         if (rootNetObj == null)
             rootNetObj = GetComponentInParent<NetworkObject>();
 
+        if (gameStateManager == null)
+            gameStateManager = FindFirstObjectByType<GameStateManager>();
+
         rootTransform = rootNetObj != null ? rootNetObj.transform : transform.root;
     }
 
@@ -260,9 +269,86 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
     {
         Transform checkTf = rootTransform != null ? rootTransform : transform.root;
         if (checkTf == null) return;
+        if (!IsEliminationAllowedByGameState(checkTf)) return;
 
         if (checkTf.position.y < eliminationY)
             HandleElimination();
+    }
+
+    private bool IsEliminationAllowedByGameState(Transform checkTf)
+    {
+        if (!TryGetGameStateManager(out GameStateManager manager))
+        {
+            if (!hasLoggedMissingGameStateManager)
+            {
+                Debug.LogWarning("[PlayerStatus] Elimination ignored. GameStateManager not found.");
+                hasLoggedMissingGameStateManager = true;
+            }
+
+            hasReachedSafePlayingPosition = false;
+            return false;
+        }
+
+        hasLoggedMissingGameStateManager = false;
+
+        GameStateManager.GameState currentState = manager.GetState();
+        if (currentState != GameStateManager.GameState.Playing)
+        {
+            hasReachedSafePlayingPosition = false;
+
+            if (!hasLoggedEliminationGateState || lastLoggedGameState != currentState)
+            {
+                Debug.Log($"[PlayerStatus] Elimination ignored. GameState is not Playing. CurrentState:{currentState}");
+                lastLoggedGameState = currentState;
+                hasLoggedEliminationGateState = true;
+            }
+
+            return false;
+        }
+
+        // Playing enters before the async teleport routine finishes, so arm pit elimination
+        // only after the player is first observed above the elimination line in Playing.
+        if (!hasReachedSafePlayingPosition && checkTf.position.y >= eliminationY)
+        {
+            hasReachedSafePlayingPosition = true;
+            lastLoggedGameState = currentState;
+            hasLoggedEliminationGateState = true;
+            Debug.Log("[PlayerStatus] Elimination allowed. GameState is Playing.");
+        }
+
+        if (!hasReachedSafePlayingPosition)
+        {
+            if (!hasLoggedEliminationGateState || lastLoggedGameState != currentState)
+            {
+                Debug.Log("[PlayerStatus] Elimination ignored. GameState is Playing but spawn placement is not ready.");
+                lastLoggedGameState = currentState;
+                hasLoggedEliminationGateState = true;
+            }
+
+            return false;
+        }
+
+        return true;
+    }
+
+    private bool TryGetGameStateManager(out GameStateManager manager)
+    {
+        if (gameStateManager != null)
+        {
+            manager = gameStateManager;
+            return true;
+        }
+
+        if (Time.unscaledTime < nextGameStateManagerLookupAt)
+        {
+            manager = null;
+            return false;
+        }
+
+        nextGameStateManagerLookupAt = Time.unscaledTime + 0.5f;
+        gameStateManager = FindFirstObjectByType<GameStateManager>();
+        manager = gameStateManager;
+        return manager != null;
     }
 
     private void BeginKnockback(Vector3 impulse)
