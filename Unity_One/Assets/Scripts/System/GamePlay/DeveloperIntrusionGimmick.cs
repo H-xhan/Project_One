@@ -139,7 +139,7 @@ public class DeveloperIntrusionGimmick : MonoBehaviour
 
     [Header("Debug")]
     [Tooltip("개발자 난입 기믹의 디버그 로그를 출력할지 여부입니다.")]
-    [SerializeField] private bool enableDebugLogs = true;
+    [SerializeField] private bool enableDebugLogs = false;
 
     private readonly List<PlayerSample> _samples = new List<PlayerSample>();
     private readonly List<ScanResult> _lastScanResults = new List<ScanResult>();

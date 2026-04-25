@@ -16,6 +16,9 @@ public class LobbyManager : MonoBehaviour
     [Tooltip("Host 방 생성 완료 후 자동 이동할 씬 이름")]
     [SerializeField] private string roomLobbySceneName = "RoomLobby";
 
+    [Tooltip("로비 생성/참가 흐름의 일반 디버그 로그 출력 여부입니다.")]
+    [SerializeField] private bool enableDebugLogs = false;
+
     private Lobby _hostLobby;
     private float _heartbeatTimer;
     private bool _isLobbyOwner;
@@ -55,17 +58,17 @@ public class LobbyManager : MonoBehaviour
             options.SetProfile(profileName);
 
             await UnityServices.InitializeAsync(options);
-            Debug.Log($"[Lobby] UGS Initialized. Profile={profileName}");
+            Log($"[Lobby] UGS Initialized. Profile={profileName}");
         }
 
         if (!AuthenticationService.Instance.IsSignedIn)
         {
             await AuthenticationService.Instance.SignInAnonymouslyAsync();
-            Debug.Log($"[Lobby] Signed In. PlayerID={AuthenticationService.Instance.PlayerId}");
+            Log($"[Lobby] Signed In. PlayerID={AuthenticationService.Instance.PlayerId}");
         }
         else
         {
-            Debug.Log($"[Lobby] Already Signed In. PlayerID={AuthenticationService.Instance.PlayerId}");
+            Log($"[Lobby] Already Signed In. PlayerID={AuthenticationService.Instance.PlayerId}");
         }
 
         _servicesReady = true;
@@ -110,7 +113,7 @@ public class LobbyManager : MonoBehaviour
             _hostLobby = lobby;
             _isLobbyOwner = true;
 
-            Debug.Log($"[Lobby] 방 생성 완료! LobbyCode: {lobby.LobbyCode}, RelayJoinCode: {joinCode}");
+            Log($"[Lobby] 방 생성 완료! LobbyCode: {lobby.LobbyCode}, RelayJoinCode: {joinCode}");
 
             TryLoadRoomLobbyForHost();
         }
@@ -125,14 +128,14 @@ public class LobbyManager : MonoBehaviour
         var nm = NetworkManager.Singleton;
         if (nm == null)
         {
-            Debug.LogWarning("[Lobby] NetworkManager가 없어 일반 SceneManager로 로드합니다.");
+            LogWarning("[Lobby] NetworkManager가 없어 일반 SceneManager로 로드합니다.");
             SceneManager.LoadScene(roomLobbySceneName);
             return;
         }
 
         if (!nm.IsHost)
         {
-            Debug.LogWarning("[Lobby] Host가 아니라서 RoomLobby 로드를 건너뜁니다.");
+            LogWarning("[Lobby] Host가 아니라서 RoomLobby 로드를 건너뜁니다.");
             return;
         }
 
@@ -145,7 +148,7 @@ public class LobbyManager : MonoBehaviour
         }
         else
         {
-            Debug.LogWarning("[Lobby] Netcode SceneManager가 없어 일반 SceneManager로 로드합니다.");
+            LogWarning("[Lobby] Netcode SceneManager가 없어 일반 SceneManager로 로드합니다.");
             SceneManager.LoadScene(roomLobbySceneName);
         }
     }
@@ -199,7 +202,7 @@ public class LobbyManager : MonoBehaviour
             _hostLobby = lobby;
             _isLobbyOwner = false;
 
-            Debug.Log($"[Lobby] JoinLobbyById 성공. LobbyCode={lobby.LobbyCode}");
+            Log($"[Lobby] JoinLobbyById 성공. LobbyCode={lobby.LobbyCode}");
 
             await JoinViaLobbyData(lobby);
         }
@@ -216,11 +219,11 @@ public class LobbyManager : MonoBehaviour
             await EnsureServicesInitialized();
 
             string normalizedCode = NormalizeLobbyCode(lobbyCode);
-            Debug.Log($"[Lobby] JoinLobbyByCode 시도. Raw={lobbyCode}, Normalized={normalizedCode}");
+            Log($"[Lobby] JoinLobbyByCode 시도. Raw={lobbyCode}, Normalized={normalizedCode}");
 
             if (string.IsNullOrEmpty(normalizedCode))
             {
-                Debug.LogWarning("[Lobby] LobbyCode 입력값이 비어 있습니다.");
+                LogWarning("[Lobby] LobbyCode 입력값이 비어 있습니다.");
                 return;
             }
 
@@ -240,7 +243,7 @@ public class LobbyManager : MonoBehaviour
             _hostLobby = lobby;
             _isLobbyOwner = false;
 
-            Debug.Log($"[Lobby] JoinLobbyByCode 성공. LobbyCode={lobby.LobbyCode}");
+            Log($"[Lobby] JoinLobbyByCode 성공. LobbyCode={lobby.LobbyCode}");
 
             await JoinViaLobbyData(lobby);
         }
@@ -271,10 +274,10 @@ public class LobbyManager : MonoBehaviour
             return;
         }
 
-        Debug.Log($"[Lobby] Relay JoinCode={joinCode}");
+        Log($"[Lobby] Relay JoinCode={joinCode}");
 
         bool relayJoined = await RelayManager.Instance.JoinViaCode(joinCode);
-        Debug.Log($"[Lobby] Relay Join Result={relayJoined}");
+        Log($"[Lobby] Relay Join Result={relayJoined}");
 
         if (!relayJoined)
         {
@@ -282,7 +285,7 @@ public class LobbyManager : MonoBehaviour
             return;
         }
 
-        Debug.Log($"[Lobby] 최종 참가 성공. CurrentScene={SceneManager.GetActiveScene().name}");
+        Log($"[Lobby] 최종 참가 성공. CurrentScene={SceneManager.GetActiveScene().name}");
     }
 
     private string NormalizeLobbyCode(string code)
@@ -315,5 +318,21 @@ public class LobbyManager : MonoBehaviour
     public Lobby GetHostLobby()
     {
         return _hostLobby;
+    }
+
+    private void Log(string message)
+    {
+        if (!enableDebugLogs)
+            return;
+
+        Debug.Log(message);
+    }
+
+    private void LogWarning(string message)
+    {
+        if (!enableDebugLogs)
+            return;
+
+        Debug.LogWarning(message);
     }
 }

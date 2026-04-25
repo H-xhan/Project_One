@@ -89,7 +89,7 @@ MonoBehaviour:
     m_Bits: 2048
   hitVfxPrefab: {fileID: 5501628190135194678, guid: b7a18035444df4e48a96614773e02086, type: 3}
   hitVfxYOffset: 0.2
-  enableDebugLogs: 1
+  enableDebugLogs: 0
 --- !u!114 &8598645012782326681
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -151,7 +151,7 @@ MonoBehaviour:
   throwUpForce: 2
   dropHandForwardOffset: 0.15
   dropHandUpOffset: 0.05
-  enableDebugLogs: 1
+  enableDebugLogs: 0
 --- !u!114 &7163163093271237374
 MonoBehaviour:
   m_ObjectHideFlags: 0

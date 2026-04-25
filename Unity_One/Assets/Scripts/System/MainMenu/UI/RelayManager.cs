@@ -19,6 +19,10 @@ public class RelayManager : MonoBehaviour
     [SerializeField, Tooltip("Join 후 실제 연결(OnClientConnected)까지 기다리는 최대 시간(초)")]
     private float joinConnectTimeoutSec = 8f;
 
+    [Header("Debug")]
+    [SerializeField, Tooltip("디버그 로그 출력 여부입니다.")]
+    private bool enableDebugLogs = false;
+
     private bool _servicesInitialized;
     private TaskCompletionSource<bool> _clientConnectedTcs;
 
@@ -52,7 +56,7 @@ public class RelayManager : MonoBehaviour
 
     private void OnClientConnected(ulong clientId)
     {
-        Debug.Log($"[Relay] OnClientConnected: {clientId}");
+        Log($"[Relay] OnClientConnected: {clientId}");
 
         if (NetworkManager.Singleton != null && NetworkManager.Singleton.LocalClientId == clientId)
         {
@@ -62,7 +66,7 @@ public class RelayManager : MonoBehaviour
 
     private void OnClientDisconnected(ulong clientId)
     {
-        Debug.LogWarning($"[Relay] OnClientDisconnected: {clientId}");
+        LogWarning($"[Relay] OnClientDisconnected: {clientId}");
         _clientConnectedTcs?.TrySetResult(false);
     }
 
@@ -83,7 +87,7 @@ public class RelayManager : MonoBehaviour
             ? string.Empty
             : code.Trim().ToUpper();
 
-        Debug.Log($"[Relay] CurrentJoinCode={CurrentJoinCode}");
+        Log($"[Relay] CurrentJoinCode={CurrentJoinCode}");
     }
 
     private bool TryGetNet(out NetworkManager nm, out UnityTransport utp)
@@ -115,13 +119,13 @@ public class RelayManager : MonoBehaviour
         if (!AuthenticationService.Instance.IsSignedIn)
         {
             await AuthenticationService.Instance.SignInAnonymouslyAsync();
-            Debug.Log($"[Relay] Signed In. PlayerID={AuthenticationService.Instance.PlayerId}");
+            Log($"[Relay] Signed In. PlayerID={AuthenticationService.Instance.PlayerId}");
         }
 
         _servicesInitialized = true;
         HookNetcodeCallbacks();
 
-        Debug.Log("[Relay] Services Initialized");
+        Log("[Relay] Services Initialized");
     }
 
     public async Task<string> CreateRelay(int maxConnections)
@@ -135,7 +139,7 @@ public class RelayManager : MonoBehaviour
 
             if (nm.IsListening)
             {
-                Debug.LogWarning("[Relay] CreateRelay called but Network already running.");
+                LogWarning("[Relay] CreateRelay called but Network already running.");
                 return string.Empty;
             }
 
@@ -154,10 +158,10 @@ public class RelayManager : MonoBehaviour
                 false
             );
 
-            Debug.Log($"[Relay] Host Prepared. Code={joinCode} (UDP)");
+            Log($"[Relay] Host Prepared. Code={joinCode} (UDP)");
 
             bool ok = nm.StartHost();
-            Debug.Log($"[Relay] StartHost={ok}");
+            Log($"[Relay] StartHost={ok}");
 
             if (!ok)
             {
@@ -192,14 +196,14 @@ public class RelayManager : MonoBehaviour
 
             if (nm.IsListening)
             {
-                Debug.LogWarning("[Relay] JoinRelay called but Network already running.");
+                LogWarning("[Relay] JoinRelay called but Network already running.");
                 return false;
             }
 
             string code = (joinCode ?? string.Empty).Trim().ToUpper();
             if (code.Length < 6)
             {
-                Debug.LogWarning("[Relay] Join code invalid.");
+                LogWarning("[Relay] Join code invalid.");
                 return false;
             }
 
@@ -215,12 +219,12 @@ public class RelayManager : MonoBehaviour
                 false
             );
 
-            Debug.Log($"[Relay] Join Prepared. Code={code} (UDP)");
+            Log($"[Relay] Join Prepared. Code={code} (UDP)");
 
             _clientConnectedTcs = new TaskCompletionSource<bool>();
 
             bool startOk = nm.StartClient();
-            Debug.Log($"[Relay] StartClient={startOk}");
+            Log($"[Relay] StartClient={startOk}");
             if (!startOk)
             {
                 SetCurrentJoinCode(string.Empty);
@@ -231,7 +235,7 @@ public class RelayManager : MonoBehaviour
             {
                 cts.Token.Register(() => _clientConnectedTcs.TrySetResult(false));
                 bool connected = await _clientConnectedTcs.Task;
-                Debug.Log($"[Relay] Client Connected Result={connected}");
+                Log($"[Relay] Client Connected Result={connected}");
 
                 if (connected)
                     SetCurrentJoinCode(code);
@@ -252,5 +256,21 @@ public class RelayManager : MonoBehaviour
     public async Task<bool> JoinViaCode(string joinCode)
     {
         return await JoinRelay(joinCode);
+    }
+
+    private void Log(string message)
+    {
+        if (!enableDebugLogs)
+            return;
+
+        Debug.Log(message, this);
+    }
+
+    private void LogWarning(string message)
+    {
+        if (!enableDebugLogs)
+            return;
+
+        Debug.LogWarning(message, this);
     }
 }

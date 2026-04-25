@@ -35,7 +35,7 @@ public class DeskGimmickManager : NetworkBehaviour
 
     [Header("Debug")]
     [Tooltip("책상 기믹 매니저의 디버그 로그를 출력할지 여부입니다.")]
-    [SerializeField] private bool enableDebugLogs = true;
+    [SerializeField] private bool enableDebugLogs = false;
 
     private bool isDeveloperIntrusionRunning;
     private Coroutine _developerIntrusionWatchRoutine;

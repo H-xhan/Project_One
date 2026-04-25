@@ -17,6 +17,10 @@ public class ItemPickupNetwork : NetworkBehaviour
     [Tooltip("잡고 있는 동안 월드 비주얼을 숨길지")]
     [SerializeField] private bool hideWorldVisualWhenHeld = true;
 
+    [Header("Debug")]
+    [Tooltip("디버그 로그 출력 여부입니다.")]
+    [SerializeField] private bool enableDebugLogs = false;
+
     private readonly NetworkVariable<bool> _worldVisualVisible =
         new NetworkVariable<bool>(
             true,
@@ -146,25 +150,25 @@ public class ItemPickupNetwork : NetworkBehaviour
         try
         {
             Rigidbody rb = GetComponent<Rigidbody>();
-            Debug.Log(
+            Log(
                 $"[ItemPickup][DropDebug] restoreBegin item={name} restoreTargetPos={worldPosition} restoreTargetRot={worldRotation.eulerAngles} " +
                 $"currentPosBeforeRestore={transform.position} currentRotBeforeRestore={transform.rotation.eulerAngles} {FormatDropDebugRigidbodyState(rb)}");
 
             ApplyPose(worldPosition, worldRotation, worldScale, true);
-            Debug.Log(
+            Log(
                 $"[ItemPickup][DropDebug] afterApplyPose item={name} posAfterApplyPose={transform.position} rotAfterApplyPose={transform.rotation.eulerAngles}");
 
             _heldState.Value = false;
             ApplyHeldPhysicsAuthoritatively(false);
-            Debug.Log(
+            Log(
                 $"[ItemPickup][DropDebug] afterPhysicsRestore item={name} posAfterPhysicsRestore={transform.position} rotAfterPhysicsRestore={transform.rotation.eulerAngles} {FormatDropDebugRigidbodyState(rb)}");
 
             if (rb != null)
             {
                 if (rb.isKinematic)
                 {
-                    Debug.LogWarning($"[ItemPickupNetwork] Drop restore skipped velocity/impulse because Rigidbody remained kinematic on {name}.");
-                    Debug.Log(
+                    LogWarning($"[ItemPickupNetwork] Drop restore skipped velocity/impulse because Rigidbody remained kinematic on {name}.");
+                    Log(
                         $"[ItemPickup][DropDebug] afterImpulse item={name} carrierVelocity={carrierVelocity} dropImpulse={dropImpulse} " +
                         $"posAfterImpulse={transform.position} rotAfterImpulse={transform.rotation.eulerAngles} skippedImpulse=true reason=rbKinematic {FormatDropDebugRigidbodyState(rb)}");
                 }
@@ -173,14 +177,14 @@ public class ItemPickupNetwork : NetworkBehaviour
                     rb.linearVelocity = carrierVelocity;
                     rb.angularVelocity = Vector3.zero;
                     rb.AddForce(dropImpulse, ForceMode.Impulse);
-                    Debug.Log(
+                    Log(
                         $"[ItemPickup][DropDebug] afterImpulse item={name} carrierVelocity={carrierVelocity} dropImpulse={dropImpulse} " +
                         $"posAfterImpulse={transform.position} rotAfterImpulse={transform.rotation.eulerAngles} {FormatDropDebugRigidbodyState(rb)}");
                 }
             }
             else
             {
-                Debug.Log(
+                Log(
                     $"[ItemPickup][DropDebug] afterImpulse item={name} carrierVelocity={carrierVelocity} dropImpulse={dropImpulse} " +
                     $"posAfterImpulse={transform.position} rotAfterImpulse={transform.rotation.eulerAngles} skippedImpulse=true reason=noRigidbody {FormatDropDebugRigidbodyState(rb)}");
             }
@@ -380,5 +384,21 @@ public class ItemPickupNetwork : NetworkBehaviour
             _defaultLocalScale = Vector3.one;
 
         _hasDefaultLocalScale = true;
+    }
+
+    private void Log(string message)
+    {
+        if (!enableDebugLogs)
+            return;
+
+        Debug.Log(message, this);
+    }
+
+    private void LogWarning(string message)
+    {
+        if (!enableDebugLogs)
+            return;
+
+        Debug.LogWarning(message, this);
     }
 }

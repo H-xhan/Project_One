@@ -36,7 +36,7 @@ public class PlayerCombatModule : NetworkBehaviour
 
     [Header("Debug")]
     [Tooltip("공격 판정 디버그 로그 출력 여부")]
-    [SerializeField] private bool enableDebugLogs = true;
+    [SerializeField] private bool enableDebugLogs = false;
 
     private PlayerInteractModule interactModule;
     private PlayerStatusModule statusModule;

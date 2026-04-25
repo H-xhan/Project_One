@@ -42,6 +42,10 @@ public class ItemSpawner : NetworkBehaviour
     [Tooltip("각 아이템마다 전용 스폰 포인트를 연결하세요")]
     [SerializeField] private List<SpawnEntry> itemsToSpawn = new List<SpawnEntry>();
 
+    [Header("Debug")]
+    [Tooltip("디버그 로그 출력 여부입니다.")]
+    [SerializeField] private bool enableDebugLogs = false;
+
     private int _lastSpawnedSceneHandle = int.MinValue;
     private bool _subscribed;
     private Coroutine _initRoutine;
@@ -138,7 +142,7 @@ public class ItemSpawner : NetworkBehaviour
             SpawnItem(entry);
         }
 
-        Debug.Log($"[ItemSpawner] SpawnAll 완료 (Scene: {sceneName}) Count={itemsToSpawn.Count}");
+        Log($"[ItemSpawner] SpawnAll 완료 (Scene: {sceneName}) Count={itemsToSpawn.Count}");
     }
 
     private void SpawnItem(SpawnEntry entry)
@@ -153,7 +157,7 @@ public class ItemSpawner : NetworkBehaviour
         if (netObj != null)
         {
             netObj.Spawn();
-            Debug.Log($"[ItemSpawner] {entry.name} 소환 완료! 위치: {spawnPos}");
+            Log($"[ItemSpawner] {entry.name} 소환 완료! 위치: {spawnPos}");
         }
         else
         {
@@ -194,5 +198,13 @@ public class ItemSpawner : NetworkBehaviour
             Gizmos.DrawWireSphere(gizmoPos, 0.15f);
             Gizmos.DrawRay(gizmoPos, Vector3.up * 0.5f);
         }
+    }
+
+    private void Log(string message)
+    {
+        if (!enableDebugLogs)
+            return;
+
+        Debug.Log(message, this);
     }
 }

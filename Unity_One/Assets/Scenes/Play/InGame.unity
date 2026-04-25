@@ -617,6 +617,7 @@ MonoBehaviour:
     localRotationOffset: {x: 0, y: 0, z: 0}
     fallbackPosition: {x: 0, y: 0, z: 0}
     fallbackRotation: {x: 0, y: 0, z: 0}
+  enableDebugLogs: 0
 --- !u!114 &101162012
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -2939,13 +2940,13 @@ Transform:
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 805295538}
   serializedVersion: 2
-  m_LocalRotation: {x: 0.2164396, y: 0, z: 0, w: 0.97629607}
-  m_LocalPosition: {x: 42.96, y: 13.06, z: -62.58}
+  m_LocalRotation: {x: 0.20132367, y: -0.3584466, z: 0.079465605, w: 0.9081135}
+  m_LocalPosition: {x: 51.16, y: 13.06, z: -56.76}
   m_LocalScale: {x: 1, y: 1, z: 1}
   m_ConstrainProportionsScale: 0
   m_Children: []
   m_Father: {fileID: 0}
-  m_LocalEulerAnglesHint: {x: 25, y: 0, z: 0}
+  m_LocalEulerAnglesHint: {x: 25, y: -43.08, z: 0}
 --- !u!114 &805295542
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -3657,7 +3658,7 @@ Light:
   m_Enabled: 1
   serializedVersion: 11
   m_Type: 1
-  m_Color: {r: 0.5731132, g: 0.61055756, b: 0.764151, a: 1}
+  m_Color: {r: 1, g: 1, b: 1, a: 1}
   m_Intensity: 0.3
   m_Range: 40
   m_SpotAngle: 30
@@ -4154,7 +4155,7 @@ MonoBehaviour:
   waitAfterDoorOpen: 0.2
   waitBeforeScan: 0.3
   waitAfterScan: 0.5
-  enableDebugLogs: 1
+  enableDebugLogs: 0
 --- !u!114 &1243381395
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -4733,6 +4734,7 @@ MonoBehaviour:
   autoReturnToLobby: 1
   teleportPlayersOnEnterLobby: 1
   teleportPlayersOnEnterPlaying: 1
+  enableDebugLogs: 0
   StateValue:
     UpdateTraits:
       MinSecondsBetweenUpdates: 0
@@ -5801,6 +5803,7 @@ MonoBehaviour:
   groundProbeStartHeight: 4
   groundProbeDistance: 12
   postTeleportDriftTolerance: 0.05
+  enableDebugLogs: 0
 --- !u!4 &1995524425
 Transform:
   m_ObjectHideFlags: 0

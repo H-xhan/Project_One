@@ -46,6 +46,10 @@ public class InGameMatchManager : NetworkBehaviour
     [SerializeField, Tooltip("텔레포트 직후 허용할 최대 수평 드리프트")]
     private float postTeleportDriftTolerance = 0.05f;
 
+    [Header("Debug")]
+    [SerializeField, Tooltip("디버그 로그 출력 여부입니다.")]
+    private bool enableDebugLogs = false;
+
     private Coroutine _teleportRoutine;
     private readonly Dictionary<ulong, Coroutine> _singleTeleportRoutines = new Dictionary<ulong, Coroutine>();
     private readonly Dictionary<ulong, int> _singleTeleportTokens = new Dictionary<ulong, int>();
@@ -235,7 +239,7 @@ public class InGameMatchManager : NetworkBehaviour
             NetworkObject playerObj = client.PlayerObject;
             if (playerObj == null || !playerObj.IsSpawned)
             {
-                Debug.LogWarning($"[InGameMatchManager] Skip teleport. PlayerObject not ready. client:{clientId}");
+                LogWarning($"[InGameMatchManager] Skip teleport. PlayerObject not ready. client:{clientId}");
                 continue;
             }
 
@@ -248,7 +252,7 @@ public class InGameMatchManager : NetworkBehaviour
             if (requestVersion != _teleportVersion)
                 yield break;
 
-            Debug.Log($"[InGameMatchManager] Teleport client:{clientId} -> {targetSpawn.name} pos:{targetSpawn.position} actual:{playerObj.transform.position}");
+            Log($"[InGameMatchManager] Teleport client:{clientId} -> {targetSpawn.name} pos:{targetSpawn.position} actual:{playerObj.transform.position}");
         }
 
         if (requestVersion == _teleportVersion)
@@ -296,7 +300,7 @@ public class InGameMatchManager : NetworkBehaviour
             targetClient.PlayerObject == null ||
             !targetClient.PlayerObject.IsSpawned)
         {
-            Debug.LogWarning($"[InGameMatchManager] Late-join teleport skipped. PlayerObject not ready. client:{clientId}");
+            LogWarning($"[InGameMatchManager] Late-join teleport skipped. PlayerObject not ready. client:{clientId}");
             CompleteSingleClientTeleportRoutine(clientId, requestToken);
             yield break;
         }
@@ -341,7 +345,7 @@ public class InGameMatchManager : NetworkBehaviour
             yield break;
         }
 
-        Debug.Log($"[InGameMatchManager] LateJoin Teleport client:{clientId} -> {targetSpawn.name} pos:{targetSpawn.position} actual:{targetClient.PlayerObject.transform.position}");
+        Log($"[InGameMatchManager] LateJoin Teleport client:{clientId} -> {targetSpawn.name} pos:{targetSpawn.position} actual:{targetClient.PlayerObject.transform.position}");
         CompleteSingleClientTeleportRoutine(clientId, requestToken);
     }
 
@@ -465,7 +469,7 @@ public class InGameMatchManager : NetworkBehaviour
             if (ccWasEnabled)
                 cc.enabled = true;
 
-            Debug.LogWarning($"[InGameMatchManager] Post-teleport drift corrected. owner:{player.OwnerClientId} drift:{horizontalDrift:F3} target:{exactSpawnPos} actual:{tf.position}");
+            LogWarning($"[InGameMatchManager] Post-teleport drift corrected. owner:{player.OwnerClientId} drift:{horizontalDrift:F3} target:{exactSpawnPos} actual:{tf.position}");
         }
     }
 
@@ -518,5 +522,21 @@ public class InGameMatchManager : NetworkBehaviour
         }
 
         return result;
+    }
+
+    private void Log(string message)
+    {
+        if (!enableDebugLogs)
+            return;
+
+        Debug.Log(message, this);
+    }
+
+    private void LogWarning(string message)
+    {
+        if (!enableDebugLogs)
+            return;
+
+        Debug.LogWarning(message, this);
     }
 }

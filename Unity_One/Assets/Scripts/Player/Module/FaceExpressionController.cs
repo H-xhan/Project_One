@@ -31,6 +31,10 @@ public class FaceExpressionController : MonoBehaviour
     [Tooltip("Hold 기능 기본 유지 시간")]
     [SerializeField] private float holdSeconds = 3.5f;
 
+    [Header("Debug")]
+    [Tooltip("디버그 로그 출력 여부입니다.")]
+    [SerializeField] private bool enableDebugLogs = false;
+
     private Material _mat;
 
     private static readonly int BaseMap = Shader.PropertyToID("_BaseMap");
@@ -138,7 +142,7 @@ public class FaceExpressionController : MonoBehaviour
             return;
         }
 
-        Debug.Log($"[FaceExpressionController] Face index={_currentIndex}, offset={finalOffset}, scaleX={scaleX}, mat={_mat.name}");
+        Log($"[FaceExpressionController] Face index={_currentIndex}, offset={finalOffset}, scaleX={scaleX}, mat={_mat.name}");
     }
 
     public void SetFaceIndex(int index)
@@ -184,6 +188,14 @@ public class FaceExpressionController : MonoBehaviour
 
         ApplyFaceIndex(defaultIndex);
         _holdRoutine = null;
+    }
+
+    private void Log(string message)
+    {
+        if (!enableDebugLogs)
+            return;
+
+        Debug.Log(message, this);
     }
 
     [ContextMenu("Face/Test 0")] private void Test0() => SetFaceIndex(0);

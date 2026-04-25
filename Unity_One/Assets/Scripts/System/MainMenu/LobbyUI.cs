@@ -39,6 +39,10 @@ public class LobbyUI : MonoBehaviour
     [Tooltip("템플릿을 헤더처럼 보여줄지 여부(Join 버튼은 비활성화됨)")]
     [SerializeField] private bool showTemplateAsHeader = true;
 
+    [Header("Debug")]
+    [Tooltip("디버그 로그 출력 여부입니다.")]
+    [SerializeField] private bool enableDebugLogs = false;
+
     private Coroutine _autoRefreshRoutine;
 
     private void Awake()
@@ -49,7 +53,7 @@ public class LobbyUI : MonoBehaviour
             {
                 if (!IsServicesReady())
                 {
-                    Debug.LogWarning("[LobbyUI] 서비스 초기화 중입니다. 잠시 후 다시 시도해주세요.");
+                    LogWarning("[LobbyUI] 서비스 초기화 중입니다. 잠시 후 다시 시도해주세요.");
                     return;
                 }
 
@@ -69,7 +73,7 @@ public class LobbyUI : MonoBehaviour
             {
                 if (!IsServicesReady())
                 {
-                    Debug.LogWarning("[LobbyUI] 서비스 초기화 중입니다. 잠시 후 다시 시도해주세요.");
+                    LogWarning("[LobbyUI] 서비스 초기화 중입니다. 잠시 후 다시 시도해주세요.");
                     return;
                 }
 
@@ -82,7 +86,7 @@ public class LobbyUI : MonoBehaviour
     {
         if (!IsServicesReady())
         {
-            Debug.LogWarning("[LobbyUI] 서비스 초기화 중입니다. 잠시 후 다시 시도해주세요.");
+            LogWarning("[LobbyUI] 서비스 초기화 중입니다. 잠시 후 다시 시도해주세요.");
             return;
         }
 
@@ -190,5 +194,13 @@ public class LobbyUI : MonoBehaviour
             if (singleUI != null)
                 singleUI.SetLobby(lobby);
         }
+    }
+
+    private void LogWarning(string message)
+    {
+        if (!enableDebugLogs)
+            return;
+
+        Debug.LogWarning(message, this);
     }
 }

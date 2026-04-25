@@ -38,6 +38,10 @@ public class GameStateManager : NetworkBehaviour
     [SerializeField, Tooltip("Playing 진입 시 플레이어를 게임 존으로 보낼지 여부")]
     private bool teleportPlayersOnEnterPlaying = true;
 
+    [Header("Debug")]
+    [SerializeField, Tooltip("디버그 로그 출력 여부입니다.")]
+    private bool enableDebugLogs = false;
+
     [Tooltip("현재 게임 상태를 네트워크로 동기화하는 값입니다.")]
     public NetworkVariable<int> StateValue = new NetworkVariable<int>((int)GameState.Lobby);
 
@@ -126,7 +130,7 @@ public class GameStateManager : NetworkBehaviour
             inGameMatchManager.TeleportPlayersToLobbyServer();
         }
 
-        Debug.Log("[GameStateManager] EnterLobby");
+        Log("[GameStateManager] EnterLobby");
     }
 
     private void EnterCountdown()
@@ -134,7 +138,7 @@ public class GameStateManager : NetworkBehaviour
         StateValue.Value = (int)GameState.Countdown;
         StateTimer.Value = countdownSeconds;
 
-        Debug.Log("[GameStateManager] EnterCountdown");
+        Log("[GameStateManager] EnterCountdown");
     }
 
     private void EnterPlaying()
@@ -147,7 +151,7 @@ public class GameStateManager : NetworkBehaviour
             inGameMatchManager.TeleportPlayersToGameServer();
         }
 
-        Debug.Log("[GameStateManager] EnterPlaying");
+        Log("[GameStateManager] EnterPlaying");
     }
 
     private void EnterResults()
@@ -155,6 +159,14 @@ public class GameStateManager : NetworkBehaviour
         StateValue.Value = (int)GameState.Results;
         StateTimer.Value = resultsSeconds;
 
-        Debug.Log("[GameStateManager] EnterResults");
+        Log("[GameStateManager] EnterResults");
+    }
+
+    private void Log(string message)
+    {
+        if (!enableDebugLogs)
+            return;
+
+        Debug.Log(message, this);
     }
 }

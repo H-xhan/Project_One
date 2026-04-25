@@ -102,6 +102,10 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
     [Tooltip("이 높이 아래로 떨어지면 탈락 처리되는 Y값")]
     [SerializeField] private float eliminationY = -15f;
 
+    [Header("Debug")]
+    [Tooltip("디버그 로그 출력 여부입니다.")]
+    [SerializeField] private bool enableDebugLogs = false;
+
     private bool isKnocked;
     private bool isStandingUp;
     private bool isEliminated;
@@ -298,7 +302,7 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
 
             if (!hasLoggedEliminationGateState || lastLoggedGameState != currentState)
             {
-                Debug.Log($"[PlayerStatus] Elimination ignored. GameState is not Playing. CurrentState:{currentState}");
+                Log($"[PlayerStatus] Elimination ignored. GameState is not Playing. CurrentState:{currentState}");
                 lastLoggedGameState = currentState;
                 hasLoggedEliminationGateState = true;
             }
@@ -313,14 +317,14 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
             hasReachedSafePlayingPosition = true;
             lastLoggedGameState = currentState;
             hasLoggedEliminationGateState = true;
-            Debug.Log("[PlayerStatus] Elimination allowed. GameState is Playing.");
+            Log("[PlayerStatus] Elimination allowed. GameState is Playing.");
         }
 
         if (!hasReachedSafePlayingPosition)
         {
             if (!hasLoggedEliminationGateState || lastLoggedGameState != currentState)
             {
-                Debug.Log("[PlayerStatus] Elimination ignored. GameState is Playing but spawn placement is not ready.");
+                Log("[PlayerStatus] Elimination ignored. GameState is Playing but spawn placement is not ready.");
                 lastLoggedGameState = currentState;
                 hasLoggedEliminationGateState = true;
             }
@@ -401,11 +405,11 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
             else
                 rootRigidbody.AddTorque(torque, ForceMode.Impulse);
 
-            Debug.Log($"[PlayerStatus] Knockback launch:{launch}, torque:{torque}, mode:{(useVelocityChange ? "VelocityChange" : "Impulse")}, mass:{rootRigidbody.mass}");
+            Log($"[PlayerStatus] Knockback launch:{launch}, torque:{torque}, mode:{(useVelocityChange ? "VelocityChange" : "Impulse")}, mass:{rootRigidbody.mass}");
             return;
         }
 
-        Debug.Log($"[PlayerStatus] Knockback launch:{launch}, mode:{(useVelocityChange ? "VelocityChange" : "Impulse")}, mass:{rootRigidbody.mass}");
+        Log($"[PlayerStatus] Knockback launch:{launch}, mode:{(useVelocityChange ? "VelocityChange" : "Impulse")}, mass:{rootRigidbody.mass}");
     }
 
     private void BeginStandUpBack()
@@ -580,7 +584,7 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
         isStandingUp = false;
         standUpTimer = 0f;
 
-        Debug.Log($"[PlayerStatus] {name} eliminated.");
+        Log($"[PlayerStatus] {name} eliminated.");
 
         if (rootRigidbody != null)
         {
@@ -613,8 +617,16 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
         if (!IsServer) return;
         if (isEliminated) return;
 
-        Debug.Log($"[PlayerStatus] TakeDamage -> {name}, damage:{damage}");
+        Log($"[PlayerStatus] TakeDamage -> {name}, damage:{damage}");
         TryTriggerHitReaction();
+    }
+
+    private void Log(string message)
+    {
+        if (!enableDebugLogs)
+            return;
+
+        Debug.Log(message, this);
     }
 
     private void TryTriggerHitReaction()
