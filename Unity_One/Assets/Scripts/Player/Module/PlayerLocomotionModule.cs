@@ -30,6 +30,15 @@ public class PlayerLocomotionModule : MonoBehaviour
     [Tooltip("서버 회전 입력 배율입니다. 값이 높을수록 같은 입력으로 더 빠르게 회전합니다.")]
     [SerializeField] private float yawScale = 1f;
 
+    [Tooltip("좌우 입력으로 캐릭터가 회전하는 속도입니다.")]
+    [SerializeField] private float moveFacingTurnSpeed = 180f;
+
+    [Tooltip("이 값보다 작은 전진/회전 입력은 무시합니다.")]
+    [SerializeField] private float moveFacingInputDeadzone = 0.01f;
+
+    [Tooltip("정지 상태에서만 적용할 수동 yaw 입력 배율입니다.")]
+    [SerializeField] private float idleYawInputScale = 0.35f;
+
     [Header("Body Separation")]
     [Tooltip("플레이어 몸 분리 검사에 사용할 충돌 레이어 마스크입니다.")]
     [SerializeField] private LayerMask bodyBlockerMask;
@@ -53,6 +62,8 @@ public class PlayerLocomotionModule : MonoBehaviour
     private float _verticalVelocity; // 수직 속도 (Y)
     private readonly Collider[] _bodyOverlapHits = new Collider[BodyOverlapBufferSize];
     private readonly HashSet<int> _processedOverlapRoots = new HashSet<int>(BodyOverlapBufferSize);
+    private float _movementReferenceYaw;
+    private bool _movementReferenceYawCaptured;
 
     public bool IsGrounded => _cc != null && _cc.isGrounded;
     public float PlanarSpeed => new Vector2(_planarVelocity.x, _planarVelocity.z).magnitude;
@@ -67,10 +78,14 @@ public class PlayerLocomotionModule : MonoBehaviour
         if (_cc == null) return false;
         bool didJump = false;
         float dt = Time.deltaTime;
+        float forwardInput = GetForwardInput(moveInput.y);
+        float turnInput = GetTurnInput(moveInput.x);
+        Vector3 inputDir = GetMoveFacingDirection(moveInput);
+        bool hasMoveInput = Mathf.Abs(forwardInput) > 0f;
 
-        // 1. 회전 처리 (마우스)
-        if (Mathf.Abs(yawDelta) > 0.001f)
-            _cc.transform.Rotate(0f, yawDelta * yawScale, 0f);
+        // 1. 회전 처리 (A/D 탱크 회전)
+        if (Mathf.Abs(turnInput) > 0f)
+            ApplyTurnInput(turnInput, dt);
 
         // 2. 점프 및 중력 처리
         bool grounded = IsGrounded;
@@ -95,17 +110,13 @@ public class PlayerLocomotionModule : MonoBehaviour
         // 3. 이동 속도 계산 (핵심 수정!)
         float targetSpeed = sprintHeld ? sprintSpeed : walkSpeed;
 
-        // 입력이 없으면 목표 속도는 0
-        if (moveInput.sqrMagnitude == 0) targetSpeed = 0;
-
-        // 목표 방향 벡터 계산
-        Vector3 inputDir = (_cc.transform.right * moveInput.x + _cc.transform.forward * moveInput.y);
-        if (inputDir.sqrMagnitude > 1f) inputDir.Normalize();
+        // 전진/후진 입력이 없으면 목표 속도는 0
+        if (!hasMoveInput) targetSpeed = 0;
 
         Vector3 desiredVelocity = inputDir * targetSpeed;
 
         // [핵심] 입력이 있으면 '가속도', 입력이 없으면(멈출 때) '감속도' 적용
-        float currentAccel = (moveInput.sqrMagnitude > 0) ? acceleration : deceleration;
+        float currentAccel = hasMoveInput ? acceleration : deceleration;
 
         // 부드러운 속도 변화 (Lerp)
         _planarVelocity = Vector3.Lerp(_planarVelocity, desiredVelocity, 1f - Mathf.Exp(-currentAccel * dt));
@@ -213,6 +224,65 @@ public class PlayerLocomotionModule : MonoBehaviour
         push = Vector3.ClampMagnitude(push, maxSeparationMove);
 
         _cc.Move(push);
+    }
+
+    private float GetForwardInput(float forwardInput)
+    {
+        float deadzone = Mathf.Max(0f, moveFacingInputDeadzone);
+        if (Mathf.Abs(forwardInput) <= deadzone)
+            return 0f;
+
+        return Mathf.Clamp(forwardInput, -1f, 1f);
+    }
+
+    private float GetTurnInput(float turnInput)
+    {
+        float deadzone = Mathf.Max(0f, moveFacingInputDeadzone);
+        if (Mathf.Abs(turnInput) <= deadzone)
+            return 0f;
+
+        return Mathf.Clamp(turnInput, -1f, 1f);
+    }
+
+    private void ApplyTurnInput(float turnInput, float dt)
+    {
+        if (_cc == null || Mathf.Abs(turnInput) <= 0f)
+            return;
+
+        float turnStep = turnInput * Mathf.Max(0f, moveFacingTurnSpeed) * Mathf.Max(0f, yawScale) * dt;
+        _cc.transform.Rotate(0f, turnStep, 0f);
+    }
+
+    private void CaptureMovementReferenceYawIfNeeded()
+    {
+        if (_movementReferenceYawCaptured || _cc == null)
+            return;
+
+        _movementReferenceYaw = _cc.transform.eulerAngles.y;
+        _movementReferenceYawCaptured = true;
+    }
+
+    private Vector3 GetMoveFacingDirection(Vector2 moveInput)
+    {
+        if (_cc == null)
+            return Vector3.zero;
+
+        float forwardInput = GetForwardInput(moveInput.y);
+        if (Mathf.Abs(forwardInput) <= 0f)
+            return Vector3.zero;
+
+        return _cc.transform.forward * forwardInput;
+    }
+
+    private void RotateTowardsMoveDirection(Vector3 moveDirection, float dt)
+    {
+        if (_cc == null || moveDirection.sqrMagnitude <= 0.0001f)
+            return;
+
+        float currentYaw = _cc.transform.eulerAngles.y;
+        float targetYaw = Quaternion.LookRotation(moveDirection.normalized, Vector3.up).eulerAngles.y;
+        float nextYaw = Mathf.MoveTowardsAngle(currentYaw, targetYaw, Mathf.Max(0f, moveFacingTurnSpeed) * dt);
+        _cc.transform.rotation = Quaternion.Euler(0f, nextYaw, 0f);
     }
 
 }

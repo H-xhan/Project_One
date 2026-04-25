@@ -101,6 +101,42 @@ public class DeveloperIntrusionGimmick : MonoBehaviour
     [Tooltip("전조 단계에서 화면에 표시할 경고 문구입니다.")]
     [SerializeField] private string telegraphMessage = "STOP. Developer is watching.";
 
+    [Header("Door Presentation")]
+    [Tooltip("개발자 난입 문 연출에 사용할 회전 피벗입니다.")]
+    [SerializeField] private Transform doorPivot;
+
+    [Tooltip("문이 닫혀 있을 때의 로컬 오일러 각도입니다.")]
+    [SerializeField] private Vector3 doorClosedEuler;
+
+    [Tooltip("문이 열려 있을 때의 로컬 오일러 각도입니다.")]
+    [SerializeField] private Vector3 doorOpenEuler;
+
+    [Tooltip("문이 열리는 데 걸리는 시간(초)입니다.")]
+    [SerializeField] private float doorOpenDuration = 0.35f;
+
+    [Tooltip("문이 닫히는 데 걸리는 시간(초)입니다.")]
+    [SerializeField] private float doorCloseDuration = 0.3f;
+
+    [Header("Developer Actor")]
+    [Tooltip("난입 연출에 사용할 개발자 actor입니다. 비워두면 actor 연출을 건너뜁니다.")]
+    [SerializeField] private GameObject developerActor;
+
+    [Tooltip("개발자 actor의 기본 등장 위치입니다. developerScanPoint가 비어 있을 때 fallback으로 사용합니다.")]
+    [SerializeField] private Transform developerSpawnPoint;
+
+    [Tooltip("개발자 actor를 문 앞에 배치할 기본 위치입니다. 현재 단순화된 연출에서는 등장 위치로 사용합니다.")]
+    [SerializeField] private Transform developerScanPoint;
+
+    [Header("Sequence Timing")]
+    [Tooltip("문이 열린 뒤 개발자 actor를 표시하기 전에 잠시 기다릴 시간입니다.")]
+    [SerializeField] private float waitAfterDoorOpen = 0.2f;
+
+    [Tooltip("문이 닫힌 뒤 스캔 단계로 넘어가기 전에 잠시 기다릴 시간입니다.")]
+    [SerializeField] private float waitBeforeScan = 0.3f;
+
+    [Tooltip("실패 처리 이후 문을 다시 열기 전에 잠시 유지할 시간입니다.")]
+    [SerializeField] private float waitAfterScan = 0.5f;
+
     [Header("Debug")]
     [Tooltip("개발자 난입 기믹의 디버그 로그를 출력할지 여부입니다.")]
     [SerializeField] private bool enableDebugLogs = true;
@@ -108,7 +144,10 @@ public class DeveloperIntrusionGimmick : MonoBehaviour
     private readonly List<PlayerSample> _samples = new List<PlayerSample>();
     private readonly List<ScanResult> _lastScanResults = new List<ScanResult>();
     private Coroutine _runningRoutine;
+    private Coroutine _presentationSequenceRoutine;
     private Phase _phase = Phase.Idle;
+    private bool _entranceSequenceRequested;
+    private bool _exitSequenceRequested;
 
     public Phase CurrentPhase => _phase;
     public bool IsRunning => _runningRoutine != null;
@@ -152,6 +191,7 @@ public class DeveloperIntrusionGimmick : MonoBehaviour
             return _runningRoutine;
         }
 
+        ResetPresentationSequenceState(true);
         _runningRoutine = StartCoroutine(RunRoutine(players, playPresentationInternally));
         return _runningRoutine;
     }
@@ -164,6 +204,7 @@ public class DeveloperIntrusionGimmick : MonoBehaviour
             _runningRoutine = null;
         }
 
+        ResetPresentationSequenceState(true);
         SetPhase(Phase.Idle);
         CleanupPresentationState();
     }
@@ -175,6 +216,7 @@ public class DeveloperIntrusionGimmick : MonoBehaviour
         PlayOneShot(telegraphClip);
         SpawnVfx(telegraphVfxPrefab);
         onTelegraph?.Invoke();
+        RequestEntranceSequence();
     }
 
     public void PlayResponsePresentation()
@@ -201,11 +243,13 @@ public class DeveloperIntrusionGimmick : MonoBehaviour
         PlayOneShot(resolveClip);
         SpawnVfx(resolveVfxPrefab);
         onResolve?.Invoke();
+        RequestExitSequence();
     }
 
     public void PlayEndPresentation()
     {
         Log($"{LogPrefix} End");
+        ResetPresentationSequenceState(true);
         CleanupPresentationState();
         PlayOneShot(endClip);
         onEnd?.Invoke();
@@ -214,6 +258,9 @@ public class DeveloperIntrusionGimmick : MonoBehaviour
     private IEnumerator RunRoutine(IList<PlayerStatusModule> players, bool playPresentationInternally)
     {
         _lastScanResults.Clear();
+
+        if (playPresentationInternally)
+            PrepareDeveloperActorForSequence();
 
         SetPhase(Phase.Telegraph);
         if (playPresentationInternally)
@@ -225,6 +272,9 @@ public class DeveloperIntrusionGimmick : MonoBehaviour
             PlayResponsePresentation();
         yield return WaitForSecondsSafe(responseDuration);
 
+        if (playPresentationInternally)
+            yield return WaitForSecondsSafe(waitBeforeScan);
+
         SetPhase(Phase.Scan);
         if (playPresentationInternally)
             PlayScanPresentation();
@@ -235,6 +285,9 @@ public class DeveloperIntrusionGimmick : MonoBehaviour
             PlayResolvePresentation();
         ResolveFailures();
         yield return WaitForSecondsSafe(resolveDuration);
+
+        if (playPresentationInternally)
+            yield return WaitForSecondsSafe(waitAfterScan);
 
         SetPhase(Phase.Cooldown);
         if (playPresentationInternally)
@@ -581,6 +634,185 @@ public class DeveloperIntrusionGimmick : MonoBehaviour
     private void CleanupPresentationState()
     {
         HideTelegraphText();
+        DeactivateDeveloperActor();
+        ApplyDoorImmediate(false);
+    }
+
+    private IEnumerator PlayDeveloperEntranceSequence()
+    {
+        PrepareDeveloperActorForSequence();
+        yield return RotateDoorRoutine(true);
+        yield return WaitForSecondsSafe(waitAfterDoorOpen);
+        ShowDeveloperActorAtAppearPoint();
+        yield return RotateDoorRoutine(false);
+    }
+
+    private IEnumerator PlayDeveloperExitSequence()
+    {
+        yield return RotateDoorRoutine(true);
+        HideDeveloperActor();
+        yield return RotateDoorRoutine(false);
+    }
+
+    private IEnumerator RotateDoorRoutine(bool open)
+    {
+        if (doorPivot == null)
+        {
+            Log($"{LogPrefix} Door {(open ? "open" : "close")} skipped. doorPivot is null.");
+            yield break;
+        }
+
+        Vector3 targetEuler = open ? doorOpenEuler : doorClosedEuler;
+        float duration = Mathf.Max(0.01f, open ? doorOpenDuration : doorCloseDuration);
+        Quaternion startRotation = doorPivot.localRotation;
+        Quaternion targetRotation = Quaternion.Euler(targetEuler);
+        float elapsed = 0f;
+
+        Log($"{LogPrefix} Door {(open ? "opening" : "closing")}");
+
+        while (elapsed < duration)
+        {
+            elapsed += Time.deltaTime;
+            float t = Mathf.Clamp01(elapsed / duration);
+            doorPivot.localRotation = Quaternion.Slerp(startRotation, targetRotation, t);
+            yield return null;
+        }
+
+        doorPivot.localRotation = targetRotation;
+        Log($"{LogPrefix} Door {(open ? "opened" : "closed")}");
+    }
+
+    private void ApplyDoorImmediate(bool open)
+    {
+        if (doorPivot == null)
+            return;
+
+        doorPivot.localRotation = Quaternion.Euler(open ? doorOpenEuler : doorClosedEuler);
+    }
+
+    private void PrepareDeveloperActorForSequence()
+    {
+        DeactivateDeveloperActor();
+        ApplyDoorImmediate(false);
+    }
+
+    private void ShowDeveloperActorAtAppearPoint()
+    {
+        if (developerActor == null)
+        {
+            Log($"{LogPrefix} Actor show skipped. developerActor is null.");
+            return;
+        }
+
+        Transform appearPoint = ResolveDeveloperAppearPoint();
+        if (appearPoint != null)
+        {
+            SetDeveloperActorPose(appearPoint);
+        }
+        else
+        {
+            Log($"{LogPrefix} Actor appear point missing. Keeping current actor position.");
+        }
+
+        developerActor.SetActive(true);
+        Log($"{LogPrefix} Developer actor shown");
+    }
+
+    private void HideDeveloperActor()
+    {
+        if (developerActor == null)
+            return;
+
+        developerActor.SetActive(false);
+        Log($"{LogPrefix} Developer actor hidden");
+    }
+
+    private void SetDeveloperActorPose(Transform targetPoint)
+    {
+        if (developerActor == null || targetPoint == null)
+            return;
+
+        developerActor.transform.SetPositionAndRotation(targetPoint.position, targetPoint.rotation);
+    }
+
+    private void DeactivateDeveloperActor()
+    {
+        if (developerActor == null)
+            return;
+
+        developerActor.SetActive(false);
+    }
+
+    private void RequestEntranceSequence()
+    {
+        Log($"{LogPrefix} Entrance sequence requested.");
+
+        if (_entranceSequenceRequested)
+        {
+            Log($"{LogPrefix} Entrance sequence skipped. Already requested.");
+            return;
+        }
+
+        _entranceSequenceRequested = true;
+        _exitSequenceRequested = false;
+        StartPresentationSequence(PlayDeveloperEntranceSequence());
+    }
+
+    private void RequestExitSequence()
+    {
+        Log($"{LogPrefix} Exit sequence requested.");
+
+        if (_exitSequenceRequested)
+        {
+            Log($"{LogPrefix} Exit sequence skipped. Already requested.");
+            return;
+        }
+
+        _exitSequenceRequested = true;
+        StartPresentationSequence(PlayDeveloperExitSequence());
+    }
+
+    private void StartPresentationSequence(IEnumerator sequence)
+    {
+        if (sequence == null)
+            return;
+
+        if (_presentationSequenceRoutine != null)
+        {
+            StopCoroutine(_presentationSequenceRoutine);
+            _presentationSequenceRoutine = null;
+        }
+
+        _presentationSequenceRoutine = StartCoroutine(RunPresentationSequence(sequence));
+    }
+
+    private IEnumerator RunPresentationSequence(IEnumerator sequence)
+    {
+        yield return sequence;
+        _presentationSequenceRoutine = null;
+    }
+
+    private void ResetPresentationSequenceState(bool stopActiveSequence)
+    {
+        if (stopActiveSequence && _presentationSequenceRoutine != null)
+        {
+            StopCoroutine(_presentationSequenceRoutine);
+            _presentationSequenceRoutine = null;
+        }
+
+        _entranceSequenceRequested = false;
+        _exitSequenceRequested = false;
+    }
+
+    private Transform ResolveDeveloperAppearPoint()
+    {
+        if (developerScanPoint != null)
+            return developerScanPoint;
+
+        if (developerSpawnPoint != null)
+            return developerSpawnPoint;
+
+        return null;
     }
 
     private int CountFailedResults()

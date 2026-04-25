@@ -135,6 +135,9 @@ MonoBehaviour:
   pickupMask:
     serializedVersion: 2
     m_Bits: 640
+  pickupRayRadius: 0.2
+  pickupFallbackOriginHeight: 1
+  pickupFallbackForwardOffset: 0.35
   rightHandBone: {fileID: 1755140454431793062}
   leftHandBone: {fileID: 7447463752640382508}
   defaultHeldLocalPosition: {x: 0, y: 0, z: 0}
@@ -161,14 +164,17 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 2205832935e2a9d4ba5e7c277c3c0e14, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  walkSpeed: 4
-  sprintSpeed: 6
-  acceleration: 5
+  walkSpeed: 5
+  sprintSpeed: 7
+  acceleration: 8
   deceleration: 30
-  jumpHeight: 1
+  jumpHeight: 1.3
   gravity: -18
   stickToGroundForce: -5
   yawScale: 1
+  moveFacingTurnSpeed: 140
+  moveFacingInputDeadzone: 0.01
+  idleYawInputScale: 0.25
   bodyBlockerMask:
     serializedVersion: 2
     m_Bits: 4096
@@ -192,11 +198,11 @@ MonoBehaviour:
   rootRigidbody: {fileID: 2851017198822883728}
   charController: {fileID: 8782184542177483484}
   locomotionModule: {fileID: 7163163093271237374}
-  knockbackDuration: 1
-  standUpVelocityThreshold: 0.15
+  knockbackDuration: 2
+  standUpVelocityThreshold: 0.1
   useVelocityChange: 1
   horizontalLaunchScale: 0.3
-  minimumUpwardLaunch: 1
+  minimumUpwardLaunch: 0.8
   upwardLaunchBonus: 0.5
   tumbleTorque: 5
   randomYawTorque: 1
@@ -205,7 +211,7 @@ MonoBehaviour:
   rootAnimator: {fileID: 1707666485735594559}
   useBackStandUp: 1
   disableControllerDuringStandUp: 1
-  standUpFallbackTime: 3.6
+  standUpFallbackTime: 1
   snapUprightOnStandUp: 1
   snapToGroundOnStandUpFinish: 1
   snapToGroundDuringStandUp: 1
@@ -221,7 +227,7 @@ MonoBehaviour:
   triggerHitOnDamage: 0
   hitReactionCooldown: 0.12
   triggerHitWhileKnocked: 0
-  eliminationY: -15
+  eliminationY: -10
 --- !u!1 &3475079385350325182
 GameObject:
   m_ObjectHideFlags: 0
@@ -2946,6 +2952,26 @@ MonoBehaviour:
   ShowTopMostFoldoutHeaderGroup: 1
   cameraRoot: {fileID: 9032354176591487332}
   audioListener: {fileID: 0}
+  defaultQuarterViewPitch: 28
+  cameraPitchReturnSpeed: 4
+  manualPitchInputScale: 0.35
+  cameraPitchInputDeadzone: 0.01
+  cameraLocalPositionOffset: {x: 0, y: 0.8, z: -0.9}
+  manualYawInputScale: 0.35
+  cameraYawInputDeadzone: 0.01
+  cameraYawReturnSpeed: 20
+  cameraMoveFramingOffset: {x: 0, y: 0.2, z: -0.35}
+  cameraPositionBlendSpeed: 4
+  cameraCollisionMask:
+    serializedVersion: 2
+    m_Bits: 9
+  cameraCollisionRadius: 0.28
+  cameraCollisionPadding: 0.25
+  minimumCameraDistance: 0.35
+  cameraCollisionReturnSpeed: 4
+  cameraCollisionFocusHeight: 0.95
+  cameraCollisionExtraPullForward: 0.25
+  cameraCollisionSampleSideOffset: 0.25
   topClamp: 70
   bottomClamp: -40
   attackStateName: Attack

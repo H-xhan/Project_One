@@ -21,6 +21,15 @@ public class PlayerInteractModule : NetworkBehaviour
     [Tooltip("픽업 가능한 레이어 마스크")]
     [SerializeField] private LayerMask pickupMask;
 
+    [Tooltip("쿼터뷰 카메라에서도 작은 아이템을 덜 놓치도록 보정할 픽업 구체 반경")]
+    [SerializeField] private float pickupRayRadius = 0.2f;
+
+    [Tooltip("카메라 레이 실패 시 플레이어 쪽 보조 레이를 시작할 높이")]
+    [SerializeField] private float pickupFallbackOriginHeight = 1.0f;
+
+    [Tooltip("카메라 레이 실패 시 플레이어 쪽 보조 레이를 전방으로 미는 거리")]
+    [SerializeField] private float pickupFallbackForwardOffset = 0.35f;
+
     [Header("Hand")]
     [Tooltip("오른손 소켓(WeaponPoint). 비어있으면 휴머노이드 RightHand를 자동 탐색")]
     [SerializeField] private Transform rightHandBone;
@@ -140,7 +149,14 @@ public class PlayerInteractModule : NetworkBehaviour
     private void AutoFindRefs()
     {
         if (ownerCamera == null)
-            ownerCamera = GetComponentInParent<Camera>();
+        {
+            PlayerHub hub = GetComponentInParent<PlayerHub>();
+            if (hub != null)
+                ownerCamera = hub.PlayerCamera;
+
+            if (ownerCamera == null)
+                ownerCamera = GetComponentInChildren<Camera>(true);
+        }
 
         if (_anim == null)
             _anim = GetComponentInParent<Animator>();
@@ -215,8 +231,25 @@ public class PlayerInteractModule : NetworkBehaviour
         if (ownerCamera == null) return false;
         if (HasHeldItem()) return false;
 
-        Ray ray = new Ray(ownerCamera.transform.position, ownerCamera.transform.forward);
-        if (!Physics.Raycast(ray, out RaycastHit hit, pickupDistance, pickupMask, QueryTriggerInteraction.Ignore))
+        Ray cameraRay = ownerCamera.ViewportPointToRay(new Vector3(0.5f, 0.5f, 0f));
+        if (TryFindPickupTargetFromRay(cameraRay, out target))
+            return true;
+
+        Vector3 fallbackOrigin = transform.position
+            + Vector3.up * Mathf.Max(0f, pickupFallbackOriginHeight)
+            + transform.forward * Mathf.Max(0f, pickupFallbackForwardOffset);
+        Vector3 fallbackDirection = cameraRay.origin + cameraRay.direction * pickupDistance - fallbackOrigin;
+        if (fallbackDirection.sqrMagnitude < 0.0001f)
+            fallbackDirection = transform.forward;
+
+        return TryFindPickupTargetFromRay(new Ray(fallbackOrigin, fallbackDirection.normalized), out target);
+    }
+
+    private bool TryFindPickupTargetFromRay(Ray ray, out NetworkObjectReference target)
+    {
+        target = default;
+
+        if (!TryPickupRaycast(ray, out RaycastHit hit))
             return false;
 
         NetworkObject netObj = hit.collider.GetComponentInParent<NetworkObject>();
@@ -224,6 +257,18 @@ public class PlayerInteractModule : NetworkBehaviour
 
         target = netObj;
         return true;
+    }
+
+    private bool TryPickupRaycast(Ray ray, out RaycastHit hit)
+    {
+        float radius = Mathf.Max(0f, pickupRayRadius);
+        if (radius > 0f &&
+            Physics.SphereCast(ray, radius, out hit, pickupDistance, pickupMask, QueryTriggerInteraction.Ignore))
+        {
+            return true;
+        }
+
+        return Physics.Raycast(ray, out hit, pickupDistance, pickupMask, QueryTriggerInteraction.Ignore);
     }
 
     public bool ServerTryPickup(NetworkObjectReference target)

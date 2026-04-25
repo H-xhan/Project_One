@@ -25,6 +25,49 @@ public class PlayerHub : NetworkBehaviour
     [Tooltip("이 값보다 작은 피치 입력은 무입력으로 간주하고 기본 구도로 복귀합니다.")]
     [SerializeField] private float cameraPitchInputDeadzone = 0.01f;
 
+    [Tooltip("장면 중심 프레이밍을 위해 현재 카메라 로컬 위치에 더할 오프셋입니다.")]
+    [SerializeField] private Vector3 cameraLocalPositionOffset = new Vector3(0f, 0.8f, -0.9f);
+
+    [Tooltip("수동 yaw 입력에 곱할 배율입니다. 값이 낮을수록 자유 회전 의존이 줄어듭니다.")]
+    [SerializeField] private float manualYawInputScale = 0.45f;
+
+    [Tooltip("이 값보다 작은 yaw 입력은 무입력으로 간주합니다.")]
+    [SerializeField] private float cameraYawInputDeadzone = 0.01f;
+
+    [Tooltip("정지 중 yaw가 기본 방향으로 복귀하는 속도입니다.")]
+    [SerializeField] private float cameraYawReturnSpeed = 45f;
+
+    [Tooltip("이동 중 장면 가독성을 위해 현재 카메라 로컬 위치에 추가할 프레이밍 오프셋입니다.")]
+    [SerializeField] private Vector3 cameraMoveFramingOffset = new Vector3(0f, 0.2f, -0.35f);
+
+    [Tooltip("카메라 로컬 위치가 목표 프레이밍으로 따라가는 속도입니다.")]
+    [SerializeField] private float cameraPositionBlendSpeed = 6f;
+
+    [Header("Camera Collision")]
+    [Tooltip("카메라 가림 검사에 사용할 충돌 레이어 마스크입니다.")]
+    [SerializeField] private LayerMask cameraCollisionMask = ~0;
+
+    [Tooltip("카메라 가림 검사에 사용할 SphereCast 반경입니다.")]
+    [SerializeField] private float cameraCollisionRadius = 0.2f;
+
+    [Tooltip("충돌 지점 앞에 카메라를 얼마나 여유 두고 둘지 정합니다.")]
+    [SerializeField] private float cameraCollisionPadding = 0.1f;
+
+    [Tooltip("가림 시 카메라가 플레이어에 지나치게 붙지 않도록 유지할 최소 거리입니다.")]
+    [SerializeField] private float minimumCameraDistance = 0.75f;
+
+    [Tooltip("가림이 사라졌을 때 원래 쿼터뷰 위치로 복귀하는 속도입니다.")]
+    [SerializeField] private float cameraCollisionReturnSpeed = 4f;
+
+    [Tooltip("카메라 가림 검사를 수행할 캐릭터 상체 기준 높이입니다.")]
+    [SerializeField] private float cameraCollisionFocusHeight = 0.95f;
+
+    [Tooltip("얇은 오브젝트 대응을 위해 충돌 지점보다 추가로 플레이어 쪽으로 당기는 거리입니다.")]
+    [SerializeField] private float cameraCollisionExtraPullForward = 0.25f;
+
+    [Tooltip("상체 좌우 가시성 보장을 위해 추가 검사할 샘플의 좌우 벌림 거리입니다.")]
+    [SerializeField] private float cameraCollisionSampleSideOffset = 0.25f;
+
     [Tooltip("위로 올려다보는 최대 각도")]
     [SerializeField] private float topClamp = 70f;
 
@@ -32,6 +75,16 @@ public class PlayerHub : NetworkBehaviour
     [SerializeField] private float bottomClamp = -40f;
 
     private float _cameraPitchVelocity;
+    private Vector3 _cameraRootBaseLocalPosition;
+    private bool _cameraRootBaseLocalPositionCaptured;
+    private float _defaultQuarterViewYaw;
+    private bool _defaultQuarterViewYawCaptured;
+    private Vector3 _cameraCurrentLocalPosition;
+    private bool _cameraLocalPositionInitialized;
+    private bool _cameraWasObstructedLastFrame;
+
+    private const int CameraObstructionHitBufferSize = 8;
+    private readonly RaycastHit[] _cameraObstructionHits = new RaycastHit[CameraObstructionHitBufferSize];
 
     [Header("Attack Buffer Settings")]
     [Tooltip("Animator에서 공격 애니가 재생되는 State의 이름(Short Name). 예: Attack")]
@@ -100,6 +153,7 @@ public class PlayerHub : NetworkBehaviour
         base.OnNetworkSpawn();
 
         ResolveRefs();
+        CacheCameraDefaults();
         ApplyOwnerVisuals();
         ApplyDefaultCameraPitchImmediate();
 
@@ -166,6 +220,8 @@ public class PlayerHub : NetworkBehaviour
             var cam = GetComponentInChildren<Camera>(true);
             if (cam != null) cameraRoot = cam.gameObject;
         }
+
+        CacheCameraDefaults();
 
         if (audioListener == null) audioListener = GetComponentInChildren<AudioListener>(true);
 
@@ -245,6 +301,8 @@ public class PlayerHub : NetworkBehaviour
             pitchDelta = 0f;
         }
 
+        yawDelta = GetProcessedYawDelta(yawDelta, move, allowLook);
+
         _moveInput = move;
         _yawDelta = yawDelta;
         _pitchDelta = pitchDelta;
@@ -313,20 +371,270 @@ public class PlayerHub : NetworkBehaviour
         }
 
         _cameraPitchVelocity = Mathf.Clamp(_cameraPitchVelocity, bottomClamp, topClamp);
+        UpdateCameraLocalPosition();
         cameraRoot.transform.localRotation = Quaternion.Euler(_cameraPitchVelocity, 0f, 0f);
     }
 
     private void ApplyDefaultCameraPitchImmediate()
     {
+        CacheCameraDefaults();
         _cameraPitchVelocity = GetClampedDefaultQuarterViewPitch();
 
         if (cameraRoot != null)
+        {
+            ApplyCameraLocalPositionImmediate();
             cameraRoot.transform.localRotation = Quaternion.Euler(_cameraPitchVelocity, 0f, 0f);
+        }
     }
 
     private float GetClampedDefaultQuarterViewPitch()
     {
         return Mathf.Clamp(defaultQuarterViewPitch, bottomClamp, topClamp);
+    }
+
+    private void CacheCameraDefaults()
+    {
+        if (!_cameraRootBaseLocalPositionCaptured && cameraRoot != null)
+        {
+            _cameraRootBaseLocalPosition = cameraRoot.transform.localPosition;
+            _cameraRootBaseLocalPositionCaptured = true;
+        }
+
+        if (!_defaultQuarterViewYawCaptured)
+        {
+            _defaultQuarterViewYaw = transform.eulerAngles.y;
+            _defaultQuarterViewYawCaptured = true;
+        }
+    }
+
+    private Vector3 GetTargetCameraLocalPosition()
+    {
+        if (!_cameraRootBaseLocalPositionCaptured)
+            return cameraLocalPositionOffset;
+
+        return _cameraRootBaseLocalPosition + cameraLocalPositionOffset + cameraMoveFramingOffset * GetCameraMoveFramingWeight();
+    }
+
+    private float GetCameraMoveFramingWeight()
+    {
+        float moveMagnitude = Mathf.Clamp01(_moveInput.magnitude);
+        float forwardWeight = Mathf.Clamp01(_moveInput.y);
+        return Mathf.Clamp01(moveMagnitude * 0.5f + forwardWeight * 0.5f);
+    }
+
+    private void UpdateCameraLocalPosition()
+    {
+        if (cameraRoot == null)
+            return;
+
+        Vector3 targetLocalPosition = GetTargetCameraLocalPosition();
+        bool obstructed;
+        targetLocalPosition = GetObstructionAdjustedCameraLocalPosition(targetLocalPosition, out obstructed);
+
+        if (!_cameraLocalPositionInitialized)
+        {
+            _cameraCurrentLocalPosition = targetLocalPosition;
+            _cameraLocalPositionInitialized = true;
+        }
+        else
+        {
+            float positionStep = GetCameraPositionBlendSpeed(targetLocalPosition, obstructed) * Time.deltaTime;
+            _cameraCurrentLocalPosition = Vector3.MoveTowards(_cameraCurrentLocalPosition, targetLocalPosition, positionStep);
+        }
+
+        cameraRoot.transform.localPosition = _cameraCurrentLocalPosition;
+        _cameraWasObstructedLastFrame = obstructed;
+    }
+
+    private void ApplyCameraLocalPositionImmediate()
+    {
+        if (cameraRoot == null)
+            return;
+
+        bool obstructed;
+        _cameraCurrentLocalPosition = GetObstructionAdjustedCameraLocalPosition(GetTargetCameraLocalPosition(), out obstructed);
+        _cameraLocalPositionInitialized = true;
+        cameraRoot.transform.localPosition = _cameraCurrentLocalPosition;
+        _cameraWasObstructedLastFrame = obstructed;
+    }
+
+    private Vector3 GetObstructionAdjustedCameraLocalPosition(Vector3 targetLocalPosition, out bool obstructed)
+    {
+        obstructed = false;
+
+        if (cameraRoot == null)
+            return targetLocalPosition;
+
+        if (IsSpawned && !IsOwner)
+            return targetLocalPosition;
+
+        Vector3 obstructionOrigin = GetCameraObstructionOrigin();
+        Vector3 targetWorldPosition = GetCameraWorldPositionFromLocal(targetLocalPosition);
+        Vector3 toCamera = targetWorldPosition - obstructionOrigin;
+        float targetDistance = toCamera.magnitude;
+        if (targetDistance <= 0.0001f)
+            return targetLocalPosition;
+
+        Vector3 direction = toCamera / targetDistance;
+        if (!TryGetNearestCameraObstructionDistance(targetWorldPosition, out float nearestValidDistance))
+            return targetLocalPosition;
+
+        obstructed = true;
+
+        float padding = Mathf.Max(0f, cameraCollisionPadding);
+        float extraPullForward = Mathf.Max(0f, cameraCollisionExtraPullForward);
+        float unclampedDistance = nearestValidDistance - padding - extraPullForward;
+        float adjustedDistance = Mathf.Clamp(unclampedDistance, 0.05f, targetDistance);
+        float safeMinimumDistance = Mathf.Min(Mathf.Max(0.05f, minimumCameraDistance), targetDistance);
+        if (unclampedDistance >= safeMinimumDistance)
+            adjustedDistance = Mathf.Max(adjustedDistance, safeMinimumDistance);
+
+        Vector3 adjustedWorldPosition = obstructionOrigin + direction * adjustedDistance;
+        return GetCameraLocalPositionFromWorld(adjustedWorldPosition);
+    }
+
+    private Vector3 GetCameraObstructionOrigin()
+    {
+        return transform.position + Vector3.up * Mathf.Max(0f, cameraCollisionFocusHeight);
+    }
+
+    private bool ShouldIgnoreCameraObstructionCollider(Collider hitCollider)
+    {
+        if (hitCollider == null)
+            return true;
+
+        Transform hitTransform = hitCollider.transform;
+        if (hitTransform.root == transform.root)
+            return true;
+
+        if (cameraRoot == null)
+            return false;
+
+        Transform cameraTransform = cameraRoot.transform;
+        return hitTransform == cameraTransform ||
+               hitTransform.IsChildOf(cameraTransform) ||
+               cameraTransform.IsChildOf(hitTransform);
+    }
+
+    private Vector3 GetCameraWorldPositionFromLocal(Vector3 localPosition)
+    {
+        if (cameraRoot == null || cameraRoot.transform.parent == null)
+            return localPosition;
+
+        return cameraRoot.transform.parent.TransformPoint(localPosition);
+    }
+
+    private Vector3 GetCameraLocalPositionFromWorld(Vector3 worldPosition)
+    {
+        if (cameraRoot == null || cameraRoot.transform.parent == null)
+            return worldPosition;
+
+        return cameraRoot.transform.parent.InverseTransformPoint(worldPosition);
+    }
+
+    private float GetCameraPositionBlendSpeed(Vector3 targetLocalPosition, bool obstructed)
+    {
+        float defaultBlendSpeed = Mathf.Max(0f, cameraPositionBlendSpeed);
+        float collisionReturnBlendSpeed = Mathf.Max(0f, cameraCollisionReturnSpeed);
+
+        if (obstructed)
+            return Mathf.Max(defaultBlendSpeed, collisionReturnBlendSpeed);
+
+        if (_cameraWasObstructedLastFrame && GetCameraDistanceFromObstructionOrigin(_cameraCurrentLocalPosition) < GetCameraDistanceFromObstructionOrigin(targetLocalPosition))
+            return collisionReturnBlendSpeed;
+
+        return defaultBlendSpeed;
+    }
+
+    private float GetCameraDistanceFromObstructionOrigin(Vector3 localPosition)
+    {
+        return Vector3.Distance(GetCameraObstructionOrigin(), GetCameraWorldPositionFromLocal(localPosition));
+    }
+
+    private bool TryGetNearestCameraObstructionDistance(Vector3 targetWorldPosition, out float nearestValidDistance)
+    {
+        nearestValidDistance = float.MaxValue;
+
+        Vector3 focusOrigin = GetCameraObstructionOrigin();
+        float centerDistance = Vector3.Distance(focusOrigin, targetWorldPosition);
+        if (centerDistance <= 0.0001f)
+            return false;
+
+        float nearestObstructionRatio = float.MaxValue;
+        EvaluateCameraObstructionSample(focusOrigin, targetWorldPosition, ref nearestObstructionRatio);
+
+        float sampleSideOffset = Mathf.Max(0f, cameraCollisionSampleSideOffset);
+        if (sampleSideOffset > 0.0001f)
+        {
+            Vector3 sampleRight = GetCameraCollisionSampleRight();
+            EvaluateCameraObstructionSample(focusOrigin + sampleRight * sampleSideOffset, targetWorldPosition, ref nearestObstructionRatio);
+            EvaluateCameraObstructionSample(focusOrigin - sampleRight * sampleSideOffset, targetWorldPosition, ref nearestObstructionRatio);
+        }
+
+        if (nearestObstructionRatio == float.MaxValue)
+            return false;
+
+        nearestValidDistance = centerDistance * nearestObstructionRatio;
+        return true;
+    }
+
+    private void EvaluateCameraObstructionSample(Vector3 sampleOrigin, Vector3 targetWorldPosition, ref float nearestObstructionRatio)
+    {
+        Vector3 toCamera = targetWorldPosition - sampleOrigin;
+        float sampleDistance = toCamera.magnitude;
+        if (sampleDistance <= 0.0001f)
+            return;
+
+        Vector3 direction = toCamera / sampleDistance;
+        int hitCount = Physics.SphereCastNonAlloc(
+            sampleOrigin,
+            Mathf.Max(0.01f, cameraCollisionRadius),
+            direction,
+            _cameraObstructionHits,
+            sampleDistance,
+            cameraCollisionMask,
+            QueryTriggerInteraction.Ignore
+        );
+
+        for (int i = 0; i < hitCount; i++)
+        {
+            Collider hitCollider = _cameraObstructionHits[i].collider;
+            if (hitCollider == null || ShouldIgnoreCameraObstructionCollider(hitCollider))
+                continue;
+
+            float obstructionRatio = _cameraObstructionHits[i].distance / sampleDistance;
+            if (obstructionRatio < nearestObstructionRatio)
+                nearestObstructionRatio = obstructionRatio;
+        }
+    }
+
+    private Vector3 GetCameraCollisionSampleRight()
+    {
+        Camera playerCamera = PlayerCamera;
+        if (playerCamera != null && playerCamera.transform.right.sqrMagnitude > 0.0001f)
+            return playerCamera.transform.right.normalized;
+
+        if (cameraRoot != null && cameraRoot.transform.right.sqrMagnitude > 0.0001f)
+            return cameraRoot.transform.right.normalized;
+
+        return transform.right;
+    }
+
+    private float GetProcessedYawDelta(float yawDelta, Vector2 moveInput, bool allowLook)
+    {
+        if (!allowLook)
+            return 0f;
+
+        float scaledYawDelta = yawDelta * Mathf.Max(0f, manualYawInputScale);
+        if (Mathf.Abs(yawDelta) > Mathf.Max(0f, cameraYawInputDeadzone))
+            return scaledYawDelta;
+
+        if (moveInput.sqrMagnitude > 0.001f)
+            return 0f;
+
+        float yawError = Mathf.DeltaAngle(transform.eulerAngles.y, _defaultQuarterViewYaw);
+        float yawReturnStep = Mathf.Max(0f, cameraYawReturnSpeed) * Time.deltaTime;
+        return Mathf.Clamp(yawError, -yawReturnStep, yawReturnStep);
     }
 
     private void TickServer()
