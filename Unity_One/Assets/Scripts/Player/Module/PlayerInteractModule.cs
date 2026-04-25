@@ -8,6 +8,7 @@ public class PlayerInteractModule : NetworkBehaviour
     private const float RequestedPoseScaleEpsilon = 0.0005f;
     private const float LocalHeldVisualSettlePositionEpsilon = 0.03f;
     private const float LocalHeldVisualSettleRotationEpsilon = 5f;
+    private const float PickupExpressionHoldSeconds = 0.75f;
     private const string RightWeaponSocketName = "RightWeaponSocket";
     private const string ItemDropAnchorName = "ItemDropAnchor";
 
@@ -106,6 +107,7 @@ public class PlayerInteractModule : NetworkBehaviour
 
     private CharacterController _cc;
     private Animator _anim;
+    private FaceExpressionController _faceExpressionController;
 
     private GameObject _localHeldVisualInstance;
     private GameObject _localHeldVisualSourcePrefab;
@@ -160,10 +162,24 @@ public class PlayerInteractModule : NetworkBehaviour
 
         if (_anim == null)
             _anim = GetComponentInParent<Animator>();
+
+        if (_faceExpressionController == null)
+        {
+            PlayerHub hub = GetComponentInParent<PlayerHub>();
+            if (hub != null)
+                _faceExpressionController = hub.GetComponentInChildren<FaceExpressionController>(true);
+
+            if (_faceExpressionController == null)
+                _faceExpressionController = transform.root != null
+                    ? transform.root.GetComponentInChildren<FaceExpressionController>(true)
+                    : GetComponentInChildren<FaceExpressionController>(true);
+        }
     }
 
     private void OnHeldItemChanged(NetworkObjectReference previousValue, NetworkObjectReference newValue)
     {
+        bool hadHeldItem = previousValue.TryGet(out NetworkObject previousItem) && previousItem != null;
+
         RestorePreviousWorldItemVisual(previousValue);
 
         ClearHeldRuntimeCache();
@@ -180,6 +196,9 @@ public class PlayerInteractModule : NetworkBehaviour
         ResolveHeldCache();
         CacheHeldMeta();
         RefreshHeldPresentation();
+
+        if (!hadHeldItem && ResolveHeldCache())
+            TryTriggerPickupExpression();
     }
 
     private void Update()
@@ -1132,6 +1151,16 @@ public class PlayerInteractModule : NetworkBehaviour
     {
         if (!enableDebugLogs) return;
         Debug.Log(message);
+    }
+
+    private void TryTriggerPickupExpression()
+    {
+        AutoFindRefs();
+        if (_faceExpressionController == null)
+            return;
+
+        _faceExpressionController.Face_4_HoldSeconds(PickupExpressionHoldSeconds);
+        Log("[PlayerInteract] Pickup expression triggered.");
     }
 
 #if UNITY_EDITOR
