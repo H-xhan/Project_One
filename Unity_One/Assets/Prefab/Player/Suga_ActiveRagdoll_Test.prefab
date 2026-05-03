@@ -882,7 +882,7 @@ MonoBehaviour:
   eliminationY: 3
   useRagdollFocusForElimination: 1
   ragdollFocusEliminationYOffset: 3
-  enableDebugLogs: 1
+  enableDebugLogs: 0
 --- !u!1 &6368872376776149902
 GameObject:
   m_ObjectHideFlags: 0
@@ -2775,7 +2775,7 @@ MonoBehaviour:
   limpUprightScale: 0
   testForwardHitImpulse: {x: 0, y: 1.6, z: -5.8}
   hitTargetRigidbody: {fileID: 8473070558796784137}
-  enableDebugLogs: 1
+  enableDebugLogs: 0
 --- !u!4 &3897101055601752575 stripped
 Transform:
   m_CorrespondingSourceObject: {fileID: 756270292124975177, guid: 83fbe5706b3039349abb894620751b26, type: 3}

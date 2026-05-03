@@ -44,6 +44,12 @@ public class KeyboardPopGimmick : MonoBehaviour
     [Tooltip("분출 중 포물선처럼 추가로 올라가는 높이입니다.")]
     [SerializeField] private float scatterArcHeight = 0.8f;
 
+    [Tooltip("착지점까지 거리가 멀수록 포물선 높이를 추가로 높이는 배율입니다.")]
+    [SerializeField] private float arcHeightByDistance = 0.25f;
+
+    [Tooltip("키캡 포물선 높이의 최대값입니다.")]
+    [SerializeField] private float maxArcHeight = 7f;
+
     [Tooltip("착지 후 쿨다운으로 넘어가기 전까지 유지하는 시간입니다. 키는 이후에도 흩어진 위치에 남습니다.")]
     [SerializeField] private float activeDuration = 0.35f;
 
@@ -79,6 +85,24 @@ public class KeyboardPopGimmick : MonoBehaviour
     [Tooltip("착지 표면에서 키를 살짝 띄우는 높이입니다.")]
     [SerializeField] private float landingSurfaceOffset = 0.05f;
 
+    [Tooltip("키캡 착지 위치를 키보드 주변 반경이 아니라 책상 전체 랜덤 영역에서 고를지 여부입니다.")]
+    [SerializeField] private bool useDeskLandingArea = true;
+
+    [Tooltip("책상 랜덤 착지 영역의 중심 월드 좌표입니다.")]
+    [SerializeField] private Vector3 deskLandingAreaCenter = Vector3.zero;
+
+    [Tooltip("책상 랜덤 착지 영역의 크기입니다. X/Z는 가로/세로 범위, Y는 사용하지 않습니다.")]
+    [SerializeField] private Vector3 deskLandingAreaSize = new Vector3(16f, 0f, 10f);
+
+    [Tooltip("키보드 시작 위치에서 이 거리보다 가까운 착지점은 다시 뽑습니다.")]
+    [SerializeField] private float minLandingDistanceFromKeyboard = 2f;
+
+    [Tooltip("착지점이 너무 격자처럼 보이지 않도록 추가하는 작은 랜덤 흔들림 범위입니다.")]
+    [SerializeField] private float landingPointJitter = 0.4f;
+
+    [Tooltip("착지점 랜덤 선택을 다시 시도하는 최대 횟수입니다.")]
+    [SerializeField] private int landingPointPickAttempts = 12;
+
     [Tooltip("충돌 후 키가 원위치로 돌아가지 않고 흩어진 위치에 남을지 여부입니다.")]
     [SerializeField] private bool stayScatteredAfterImpact = true;
 
@@ -107,6 +131,7 @@ public class KeyboardPopGimmick : MonoBehaviour
     private Vector3[] _landingWorldPositions;
     private Vector3[] _scatterDirections;
     private Vector3[] _rotationAxes;
+    private float[] _arcHeights;
     private readonly HashSet<PlayerStatusModule> _hitPlayers = new HashSet<PlayerStatusModule>();
     private Coroutine _runningRoutine;
     private Phase _phase = Phase.Idle;
@@ -228,8 +253,8 @@ public class KeyboardPopGimmick : MonoBehaviour
         {
             float t = Mathf.Clamp01(elapsed / duration);
             float smoothT = Mathf.SmoothStep(0f, 1f, t);
-            float launchArc = Mathf.Sin(t * Mathf.PI) * (Mathf.Max(0f, launchHeight) + Mathf.Max(0f, scatterArcHeight));
-            SetKeysToBurstPose(smoothT, launchArc, elapsed);
+            float arcMultiplier = Mathf.Sin(t * Mathf.PI);
+            SetKeysToBurstPose(smoothT, arcMultiplier, elapsed);
             elapsed += Time.deltaTime;
             yield return null;
         }
@@ -316,6 +341,7 @@ public class KeyboardPopGimmick : MonoBehaviour
         _landingWorldPositions = new Vector3[count];
         _scatterDirections = new Vector3[count];
         _rotationAxes = new Vector3[count];
+        _arcHeights = new float[count];
 
         for (int i = 0; i < count; i++)
         {
@@ -327,6 +353,7 @@ public class KeyboardPopGimmick : MonoBehaviour
             _scatterDirections[i] = scatterDirection;
             _rotationAxes[i] = BuildRotationAxis(scatterDirection);
             _landingWorldPositions[i] = CalculateLandingWorldPosition(i, scatterDirection);
+            _arcHeights[i] = CalculateArcHeight(GetOriginalWorldPosition(i, key), _landingWorldPositions[i]);
             Log($"{LogPrefix} Landing position calculated. key:{key.name}, position:{_landingWorldPositions[i]}");
 
             validIndex++;
@@ -375,9 +402,90 @@ public class KeyboardPopGimmick : MonoBehaviour
         if (key == null)
             return Vector3.zero;
 
+        Vector3 startWorldPosition = GetOriginalWorldPosition(index, key);
+        bool canUseDeskLandingArea = CanUseDeskLandingArea();
+        Vector3 landingTarget = canUseDeskLandingArea
+            ? PickLandingPosition(startWorldPosition)
+            : CalculateScatterWorldTarget(index, scatterDirection);
+
+        if (!IsFiniteVector(landingTarget) ||
+            (canUseDeskLandingArea && IsTooCloseToLandingStart(startWorldPosition, landingTarget)))
+        {
+            landingTarget = CalculateScatterWorldTarget(index, scatterDirection);
+        }
+
+        return ProjectLandingToSurface(landingTarget);
+    }
+
+    private Vector3 PickLandingPosition(Vector3 startPosition)
+    {
+        if (!CanUseDeskLandingArea() || !IsFiniteVector(startPosition))
+            return startPosition;
+
+        float halfX = Mathf.Abs(deskLandingAreaSize.x) * 0.5f;
+        float halfZ = Mathf.Abs(deskLandingAreaSize.z) * 0.5f;
+
+        if (halfX <= 0.0001f || halfZ <= 0.0001f)
+            return startPosition;
+
+        int attempts = Mathf.Max(1, landingPointPickAttempts);
+        float jitter = Mathf.Max(0f, landingPointJitter);
+        Vector3 fallbackCandidate = startPosition;
+        bool hasFallbackCandidate = false;
+
+        for (int i = 0; i < attempts; i++)
+        {
+            Vector3 candidate = new Vector3(
+                Random.Range(deskLandingAreaCenter.x - halfX, deskLandingAreaCenter.x + halfX),
+                startPosition.y,
+                Random.Range(deskLandingAreaCenter.z - halfZ, deskLandingAreaCenter.z + halfZ));
+
+            if (jitter > 0f)
+            {
+                candidate.x += Random.Range(-jitter, jitter);
+                candidate.z += Random.Range(-jitter, jitter);
+            }
+
+            if (!IsFiniteVector(candidate))
+                continue;
+
+            if (!hasFallbackCandidate)
+            {
+                fallbackCandidate = candidate;
+                hasFallbackCandidate = true;
+            }
+
+            if (!IsTooCloseToLandingStart(startPosition, candidate))
+                return candidate;
+        }
+
+        return hasFallbackCandidate ? fallbackCandidate : startPosition;
+    }
+
+    private bool CanUseDeskLandingArea()
+    {
+        if (!useDeskLandingArea || !IsFiniteVector(deskLandingAreaCenter) || !IsFiniteVector(deskLandingAreaSize))
+            return false;
+
+        return Mathf.Abs(deskLandingAreaSize.x) > 0.0001f && Mathf.Abs(deskLandingAreaSize.z) > 0.0001f;
+    }
+
+    private Vector3 CalculateScatterWorldTarget(int index, Vector3 scatterDirection)
+    {
+        Transform key = GetKeyAt(index);
+        if (key == null || _originalLocalPositions == null || index < 0 || index >= _originalLocalPositions.Length)
+            return Vector3.zero;
+
         Vector3 scatterLocalTarget = _originalLocalPositions[index] + scatterDirection * Mathf.Max(0f, scatterRadius);
-        Vector3 scatterWorldTarget = TransformLocalPoint(key, scatterLocalTarget);
-        Vector3 rayStart = scatterWorldTarget + Vector3.up * Mathf.Max(0f, landingRaycastHeight);
+        return TransformLocalPoint(key, scatterLocalTarget);
+    }
+
+    private Vector3 ProjectLandingToSurface(Vector3 landingTarget)
+    {
+        if (!IsFiniteVector(landingTarget))
+            return Vector3.zero;
+
+        Vector3 rayStart = landingTarget + Vector3.up * Mathf.Max(0f, landingRaycastHeight);
         float rayDistance = Mathf.Max(0f, landingRaycastDistance);
         int mask = landingMask.value == 0 ? ~0 : landingMask.value;
 
@@ -387,7 +495,18 @@ public class KeyboardPopGimmick : MonoBehaviour
             return hit.point + Vector3.up * Mathf.Max(0f, landingSurfaceOffset);
         }
 
-        return scatterWorldTarget;
+        return landingTarget;
+    }
+
+    private float CalculateArcHeight(Vector3 startWorldPosition, Vector3 landingWorldPosition)
+    {
+        float baseArcHeight = Mathf.Max(0f, launchHeight) + Mathf.Max(0f, scatterArcHeight);
+        float distance = IsFiniteVector(startWorldPosition) && IsFiniteVector(landingWorldPosition)
+            ? HorizontalDistance(startWorldPosition, landingWorldPosition)
+            : 0f;
+        float targetArcHeight = baseArcHeight + distance * Mathf.Max(0f, arcHeightByDistance);
+
+        return Mathf.Min(Mathf.Max(0f, maxArcHeight), targetArcHeight);
     }
 
     private Vector3 GetOriginalWorldPosition(int index, Transform key)
@@ -466,7 +585,7 @@ public class KeyboardPopGimmick : MonoBehaviour
         }
     }
 
-    private void SetKeysToBurstPose(float t, float launchArc, float elapsed)
+    private void SetKeysToBurstPose(float t, float arcMultiplier, float elapsed)
     {
         int count = GetPreparedKeyCount();
         for (int i = 0; i < count; i++)
@@ -477,7 +596,7 @@ public class KeyboardPopGimmick : MonoBehaviour
 
             Vector3 startWorldPosition = GetOriginalWorldPosition(i, key);
             Vector3 baseWorldPosition = Vector3.LerpUnclamped(startWorldPosition, _landingWorldPositions[i], t);
-            key.position = baseWorldPosition + Vector3.up * launchArc;
+            key.position = baseWorldPosition + Vector3.up * (arcMultiplier * GetArcHeight(i));
 
             if (rotateWhileFlying)
                 key.localRotation = _originalLocalRotations[i] * Quaternion.AngleAxis(flyingRotationSpeed * elapsed, _rotationAxes[i]);
@@ -540,10 +659,12 @@ public class KeyboardPopGimmick : MonoBehaviour
 
     private int GetPreparedKeyCount()
     {
-        if (_landingWorldPositions == null || _scatterDirections == null || _rotationAxes == null)
+        if (_landingWorldPositions == null || _scatterDirections == null || _rotationAxes == null || _arcHeights == null)
             return 0;
 
-        int preparedCount = Mathf.Min(_landingWorldPositions.Length, Mathf.Min(_scatterDirections.Length, _rotationAxes.Length));
+        int preparedCount = Mathf.Min(
+            Mathf.Min(_landingWorldPositions.Length, _scatterDirections.Length),
+            Mathf.Min(_rotationAxes.Length, _arcHeights.Length));
         return Mathf.Min(GetStoredKeyCount(), preparedCount);
     }
 
@@ -616,6 +737,51 @@ public class KeyboardPopGimmick : MonoBehaviour
         return worldDirection.normalized;
     }
 
+    private float GetArcHeight(int index)
+    {
+        if (_arcHeights == null || index < 0 || index >= _arcHeights.Length)
+            return CalculateBaseArcHeight();
+
+        float arcHeight = _arcHeights[index];
+        return IsFiniteFloat(arcHeight) ? Mathf.Max(0f, arcHeight) : CalculateBaseArcHeight();
+    }
+
+    private float CalculateBaseArcHeight()
+    {
+        return Mathf.Max(0f, launchHeight) + Mathf.Max(0f, scatterArcHeight);
+    }
+
+    private bool IsTooCloseToLandingStart(Vector3 startPosition, Vector3 candidate)
+    {
+        float minDistance = Mathf.Max(0f, minLandingDistanceFromKeyboard);
+        if (minDistance <= 0f)
+            return false;
+
+        return HorizontalSqrDistance(startPosition, candidate) < minDistance * minDistance;
+    }
+
+    private static float HorizontalDistance(Vector3 a, Vector3 b)
+    {
+        return Mathf.Sqrt(HorizontalSqrDistance(a, b));
+    }
+
+    private static float HorizontalSqrDistance(Vector3 a, Vector3 b)
+    {
+        float x = a.x - b.x;
+        float z = a.z - b.z;
+        return x * x + z * z;
+    }
+
+    private static bool IsFiniteVector(Vector3 value)
+    {
+        return IsFiniteFloat(value.x) && IsFiniteFloat(value.y) && IsFiniteFloat(value.z);
+    }
+
+    private static bool IsFiniteFloat(float value)
+    {
+        return !float.IsNaN(value) && !float.IsInfinity(value);
+    }
+
     private bool CanApplyServerKnockback()
     {
         NetworkManager networkManager = NetworkManager.Singleton;
@@ -654,6 +820,20 @@ public class KeyboardPopGimmick : MonoBehaviour
             yield break;
 
         yield return new WaitForSeconds(duration);
+    }
+
+    private void OnDrawGizmosSelected()
+    {
+        if (!useDeskLandingArea || !IsFiniteVector(deskLandingAreaCenter) || !IsFiniteVector(deskLandingAreaSize))
+            return;
+
+        Vector3 gizmoSize = new Vector3(
+            Mathf.Abs(deskLandingAreaSize.x),
+            0.05f,
+            Mathf.Abs(deskLandingAreaSize.z));
+
+        Gizmos.color = new Color(0.15f, 0.75f, 1f, 0.8f);
+        Gizmos.DrawWireCube(deskLandingAreaCenter, gizmoSize);
     }
 
     private void Log(string message)

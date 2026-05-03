@@ -3795,101 +3795,6 @@ MeshFilter:
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 740357655}
   m_Mesh: {fileID: 10202, guid: 0000000000000000e000000000000000, type: 0}
---- !u!1 &747734275
-GameObject:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  serializedVersion: 6
-  m_Component:
-  - component: {fileID: 747734276}
-  - component: {fileID: 747734277}
-  m_Layer: 0
-  m_Name: KeyboardPopGimmickHub
-  m_TagString: Untagged
-  m_Icon: {fileID: 0}
-  m_NavMeshLayer: 0
-  m_StaticEditorFlags: 0
-  m_IsActive: 1
---- !u!4 &747734276
-Transform:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 747734275}
-  serializedVersion: 2
-  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
-  m_LocalPosition: {x: 0, y: 0, z: 0}
-  m_LocalScale: {x: 1, y: 1, z: 1}
-  m_ConstrainProportionsScale: 0
-  m_Children: []
-  m_Father: {fileID: 0}
-  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
---- !u!114 &747734277
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 747734275}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 4e6ca975e64f61742916d27716e3f9ff, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: 
-  keyTransforms:
-  - {fileID: 1704648280}
-  - {fileID: 413811763}
-  - {fileID: 677237692}
-  - {fileID: 740357656}
-  - {fileID: 734675157}
-  - {fileID: 1605238088}
-  - {fileID: 913723890}
-  - {fileID: 1411022565}
-  - {fileID: 972664148}
-  - {fileID: 1173723361}
-  - {fileID: 1545065262}
-  - {fileID: 257706579}
-  - {fileID: 773475649}
-  - {fileID: 958667765}
-  - {fileID: 303570965}
-  - {fileID: 1464784165}
-  - {fileID: 1114290281}
-  - {fileID: 287790622}
-  - {fileID: 1404228646}
-  - {fileID: 240348230}
-  - {fileID: 147552948}
-  popLocalOffset: {x: 0, y: 0.35, z: 0}
-  popDuration: 0.12
-  telegraphDuration: 0.5
-  launchHeight: 1.5
-  scatterRadius: 3
-  launchDuration: 0.8
-  scatterArcHeight: 1
-  activeDuration: 0.25
-  returnDuration: 0.2
-  cooldownDuration: 1
-  randomizeScatterDirection: 1
-  scatterDirectionJitter: 1
-  rotateWhileFlying: 1
-  flyingRotationSpeed: 360
-  landingMask:
-    serializedVersion: 2
-    m_Bits: 4294967295
-  landingRaycastHeight: 4
-  landingRaycastDistance: 10
-  landingSurfaceOffset: 0.05
-  stayScatteredAfterImpact: 1
-  resetKeysBeforeStart: 1
-  hitRadius: 1
-  knockbackForce: 8
-  upwardForce: 2
-  playerMask:
-    serializedVersion: 2
-    m_Bits: 64
-  enableDebugLogs: 1
 --- !u!1 &773475648
 GameObject:
   m_ObjectHideFlags: 0
@@ -5816,6 +5721,7 @@ GameObject:
   - component: {fileID: 1243381393}
   - component: {fileID: 1243381394}
   - component: {fileID: 1243381395}
+  - component: {fileID: 1243381396}
   m_Layer: 0
   m_Name: DeskGimmickHub
   m_TagString: Untagged
@@ -5941,6 +5847,69 @@ MonoBehaviour:
   autoTriggerOnPlaying: 1
   autoTriggerDelay: 10
   minAutoTriggerPlayers: 1
+  enableDebugLogs: 0
+--- !u!114 &1243381396
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1243381391}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 4e6ca975e64f61742916d27716e3f9ff, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  keyTransforms:
+  - {fileID: 1704648280}
+  - {fileID: 413811763}
+  - {fileID: 677237692}
+  - {fileID: 740357656}
+  - {fileID: 734675157}
+  - {fileID: 1605238088}
+  - {fileID: 913723890}
+  - {fileID: 1411022565}
+  - {fileID: 972664148}
+  - {fileID: 1173723361}
+  - {fileID: 1545065262}
+  - {fileID: 257706579}
+  - {fileID: 773475649}
+  - {fileID: 958667765}
+  - {fileID: 303570965}
+  - {fileID: 1464784165}
+  - {fileID: 1114290281}
+  - {fileID: 287790622}
+  - {fileID: 1404228646}
+  - {fileID: 240348230}
+  - {fileID: 147552948}
+  popLocalOffset: {x: 0, y: 0.35, z: 0}
+  popDuration: 0.12
+  telegraphDuration: 0.5
+  launchHeight: 1.5
+  scatterRadius: 3
+  launchDuration: 0.8
+  scatterArcHeight: 1
+  activeDuration: 0.25
+  returnDuration: 0.2
+  cooldownDuration: 1
+  randomizeScatterDirection: 1
+  scatterDirectionJitter: 1
+  rotateWhileFlying: 1
+  flyingRotationSpeed: 360
+  landingMask:
+    serializedVersion: 2
+    m_Bits: 8
+  landingRaycastHeight: 4
+  landingRaycastDistance: 10
+  landingSurfaceOffset: 0.05
+  stayScatteredAfterImpact: 1
+  resetKeysBeforeStart: 1
+  hitRadius: 1
+  knockbackForce: 8
+  upwardForce: 2
+  playerMask:
+    serializedVersion: 2
+    m_Bits: 64
   enableDebugLogs: 0
 --- !u!1001 &1258511063
 PrefabInstance:
@@ -8651,7 +8620,6 @@ SceneRoots:
   - {fileID: 101162010}
   - {fileID: 1995524425}
   - {fileID: 1243381392}
-  - {fileID: 747734276}
   - {fileID: 39293972}
   - {fileID: 293616006}
   - {fileID: 1478549239}
