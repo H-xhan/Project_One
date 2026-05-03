@@ -43,6 +43,37 @@ public class PlayerHub : NetworkBehaviour
     [Tooltip("카메라 로컬 위치가 목표 프레이밍으로 따라가는 속도입니다.")]
     [SerializeField] private float cameraPositionBlendSpeed = 6f;
 
+    [Header("Ragdoll Camera Focus")]
+    [SerializeField, Tooltip("Ragdoll 활성 중 카메라가 Ragdoll 중심 위치를 따라가게 할지 여부입니다.")]
+    private bool useRagdollFocusForCamera = true;
+
+    [SerializeField, Tooltip("Ragdoll 중심 위치에 더할 카메라 focus 높이 보정값입니다.")]
+    private float ragdollCameraFocusHeightOffset = 0.4f;
+
+    [SerializeField, Tooltip("Ragdoll focus를 따라갈 때의 보간 속도입니다.")]
+    private float ragdollCameraBlendSpeed = 8f;
+
+    [SerializeField, Tooltip("Ragdoll이 끝난 뒤 기존 카메라 기준으로 돌아가는 속도입니다.")]
+    private float ragdollCameraReturnSpeed = 5f;
+
+    [SerializeField, Tooltip("Ragdoll 비활성 후 마지막 Ragdoll focus를 유지하는 시간입니다.")]
+    private float ragdollCameraHoldAfterInactive = 0.45f;
+
+    [SerializeField, Tooltip("Ragdoll focus 보정 거리를 제한합니다. 0 이하이면 제한하지 않습니다.")]
+    private float ragdollCameraMaxFocusDistance = 8f;
+
+    [SerializeField, Tooltip("Ragdoll focus가 기존 카메라 기준에서 이 거리 이상 멀어지면 빠른 추적 속도를 사용합니다.")]
+    private float ragdollCameraFastCatchupDistance = 3.0f;
+
+    [SerializeField, Tooltip("Ragdoll focus가 빠르게 멀어질 때 사용하는 빠른 카메라 추적 속도입니다.")]
+    private float ragdollCameraFastBlendSpeed = 22f;
+
+    [SerializeField, Tooltip("Ragdoll 활성 또는 유지 시간 중 카메라 가림/충돌 검사 기준점을 Ragdoll focus로 사용할지 여부입니다.")]
+    private bool useRagdollFocusForCameraObstruction = true;
+
+    [SerializeField, Tooltip("Ragdoll 종료 후 기상/복귀 시점에서 마지막 Ragdoll focus를 추가로 유지하는 시간입니다.")]
+    private float ragdollCameraStandUpHoldExtra = 0.25f;
+
     [Header("Camera Collision")]
     [Tooltip("카메라 가림 검사에 사용할 충돌 레이어 마스크입니다.")]
     [SerializeField] private LayerMask cameraCollisionMask = ~0;
@@ -82,6 +113,12 @@ public class PlayerHub : NetworkBehaviour
     private Vector3 _cameraCurrentLocalPosition;
     private bool _cameraLocalPositionInitialized;
     private bool _cameraWasObstructedLastFrame;
+    private SugaActiveRagdollController _activeRagdollController;
+    private bool _activeRagdollControllerResolveAttempted;
+    private Vector3 _ragdollCameraFocusLocalOffset;
+    private Vector3 _lastRagdollCameraFocusWorld;
+    private float _lastRagdollCameraFocusTime;
+    private bool _hasLastRagdollCameraFocus;
 
     private const int CameraObstructionHitBufferSize = 8;
     private readonly RaycastHit[] _cameraObstructionHits = new RaycastHit[CameraObstructionHitBufferSize];
@@ -232,6 +269,28 @@ public class PlayerHub : NetworkBehaviour
         if (interactModule == null) interactModule = GetComponentInChildren<PlayerInteractModule>(true);
         if (statusModule == null) statusModule = GetComponentInChildren<PlayerStatusModule>(true);
         if (gameStateManager == null) gameStateManager = FindFirstObjectByType<GameStateManager>();
+    }
+
+    private SugaActiveRagdollController ResolveActiveRagdollController()
+    {
+        if (_activeRagdollController != null)
+            return _activeRagdollController;
+
+        if (_activeRagdollControllerResolveAttempted)
+            return null;
+
+        _activeRagdollControllerResolveAttempted = true;
+
+        _activeRagdollController = GetComponent<SugaActiveRagdollController>();
+        if (_activeRagdollController != null)
+            return _activeRagdollController;
+
+        _activeRagdollController = GetComponentInParent<SugaActiveRagdollController>();
+        if (_activeRagdollController != null)
+            return _activeRagdollController;
+
+        _activeRagdollController = GetComponentInChildren<SugaActiveRagdollController>(true);
+        return _activeRagdollController;
     }
 
     private void ApplyOwnerVisuals()
@@ -422,12 +481,144 @@ public class PlayerHub : NetworkBehaviour
         return Mathf.Clamp01(moveMagnitude * 0.5f + forwardWeight * 0.5f);
     }
 
+    private Vector3 UpdateRagdollCameraFocusLocalOffset()
+    {
+        Vector3 desiredOffset = GetDesiredRagdollCameraFocusLocalOffset(out bool usingRagdollOrHold);
+        float speed = GetRagdollCameraFocusBlendSpeed(usingRagdollOrHold, desiredOffset);
+        float t = 1f - Mathf.Exp(-GetFiniteNonNegative(speed) * Time.deltaTime);
+
+        _ragdollCameraFocusLocalOffset = Vector3.Lerp(_ragdollCameraFocusLocalOffset, desiredOffset, t);
+        if (!IsFiniteVector3(_ragdollCameraFocusLocalOffset))
+            _ragdollCameraFocusLocalOffset = Vector3.zero;
+
+        if (!usingRagdollOrHold && _ragdollCameraFocusLocalOffset.sqrMagnitude <= 0.000001f)
+            _ragdollCameraFocusLocalOffset = Vector3.zero;
+
+        return _ragdollCameraFocusLocalOffset;
+    }
+
+    private float GetRagdollCameraFocusBlendSpeed(bool usingRagdollOrHold, Vector3 desiredOffset)
+    {
+        if (!usingRagdollOrHold)
+            return ragdollCameraReturnSpeed;
+
+        float fastCatchupDistance = GetFiniteNonNegative(ragdollCameraFastCatchupDistance);
+        if (desiredOffset.magnitude >= fastCatchupDistance)
+            return ragdollCameraFastBlendSpeed;
+
+        return ragdollCameraBlendSpeed;
+    }
+
+    private Vector3 GetDesiredRagdollCameraFocusLocalOffset(out bool usingRagdollOrHold)
+    {
+        usingRagdollOrHold = false;
+
+        Vector3 defaultFocusWorld = transform.position;
+        Vector3 desiredFocusWorld = defaultFocusWorld;
+
+        if (TryGetActiveRagdollCameraFocus(out Vector3 ragdollFocusWorld))
+        {
+            desiredFocusWorld = ragdollFocusWorld;
+            usingRagdollOrHold = true;
+        }
+        else if (ShouldHoldLastRagdollCameraFocus())
+        {
+            desiredFocusWorld = _lastRagdollCameraFocusWorld;
+            usingRagdollOrHold = true;
+        }
+
+        Transform reference = cameraRoot != null && cameraRoot.transform.parent != null ? cameraRoot.transform.parent : transform;
+        Vector3 defaultLocal = reference.InverseTransformPoint(defaultFocusWorld);
+        Vector3 targetLocal = reference.InverseTransformPoint(desiredFocusWorld);
+        Vector3 desiredOffset = targetLocal - defaultLocal;
+
+        if (!IsFiniteVector3(desiredOffset))
+            return Vector3.zero;
+
+        float maxFocusDistance = GetFiniteNonNegative(ragdollCameraMaxFocusDistance);
+        if (maxFocusDistance > 0f)
+            desiredOffset = Vector3.ClampMagnitude(desiredOffset, maxFocusDistance);
+
+        return desiredOffset;
+    }
+
+    private bool TryGetActiveRagdollCameraFocus(out Vector3 focusWorld)
+    {
+        focusWorld = default;
+
+        if (!ShouldUseRagdollCameraFocusForThisPlayer())
+            return false;
+
+        SugaActiveRagdollController controller = ResolveActiveRagdollController();
+        if (controller == null)
+            return false;
+
+        if (!controller.IsRagdollActiveForGameplay)
+            return false;
+
+        if (!controller.TryGetRagdollFocusPosition(out focusWorld))
+            return false;
+
+        focusWorld += Vector3.up * GetFiniteOrZero(ragdollCameraFocusHeightOffset);
+        if (!IsFiniteVector3(focusWorld))
+            return false;
+
+        _lastRagdollCameraFocusWorld = focusWorld;
+        _lastRagdollCameraFocusTime = Time.time;
+        _hasLastRagdollCameraFocus = true;
+        return true;
+    }
+
+    private bool ShouldHoldLastRagdollCameraFocus()
+    {
+        if (!ShouldUseRagdollCameraFocusForThisPlayer() || !_hasLastRagdollCameraFocus)
+            return false;
+
+        float holdDuration = GetFiniteNonNegative(ragdollCameraHoldAfterInactive);
+        if (IsStandingUpForRagdollCameraHold())
+            holdDuration += GetFiniteNonNegative(ragdollCameraStandUpHoldExtra);
+
+        return holdDuration > 0f && Time.time - _lastRagdollCameraFocusTime < holdDuration;
+    }
+
+    private bool IsStandingUpForRagdollCameraHold()
+    {
+        return statusModule != null && statusModule.IsStandingUp;
+    }
+
+    private bool ShouldUseRagdollCameraFocusForThisPlayer()
+    {
+        return useRagdollFocusForCamera && IsOwner;
+    }
+
+    private static bool IsFiniteVector3(Vector3 value)
+    {
+        return IsFiniteFloat(value.x) && IsFiniteFloat(value.y) && IsFiniteFloat(value.z);
+    }
+
+    private static bool IsFiniteFloat(float value)
+    {
+        return !float.IsNaN(value) && !float.IsInfinity(value);
+    }
+
+    private static float GetFiniteOrZero(float value)
+    {
+        return IsFiniteFloat(value) ? value : 0f;
+    }
+
+    private static float GetFiniteNonNegative(float value)
+    {
+        return Mathf.Max(0f, GetFiniteOrZero(value));
+    }
+
     private void UpdateCameraLocalPosition()
     {
         if (cameraRoot == null)
             return;
 
         Vector3 targetLocalPosition = GetTargetCameraLocalPosition();
+        Vector3 ragdollFocusOffset = UpdateRagdollCameraFocusLocalOffset();
+        targetLocalPosition += ragdollFocusOffset;
         bool obstructed;
         targetLocalPosition = GetObstructionAdjustedCameraLocalPosition(targetLocalPosition, out obstructed);
 
@@ -452,7 +643,9 @@ public class PlayerHub : NetworkBehaviour
             return;
 
         bool obstructed;
-        _cameraCurrentLocalPosition = GetObstructionAdjustedCameraLocalPosition(GetTargetCameraLocalPosition(), out obstructed);
+        Vector3 targetLocalPosition = GetTargetCameraLocalPosition();
+        targetLocalPosition += UpdateRagdollCameraFocusLocalOffset();
+        _cameraCurrentLocalPosition = GetObstructionAdjustedCameraLocalPosition(targetLocalPosition, out obstructed);
         _cameraLocalPositionInitialized = true;
         cameraRoot.transform.localPosition = _cameraCurrentLocalPosition;
         _cameraWasObstructedLastFrame = obstructed;
@@ -495,7 +688,36 @@ public class PlayerHub : NetworkBehaviour
 
     private Vector3 GetCameraObstructionOrigin()
     {
+        return GetCameraObstructionFocusWorldPosition();
+    }
+
+    private Vector3 GetCameraObstructionFocusWorldPosition()
+    {
+        Vector3 defaultOrigin = GetDefaultCameraObstructionOrigin();
+        if (!ShouldUseLastRagdollCameraFocusForObstruction())
+            return defaultOrigin;
+
+        if (!IsFiniteVector3(_lastRagdollCameraFocusWorld))
+            return defaultOrigin;
+
+        return _lastRagdollCameraFocusWorld;
+    }
+
+    private Vector3 GetDefaultCameraObstructionOrigin()
+    {
         return transform.position + Vector3.up * Mathf.Max(0f, cameraCollisionFocusHeight);
+    }
+
+    private bool ShouldUseLastRagdollCameraFocusForObstruction()
+    {
+        if (!useRagdollFocusForCameraObstruction || !ShouldUseRagdollCameraFocusForThisPlayer() || !_hasLastRagdollCameraFocus)
+            return false;
+
+        SugaActiveRagdollController controller = ResolveActiveRagdollController();
+        if (controller != null && controller.IsRagdollActiveForGameplay)
+            return true;
+
+        return ShouldHoldLastRagdollCameraFocus();
     }
 
     private bool ShouldIgnoreCameraObstructionCollider(Collider hitCollider)

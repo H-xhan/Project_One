@@ -88,6 +88,28 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
     [Tooltip("루트/자식 자신의 콜라이더는 바닥 판정에서 무시합니다.")]
     [SerializeField] private bool ignoreOwnCollidersOnGroundSnap = true;
 
+    [Header("Ragdoll Root Sync")]
+    [SerializeField, Tooltip("Ragdoll 복구/기상 직전에 Player root를 Ragdoll 중심 위치 근처로 1회 보정할지 여부입니다.")]
+    private bool syncRootToRagdollFocusBeforeStandUp = true;
+
+    [SerializeField, Tooltip("Ragdoll focus 위치를 root 보정에 사용할 수 있는 최대 시간입니다.")]
+    private float ragdollRootSyncFocusMaxAge = 1.2f;
+
+    [SerializeField, Tooltip("root와 Ragdoll focus 사이 거리가 이 값보다 작으면 위치 보정을 생략합니다.")]
+    private float ragdollRootSyncMinDistance = 0.25f;
+
+    [SerializeField, Tooltip("root와 Ragdoll focus 사이 거리가 이 값보다 크면 위치 보정을 생략합니다. 0 이하이면 제한하지 않습니다.")]
+    private float ragdollRootSyncMaxDistance = 20f;
+
+    [SerializeField, Tooltip("Ragdoll focus 위치에서 지면을 찾기 위해 위로 올리는 Raycast 시작 높이입니다.")]
+    private float ragdollRootSyncGroundProbeHeight = 3f;
+
+    [SerializeField, Tooltip("Ragdoll focus 위치에서 지면을 찾기 위해 아래로 쏘는 Raycast 거리입니다.")]
+    private float ragdollRootSyncGroundProbeDistance = 8f;
+
+    [SerializeField, Tooltip("지면에 root를 맞출 때 추가로 적용할 Y 오프셋입니다.")]
+    private float ragdollRootSyncGroundOffset = 0.05f;
+
     [Header("Hit Reaction")]
     [Tooltip("데미지를 받으면 Hit 트리거를 보낼지")]
     [SerializeField] private bool triggerHitOnDamage = false;
@@ -98,9 +120,22 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
     [Tooltip("다운 상태에서도 Hit 트리거를 허용할지")]
     [SerializeField] private bool triggerHitWhileKnocked = false;
 
+    [Header("Active Ragdoll Hit Reaction")]
+    [Tooltip("피격/넉백 시 Active Ragdoll 피격 반응을 호출할지 여부입니다.")]
+    [SerializeField] private bool enableActiveRagdollHitReaction = true;
+
+    [Tooltip("Active Ragdoll 피격 반응에 전달할 넉백 힘 배율입니다.")]
+    [SerializeField] private float activeRagdollHitImpulseScale = 1f;
+
     [Header("Elimination")]
     [Tooltip("이 높이 아래로 떨어지면 탈락 처리되는 Y값")]
     [SerializeField] private float eliminationY = -15f;
+
+    [Tooltip("Ragdoll 활성 중에는 Ragdoll 중심 위치를 낙사 판정에 사용할지 여부입니다.")]
+    [SerializeField] private bool useRagdollFocusForElimination = true;
+
+    [Tooltip("Ragdoll 중심 위치가 낙사 판정에 사용될 때 추가로 적용할 Y 오프셋입니다.")]
+    [SerializeField] private float ragdollFocusEliminationYOffset = 0f;
 
     [Header("Debug")]
     [Tooltip("디버그 로그 출력 여부입니다.")]
@@ -123,6 +158,12 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
     private bool hasLoggedEliminationGateState;
     private bool hasReachedSafePlayingPosition;
     private GameStateManager.GameState lastLoggedGameState;
+    private SugaActiveRagdollController _activeRagdollController;
+    private bool hasLoggedMissingActiveRagdollController;
+    private Vector3 _lastRagdollFocusForRootSync;
+    private float _lastRagdollFocusForRootSyncTime;
+    private bool _hasLastRagdollFocusForRootSync;
+    private bool _didSyncRootFromRagdollForCurrentKnockback;
 
     public bool IsKnocked => isKnocked;
     public bool IsStandingUp => isStandingUp;
@@ -176,6 +217,7 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
             isStandingUp = false;
 
         BeginKnockback(impulse);
+        TryApplyActiveRagdollHit(impulse);
     }
 
     public void ForceRecoverServer()
@@ -217,13 +259,57 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
         if (gameStateManager == null)
             gameStateManager = FindFirstObjectByType<GameStateManager>();
 
+        ResolveActiveRagdollController();
         rootTransform = rootNetObj != null ? rootNetObj.transform : transform.root;
+    }
+
+    private SugaActiveRagdollController ResolveActiveRagdollController()
+    {
+        if (_activeRagdollController != null)
+            return _activeRagdollController;
+
+        _activeRagdollController = GetComponent<SugaActiveRagdollController>();
+
+        if (_activeRagdollController == null)
+            _activeRagdollController = GetComponentInParent<SugaActiveRagdollController>();
+
+        if (_activeRagdollController == null)
+            _activeRagdollController = GetComponentInChildren<SugaActiveRagdollController>(true);
+
+        if (_activeRagdollController != null)
+            hasLoggedMissingActiveRagdollController = false;
+
+        return _activeRagdollController;
+    }
+
+    private void TryApplyActiveRagdollHit(Vector3 impulse)
+    {
+        if (!enableActiveRagdollHitReaction)
+            return;
+
+        SugaActiveRagdollController controller = ResolveActiveRagdollController();
+        if (controller == null)
+        {
+            if (!hasLoggedMissingActiveRagdollController)
+            {
+                Log("[PlayerStatus] Active ragdoll hit skipped. controller missing.");
+                hasLoggedMissingActiveRagdollController = true;
+            }
+
+            return;
+        }
+
+        Vector3 ragdollImpulse = impulse * activeRagdollHitImpulseScale;
+        controller.ApplyHit(ragdollImpulse);
+        Log("[PlayerStatus] Active ragdoll hit reaction triggered.");
     }
 
     private void UpdateKnockState()
     {
         if (!isKnocked) return;
         if (isStandingUp) return;
+
+        CacheRagdollFocusForRootSync();
 
         knockTimer -= Time.deltaTime;
         if (knockTimer > 0f)
@@ -275,8 +361,42 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
         if (checkTf == null) return;
         if (!IsEliminationAllowedByGameState(checkTf)) return;
 
-        if (checkTf.position.y < eliminationY)
+        float rootY = checkTf.position.y;
+        float eliminationCheckY = GetEliminationCheckY(rootY);
+        if (eliminationCheckY < eliminationY)
+        {
+            if (eliminationCheckY < rootY)
+                Log($"[PlayerStatus] Elimination triggered by ragdoll focus. rootY:{rootY:0.###}, checkY:{eliminationCheckY:0.###}, eliminationY:{eliminationY:0.###}");
+
             HandleElimination();
+        }
+    }
+
+    private float GetEliminationCheckY(float rootY)
+    {
+        if (!useRagdollFocusForElimination)
+            return rootY;
+
+        SugaActiveRagdollController controller = ResolveActiveRagdollController();
+        if (controller == null)
+            return rootY;
+
+        if (!controller.IsRagdollActiveForGameplay)
+            return rootY;
+
+        if (!controller.TryGetRagdollFocusPosition(out Vector3 focusPosition))
+            return rootY;
+
+        if (!IsFiniteVector(focusPosition))
+            return rootY;
+
+        StoreRagdollFocusForRootSync(focusPosition);
+
+        float focusY = focusPosition.y + ragdollFocusEliminationYOffset;
+        if (float.IsNaN(focusY) || float.IsInfinity(focusY))
+            return rootY;
+
+        return Mathf.Min(rootY, focusY);
     }
 
     private bool IsEliminationAllowedByGameState(Transform checkTf)
@@ -355,12 +475,20 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
         return manager != null;
     }
 
+    private static bool IsFiniteVector(Vector3 value)
+    {
+        return !float.IsNaN(value.x) && !float.IsInfinity(value.x)
+            && !float.IsNaN(value.y) && !float.IsInfinity(value.y)
+            && !float.IsNaN(value.z) && !float.IsInfinity(value.z);
+    }
+
     private void BeginKnockback(Vector3 impulse)
     {
         isKnocked = true;
         isStandingUp = false;
         knockTimer = Mathf.Max(0.01f, knockbackDuration);
         standUpTimer = 0f;
+        _didSyncRootFromRagdollForCurrentKnockback = false;
 
         if (locomotionModule != null)
             locomotionModule.ResetMotionServer();
@@ -417,6 +545,8 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
         if (!IsServer) return;
         if (isStandingUp) return;
         if (isEliminated) return;
+
+        TrySyncRootToRagdollFocusBeforeStandUp("BeginStandUpBack");
 
         isKnocked = false;
         isStandingUp = true;
@@ -523,6 +653,208 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
         }
     }
 
+    private void CacheRagdollFocusForRootSync()
+    {
+        TryCacheRagdollFocusForRootSync(true);
+    }
+
+    private bool TryCacheRagdollFocusForRootSync(bool requireActive)
+    {
+        SugaActiveRagdollController controller = ResolveActiveRagdollController();
+        if (controller == null)
+            return false;
+
+        if (requireActive && !controller.IsRagdollActiveForGameplay)
+            return false;
+
+        if (!controller.TryGetRagdollFocusPosition(out Vector3 focusPosition))
+            return false;
+
+        if (!IsFiniteVector(focusPosition))
+            return false;
+
+        StoreRagdollFocusForRootSync(focusPosition);
+        return true;
+    }
+
+    private void StoreRagdollFocusForRootSync(Vector3 focusPosition)
+    {
+        _lastRagdollFocusForRootSync = focusPosition;
+        _lastRagdollFocusForRootSyncTime = Time.time;
+        _hasLastRagdollFocusForRootSync = true;
+    }
+
+    private bool TryGetRecentRagdollFocusForRootSync(out Vector3 focusPosition)
+    {
+        if (!_hasLastRagdollFocusForRootSync || IsRagdollRootSyncFocusExpired())
+            TryCacheRagdollFocusForRootSync(false);
+
+        focusPosition = _lastRagdollFocusForRootSync;
+        if (!_hasLastRagdollFocusForRootSync)
+            return false;
+
+        if (IsRagdollRootSyncFocusExpired())
+            return false;
+
+        return IsFiniteVector(focusPosition);
+    }
+
+    private bool IsRagdollRootSyncFocusExpired()
+    {
+        float maxAge = Mathf.Max(0f, GetFiniteOrZero(ragdollRootSyncFocusMaxAge));
+        return Time.time - _lastRagdollFocusForRootSyncTime > maxAge;
+    }
+
+    private bool TrySyncRootToRagdollFocusBeforeStandUp(string reason)
+    {
+        if (!syncRootToRagdollFocusBeforeStandUp)
+            return false;
+
+        if (_didSyncRootFromRagdollForCurrentKnockback)
+            return false;
+
+        if (isEliminated || (!isKnocked && !isStandingUp))
+            return false;
+
+        if (!IsServer || !IsSpawned)
+            return false;
+
+        if (!IsRootSyncAllowedByGameState())
+            return false;
+
+        if (rootTransform == null)
+            rootTransform = rootNetObj != null ? rootNetObj.transform : transform.root;
+        if (rootTransform == null)
+            return false;
+
+        if (!TryGetRecentRagdollFocusForRootSync(out Vector3 focusPosition))
+        {
+            Log("[PlayerStatus] Ragdoll root sync skipped. no recent focus.");
+            return false;
+        }
+
+        float focusEliminationY = focusPosition.y + ragdollFocusEliminationYOffset;
+        if (focusEliminationY < eliminationY)
+        {
+            Log("[PlayerStatus] Ragdoll root sync skipped. focus below elimination.");
+            return false;
+        }
+
+        Vector3 rootPosition = rootTransform.position;
+        Vector2 rootFlat = new Vector2(rootPosition.x, rootPosition.z);
+        Vector2 focusFlat = new Vector2(focusPosition.x, focusPosition.z);
+        float horizontalDistance = Vector2.Distance(rootFlat, focusFlat);
+
+        if (horizontalDistance < Mathf.Max(0f, GetFiniteOrZero(ragdollRootSyncMinDistance)))
+            return false;
+
+        float maxDistance = Mathf.Max(0f, GetFiniteOrZero(ragdollRootSyncMaxDistance));
+        if (maxDistance > 0f && horizontalDistance > maxDistance)
+        {
+            Log($"[PlayerStatus] Ragdoll root sync skipped. distance too large. distance={horizontalDistance:0.###}, max={maxDistance:0.###}");
+            return false;
+        }
+
+        bool usedGroundFallback;
+        float groundY = GetRagdollRootSyncGroundY(focusPosition, out usedGroundFallback);
+        if (usedGroundFallback)
+            Log("[PlayerStatus] Ragdoll root sync ground fallback used.");
+
+        Vector3 targetPosition = new Vector3(focusPosition.x, GetRootYForGroundedPosition(groundY), focusPosition.z);
+        if (!IsFiniteVector(targetPosition))
+            return false;
+
+        MoveRootToPositionForRagdollSync(targetPosition);
+        _didSyncRootFromRagdollForCurrentKnockback = true;
+
+        Log($"[PlayerStatus] Ragdoll root sync applied. reason={reason}, from={rootPosition}, to={targetPosition}");
+        return true;
+    }
+
+    private bool IsRootSyncAllowedByGameState()
+    {
+        if (!TryGetGameStateManager(out GameStateManager manager))
+            return false;
+
+        if (manager.GetState() != GameStateManager.GameState.Playing)
+            return false;
+
+        return hasReachedSafePlayingPosition;
+    }
+
+    private float GetRagdollRootSyncGroundY(Vector3 focusPosition, out bool usedFallback)
+    {
+        usedFallback = false;
+
+        float probeHeight = Mathf.Max(0.1f, GetFiniteOrZero(ragdollRootSyncGroundProbeHeight));
+        float probeDistance = Mathf.Max(0.2f, GetFiniteOrZero(ragdollRootSyncGroundProbeDistance));
+        Vector3 origin = focusPosition + Vector3.up * probeHeight;
+        float distance = probeHeight + probeDistance;
+        int mask = groundMask.value == 0 ? Physics.DefaultRaycastLayers : groundMask.value;
+
+        RaycastHit[] hits = Physics.RaycastAll(origin, Vector3.down, distance, mask, QueryTriggerInteraction.Ignore);
+        if (hits != null && hits.Length > 0)
+        {
+            System.Array.Sort(hits, (a, b) => a.distance.CompareTo(b.distance));
+            for (int i = 0; i < hits.Length; i++)
+            {
+                RaycastHit hit = hits[i];
+                if (hit.collider == null)
+                    continue;
+
+                if (ignoreOwnCollidersOnGroundSnap && rootTransform != null && hit.collider.transform.root == rootTransform)
+                    continue;
+
+                return hit.point.y;
+            }
+        }
+
+        usedFallback = true;
+        return focusPosition.y;
+    }
+
+    private float GetRootYForGroundedPosition(float groundY)
+    {
+        float safeGroundY = GetFiniteOrZero(groundY);
+        float offset = GetFiniteOrZero(ragdollRootSyncGroundOffset);
+        if (charController != null)
+        {
+            float halfHeight = Mathf.Max(charController.radius, charController.height * 0.5f);
+            return safeGroundY - charController.center.y + halfHeight + offset;
+        }
+
+        return safeGroundY + offset;
+    }
+
+    private void MoveRootToPositionForRagdollSync(Vector3 targetPosition)
+    {
+        bool wasControllerEnabled = charController != null && charController.enabled;
+        if (wasControllerEnabled)
+            charController.enabled = false;
+
+        if (rootRigidbody != null)
+        {
+            if (!rootRigidbody.isKinematic)
+            {
+                rootRigidbody.linearVelocity = Vector3.zero;
+                rootRigidbody.angularVelocity = Vector3.zero;
+            }
+
+            rootRigidbody.position = targetPosition;
+        }
+
+        rootTransform.position = targetPosition;
+        Physics.SyncTransforms();
+
+        if (wasControllerEnabled)
+            charController.enabled = true;
+    }
+
+    private static float GetFiniteOrZero(float value)
+    {
+        return float.IsNaN(value) || float.IsInfinity(value) ? 0f : value;
+    }
+
     public void AnimEvent_StandUpFinished()
     {
         if (!IsServer) return;
@@ -538,6 +870,8 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
 
     private void FinishStandUpImmediate()
     {
+        TrySyncRootToRagdollFocusBeforeStandUp("FinishStandUpImmediate");
+
         if (snapUprightOnStandUp)
             SnapRootUpright();
 
