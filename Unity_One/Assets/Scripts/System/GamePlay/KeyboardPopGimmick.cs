@@ -18,6 +18,22 @@ public class KeyboardPopGimmick : MonoBehaviour
         Cooldown = 6
     }
 
+    [System.Serializable]
+    private struct DeskLandingArea
+    {
+        [Tooltip("착지 영역의 이름입니다. 디버그와 구분용입니다.")]
+        public string name;
+
+        [Tooltip("착지 영역의 중심 월드 좌표입니다.")]
+        public Vector3 center;
+
+        [Tooltip("착지 영역의 크기입니다. X/Z는 가로/세로 범위, Y는 사용하지 않습니다.")]
+        public Vector3 size;
+
+        [Tooltip("이 영역이 랜덤 선택될 가중치입니다. 0 이하이면 선택되지 않습니다.")]
+        public float weight;
+    }
+
     [Header("Keys")]
     [Tooltip("튀어나올 키 오브젝트들입니다.")]
     [SerializeField] private Transform[] keyTransforms;
@@ -94,6 +110,9 @@ public class KeyboardPopGimmick : MonoBehaviour
     [Tooltip("책상 랜덤 착지 영역의 크기입니다. X/Z는 가로/세로 범위, Y는 사용하지 않습니다.")]
     [SerializeField] private Vector3 deskLandingAreaSize = new Vector3(16f, 0f, 10f);
 
+    [Tooltip("ㄱ자 책상처럼 여러 직사각형 착지 영역을 사용할 때 설정합니다. 비어 있으면 단일 Desk Landing Area 설정을 사용합니다.")]
+    [SerializeField] private DeskLandingArea[] deskLandingAreas = System.Array.Empty<DeskLandingArea>();
+
     [Tooltip("키보드 시작 위치에서 이 거리보다 가까운 착지점은 다시 뽑습니다.")]
     [SerializeField] private float minLandingDistanceFromKeyboard = 2f;
 
@@ -108,6 +127,15 @@ public class KeyboardPopGimmick : MonoBehaviour
 
     [Tooltip("다음 발동 시작 전에 키를 원래 위치와 회전으로 되돌릴지 여부입니다.")]
     [SerializeField] private bool resetKeysBeforeStart = true;
+
+    [Tooltip("착지 후 키캡을 일정 시간 뒤 숨길지 여부입니다.")]
+    [SerializeField] private bool hideKeysAfterLanding = true;
+
+    [Tooltip("키캡이 착지한 뒤 사라지기까지의 최소 시간입니다.")]
+    [SerializeField] private float hideAfterLandingMinDelay = 1f;
+
+    [Tooltip("키캡이 착지한 뒤 사라지기까지의 최대 시간입니다.")]
+    [SerializeField] private float hideAfterLandingMaxDelay = 2f;
 
     [Header("Hit")]
     [Tooltip("키 주변 플레이어 판정 반경입니다.")]
@@ -132,6 +160,7 @@ public class KeyboardPopGimmick : MonoBehaviour
     private Vector3[] _scatterDirections;
     private Vector3[] _rotationAxes;
     private float[] _arcHeights;
+    private float[] _hideAtTimes;
     private readonly HashSet<PlayerStatusModule> _hitPlayers = new HashSet<PlayerStatusModule>();
     private Coroutine _runningRoutine;
     private Phase _phase = Phase.Idle;
@@ -149,6 +178,11 @@ public class KeyboardPopGimmick : MonoBehaviour
     private void OnDisable()
     {
         StopRunningAndRestore();
+    }
+
+    private void Update()
+    {
+        ProcessHideTimers();
     }
 
     [ContextMenu("Debug Start Keyboard Pop")]
@@ -198,6 +232,7 @@ public class KeyboardPopGimmick : MonoBehaviour
 
         _phase = Phase.Land;
         SetKeysToLandingTargets(rotateWhileFlying ? flyingRotationSpeed * Mathf.Max(0f, launchDuration) : 0f);
+        ScheduleHideAfterLanding();
 
         _phase = Phase.Impact;
         Log($"{LogPrefix} Impact.");
@@ -342,6 +377,8 @@ public class KeyboardPopGimmick : MonoBehaviour
         _scatterDirections = new Vector3[count];
         _rotationAxes = new Vector3[count];
         _arcHeights = new float[count];
+        _hideAtTimes = new float[count];
+        ClearHideTimers();
 
         for (int i = 0; i < count; i++)
         {
@@ -422,30 +459,14 @@ public class KeyboardPopGimmick : MonoBehaviour
         if (!CanUseDeskLandingArea() || !IsFiniteVector(startPosition))
             return startPosition;
 
-        float halfX = Mathf.Abs(deskLandingAreaSize.x) * 0.5f;
-        float halfZ = Mathf.Abs(deskLandingAreaSize.z) * 0.5f;
-
-        if (halfX <= 0.0001f || halfZ <= 0.0001f)
-            return startPosition;
-
         int attempts = Mathf.Max(1, landingPointPickAttempts);
-        float jitter = Mathf.Max(0f, landingPointJitter);
         Vector3 fallbackCandidate = startPosition;
         bool hasFallbackCandidate = false;
 
         for (int i = 0; i < attempts; i++)
         {
-            Vector3 candidate = new Vector3(
-                Random.Range(deskLandingAreaCenter.x - halfX, deskLandingAreaCenter.x + halfX),
-                startPosition.y,
-                Random.Range(deskLandingAreaCenter.z - halfZ, deskLandingAreaCenter.z + halfZ));
-
-            if (jitter > 0f)
-            {
-                candidate.x += Random.Range(-jitter, jitter);
-                candidate.z += Random.Range(-jitter, jitter);
-            }
-
+            DeskLandingArea area = PickDeskLandingAreaOrSingle();
+            Vector3 candidate = PickPositionInDeskLandingArea(area, startPosition.y);
             if (!IsFiniteVector(candidate))
                 continue;
 
@@ -462,12 +483,121 @@ public class KeyboardPopGimmick : MonoBehaviour
         return hasFallbackCandidate ? fallbackCandidate : startPosition;
     }
 
-    private bool CanUseDeskLandingArea()
+    private bool TryPickDeskLandingArea(out DeskLandingArea area)
     {
-        if (!useDeskLandingArea || !IsFiniteVector(deskLandingAreaCenter) || !IsFiniteVector(deskLandingAreaSize))
+        area = default(DeskLandingArea);
+        if (deskLandingAreas == null || deskLandingAreas.Length == 0)
             return false;
 
-        return Mathf.Abs(deskLandingAreaSize.x) > 0.0001f && Mathf.Abs(deskLandingAreaSize.z) > 0.0001f;
+        float totalWeight = 0f;
+        for (int i = 0; i < deskLandingAreas.Length; i++)
+        {
+            DeskLandingArea candidate = deskLandingAreas[i];
+            if (!IsValidDeskLandingArea(candidate) || !IsFiniteFloat(candidate.weight))
+                continue;
+
+            totalWeight += candidate.weight;
+        }
+
+        if (totalWeight <= 0f || !IsFiniteFloat(totalWeight))
+            return false;
+
+        float randomWeight = Random.Range(0f, totalWeight);
+        float accumulatedWeight = 0f;
+
+        for (int i = 0; i < deskLandingAreas.Length; i++)
+        {
+            DeskLandingArea candidate = deskLandingAreas[i];
+            if (!IsValidDeskLandingArea(candidate) || !IsFiniteFloat(candidate.weight))
+                continue;
+
+            accumulatedWeight += candidate.weight;
+            if (randomWeight <= accumulatedWeight)
+            {
+                area = candidate;
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private DeskLandingArea PickDeskLandingAreaOrSingle()
+    {
+        if (TryPickDeskLandingArea(out DeskLandingArea area))
+            return area;
+
+        return BuildSingleDeskLandingArea();
+    }
+
+    private DeskLandingArea BuildSingleDeskLandingArea()
+    {
+        return new DeskLandingArea
+        {
+            name = "Single",
+            center = deskLandingAreaCenter,
+            size = deskLandingAreaSize,
+            weight = 1f
+        };
+    }
+
+    private Vector3 PickPositionInDeskLandingArea(DeskLandingArea area, float y)
+    {
+        if (!IsValidDeskLandingArea(area))
+            return Vector3.zero;
+
+        float halfX = Mathf.Abs(area.size.x) * 0.5f;
+        float halfZ = Mathf.Abs(area.size.z) * 0.5f;
+        float jitter = Mathf.Max(0f, landingPointJitter);
+
+        Vector3 candidate = new Vector3(
+            Random.Range(area.center.x - halfX, area.center.x + halfX),
+            y,
+            Random.Range(area.center.z - halfZ, area.center.z + halfZ));
+
+        if (jitter > 0f)
+        {
+            candidate.x += Random.Range(-jitter, jitter);
+            candidate.z += Random.Range(-jitter, jitter);
+        }
+
+        return candidate;
+    }
+
+    private bool CanUseDeskLandingArea()
+    {
+        if (!useDeskLandingArea)
+            return false;
+
+        if (HasAnyValidDeskLandingArea())
+            return true;
+
+        return IsValidDeskLandingArea(BuildSingleDeskLandingArea());
+    }
+
+    private bool HasAnyValidDeskLandingArea()
+    {
+        if (deskLandingAreas == null)
+            return false;
+
+        for (int i = 0; i < deskLandingAreas.Length; i++)
+        {
+            DeskLandingArea area = deskLandingAreas[i];
+            if (IsValidDeskLandingArea(area) && IsFiniteFloat(area.weight) && area.weight > 0f)
+                return true;
+        }
+
+        return false;
+    }
+
+    private static bool IsValidDeskLandingArea(DeskLandingArea area)
+    {
+        return IsFiniteVector(area.center) &&
+            IsFiniteVector(area.size) &&
+            IsFiniteFloat(area.weight) &&
+            area.size.x > 0.0001f &&
+            area.size.z > 0.0001f &&
+            area.weight > 0f;
     }
 
     private Vector3 CalculateScatterWorldTarget(int index, Vector3 scatterDirection)
@@ -565,7 +695,12 @@ public class KeyboardPopGimmick : MonoBehaviour
 
             key.localPosition = _originalLocalPositions[i];
             key.localRotation = _originalLocalRotations[i];
+
+            if (!key.gameObject.activeSelf)
+                key.gameObject.SetActive(true);
         }
+
+        ClearHideTimers();
     }
 
     private void SetKeysToTelegraphOffset(float elapsed)
@@ -617,6 +752,61 @@ public class KeyboardPopGimmick : MonoBehaviour
                 ? _originalLocalRotations[i] * Quaternion.AngleAxis(rotationAngle, _rotationAxes[i])
                 : _originalLocalRotations[i];
         }
+    }
+
+    private void ScheduleHideAfterLanding()
+    {
+        if (_hideAtTimes == null || _hideAtTimes.Length != GetStoredKeyCount())
+            _hideAtTimes = new float[GetStoredKeyCount()];
+
+        ClearHideTimers();
+        if (!hideKeysAfterLanding)
+            return;
+
+        float minDelay = Mathf.Max(0f, hideAfterLandingMinDelay);
+        float maxDelay = Mathf.Max(minDelay, hideAfterLandingMaxDelay);
+        int count = Mathf.Min(GetPreparedKeyCount(), _hideAtTimes.Length);
+
+        for (int i = 0; i < count; i++)
+        {
+            Transform key = GetKeyAt(i);
+            if (key == null)
+                continue;
+
+            _hideAtTimes[i] = Time.time + Random.Range(minDelay, maxDelay);
+        }
+    }
+
+    private void ProcessHideTimers()
+    {
+        if (!hideKeysAfterLanding || _hideAtTimes == null)
+            return;
+
+        float now = Time.time;
+        int count = Mathf.Min(GetKeyCount(), _hideAtTimes.Length);
+        for (int i = 0; i < count; i++)
+        {
+            float hideAtTime = _hideAtTimes[i];
+            if (hideAtTime <= 0f || now < hideAtTime)
+                continue;
+
+            Transform key = GetKeyAt(i);
+            _hideAtTimes[i] = -1f;
+
+            if (key == null || !key.gameObject.activeSelf)
+                continue;
+
+            key.gameObject.SetActive(false);
+        }
+    }
+
+    private void ClearHideTimers()
+    {
+        if (_hideAtTimes == null)
+            return;
+
+        for (int i = 0; i < _hideAtTimes.Length; i++)
+            _hideAtTimes[i] = -1f;
     }
 
     private void StopRunningAndRestore()
@@ -824,16 +1014,44 @@ public class KeyboardPopGimmick : MonoBehaviour
 
     private void OnDrawGizmosSelected()
     {
-        if (!useDeskLandingArea || !IsFiniteVector(deskLandingAreaCenter) || !IsFiniteVector(deskLandingAreaSize))
+        if (!useDeskLandingArea)
             return;
 
-        Vector3 gizmoSize = new Vector3(
-            Mathf.Abs(deskLandingAreaSize.x),
-            0.05f,
-            Mathf.Abs(deskLandingAreaSize.z));
+        bool drewAnyArea = false;
+        if (deskLandingAreas != null && deskLandingAreas.Length > 0)
+        {
+            for (int i = 0; i < deskLandingAreas.Length; i++)
+            {
+                DeskLandingArea area = deskLandingAreas[i];
+                if (!IsValidDeskLandingArea(area))
+                    continue;
 
-        Gizmos.color = new Color(0.15f, 0.75f, 1f, 0.8f);
-        Gizmos.DrawWireCube(deskLandingAreaCenter, gizmoSize);
+                float hue = Mathf.Repeat(i * 0.17f, 1f);
+                Gizmos.color = Color.HSVToRGB(hue, 0.65f, 1f);
+                DrawDeskLandingAreaGizmo(area);
+                drewAnyArea = true;
+            }
+        }
+
+        if (!drewAnyArea)
+        {
+            DeskLandingArea singleArea = BuildSingleDeskLandingArea();
+            if (!IsValidDeskLandingArea(singleArea))
+                return;
+
+            Gizmos.color = new Color(0.15f, 0.75f, 1f, 0.8f);
+            DrawDeskLandingAreaGizmo(singleArea);
+        }
+    }
+
+    private static void DrawDeskLandingAreaGizmo(DeskLandingArea area)
+    {
+        Vector3 gizmoSize = new Vector3(
+            Mathf.Abs(area.size.x),
+            0.05f,
+            Mathf.Abs(area.size.z));
+
+        Gizmos.DrawWireCube(area.center, gizmoSize);
     }
 
     private void Log(string message)
