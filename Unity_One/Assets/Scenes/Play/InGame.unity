@@ -538,6 +538,7 @@ MonoBehaviour:
   sweepHeight: 6
   sweepDepth: 5
   sweepDuration: 1.2
+  sweepLanes: []
   telegraphDuration: 1
   residueDuration: 3
   cooldownDuration: 1
@@ -1070,7 +1071,7 @@ PrefabInstance:
       objectReference: {fileID: 0}
     - target: {fileID: 7395497611716470770, guid: 1868c81bdd04a4842ba7cb4f484c955e, type: 3}
       propertyPath: m_LocalPosition.x
-      value: 45
+      value: 44.5
       objectReference: {fileID: 0}
     - target: {fileID: 7395497611716470770, guid: 1868c81bdd04a4842ba7cb4f484c955e, type: 3}
       propertyPath: m_LocalPosition.y
@@ -7606,12 +7607,31 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: 
   sweepOrigin: {fileID: 1405868427}
-  sweepDirection: {x: 1, y: 0, z: 0.25}
+  sweepDirection: {x: 1, y: 0, z: 0}
   sweepDistance: 17
   sweepWidth: 9
   sweepHeight: 3.5
   sweepDepth: 3
   sweepDuration: 1.2
+  sweepLanes:
+  - name: Main_LeftToRight
+    origin: {fileID: 1405868427}
+    direction: {x: 1, y: 0, z: 0}
+    distance: 17
+    width: 9
+    depth: 3
+    residueCenter: {fileID: 0}
+    residueSize: {x: 8, y: 1.2, z: 3.5}
+    weight: 1
+  - name: Main_RightToLeft
+    origin: {fileID: 147388419}
+    direction: {x: -1, y: 0, z: -10}
+    distance: 17
+    width: 9
+    depth: 3
+    residueCenter: {fileID: 0}
+    residueSize: {x: 8, y: 1.2, z: 3.5}
+    weight: 1
   telegraphDuration: 0.9
   residueDuration: 3
   cooldownDuration: 1
@@ -8304,7 +8324,7 @@ PrefabInstance:
       objectReference: {fileID: 0}
     - target: {fileID: 7395497611716470770, guid: 1868c81bdd04a4842ba7cb4f484c955e, type: 3}
       propertyPath: m_LocalPosition.z
-      value: -51.5
+      value: -49
       objectReference: {fileID: 0}
     - target: {fileID: 7395497611716470770, guid: 1868c81bdd04a4842ba7cb4f484c955e, type: 3}
       propertyPath: m_LocalRotation.w

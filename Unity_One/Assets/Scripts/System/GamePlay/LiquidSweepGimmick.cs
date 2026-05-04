@@ -20,6 +20,37 @@ public class LiquidSweepGimmick : MonoBehaviour
         Cooldown
     }
 
+    [System.Serializable]
+    private struct SweepLane
+    {
+        [Tooltip("스윕 경로 이름입니다. 디버그와 구분용입니다.")]
+        public string name;
+
+        [Tooltip("이 스윕 경로의 시작 위치입니다. 비어 있으면 기본 Sweep Origin을 사용합니다.")]
+        public Transform origin;
+
+        [Tooltip("이 스윕 경로의 진행 방향입니다.")]
+        public Vector3 direction;
+
+        [Tooltip("이 스윕 경로의 이동 거리입니다. 0 이하이면 기본 Sweep Distance를 사용합니다.")]
+        public float distance;
+
+        [Tooltip("이 스윕 경로의 폭입니다. 0 이하이면 기본 Sweep Width를 사용합니다.")]
+        public float width;
+
+        [Tooltip("이 스윕 경로의 앞뒤 두께입니다. 0 이하이면 기본 Sweep Depth를 사용합니다.")]
+        public float depth;
+
+        [Tooltip("이 스윕 경로의 잔여 미끄럼 구역 중심입니다. 비어 있으면 스윕 경로 중앙을 사용합니다.")]
+        public Transform residueCenter;
+
+        [Tooltip("이 스윕 경로의 잔여 미끄럼 구역 크기입니다. X/Z가 0 이하이면 기본 Residue Area Size를 사용합니다.")]
+        public Vector3 residueSize;
+
+        [Tooltip("이 경로가 랜덤 선택될 가중치입니다. 0 이하이면 선택되지 않습니다.")]
+        public float weight;
+    }
+
     [Header("Sweep Setup")]
     [SerializeField, Tooltip("스윕 시작 기준 위치입니다. 비어 있으면 이 오브젝트 위치를 사용합니다.")]
     private Transform sweepOrigin;
@@ -41,6 +72,9 @@ public class LiquidSweepGimmick : MonoBehaviour
 
     [SerializeField, Tooltip("스윕이 이동하는 시간입니다.")]
     private float sweepDuration = 1.2f;
+
+    [SerializeField, Tooltip("ㄱ자 책상처럼 여러 방향에서 액체 스윕이 발생할 수 있도록 등록하는 스윕 경로 목록입니다. 비어 있으면 기본 단일 스윕 설정을 사용합니다.")]
+    private SweepLane[] sweepLanes = System.Array.Empty<SweepLane>();
 
     [Header("Phase Time")]
     [SerializeField, Tooltip("스윕이 시작되기 전 전조 시간입니다.")]
@@ -139,6 +173,8 @@ public class LiquidSweepGimmick : MonoBehaviour
     private bool _loggedEmptyPlayerMaskWarning;
     private int _sweepDebugLogCount;
     private int _residueDebugLogCount;
+    private bool _hasActiveLane;
+    private SweepLane _activeLane;
 
     [ContextMenu("Debug Start Liquid Sweep")]
     private void DebugStartLiquidSweep()
@@ -164,6 +200,7 @@ public class LiquidSweepGimmick : MonoBehaviour
         _sweepTickPlayers.Clear();
         _residueTickPlayers.Clear();
         _loggedEmptyPlayerMaskWarning = false;
+        SelectActiveSweepLane();
         SetPresentationActive(false, false, false);
         _runningRoutine = StartCoroutine(RunLiquidSweepRoutine());
     }
@@ -195,6 +232,7 @@ public class LiquidSweepGimmick : MonoBehaviour
         _sweepHitPlayers.Clear();
         _sweepTickPlayers.Clear();
         _residueTickPlayers.Clear();
+        ClearActiveSweepLane();
         _runningRoutine = null;
     }
 
@@ -381,20 +419,118 @@ public class LiquidSweepGimmick : MonoBehaviour
         return !status.IsEliminated && !status.IsKnocked && !status.IsStandingUp;
     }
 
+    private void SelectActiveSweepLane()
+    {
+        if (TryPickSweepLane(out _activeLane))
+        {
+            _hasActiveLane = true;
+            Log($"{LogPrefix} Selected sweep lane: {GetLaneName(_activeLane)}");
+            return;
+        }
+
+        ClearActiveSweepLane();
+        Log($"{LogPrefix} No valid sweep lane. Using default sweep setup.");
+    }
+
+    private void ClearActiveSweepLane()
+    {
+        _hasActiveLane = false;
+        _activeLane = default(SweepLane);
+    }
+
+    private bool TryPickSweepLane(out SweepLane lane)
+    {
+        lane = default(SweepLane);
+
+        if (sweepLanes == null || sweepLanes.Length == 0)
+            return false;
+
+        float totalWeight = 0f;
+        for (int i = 0; i < sweepLanes.Length; i++)
+        {
+            if (!IsValidSweepLane(sweepLanes[i]))
+                continue;
+
+            totalWeight += sweepLanes[i].weight;
+        }
+
+        if (!IsFiniteFloat(totalWeight) || totalWeight <= 0f)
+            return false;
+
+        float pick = Random.Range(0f, totalWeight);
+        for (int i = 0; i < sweepLanes.Length; i++)
+        {
+            SweepLane candidate = sweepLanes[i];
+            if (!IsValidSweepLane(candidate))
+                continue;
+
+            pick -= candidate.weight;
+            if (pick <= 0f)
+            {
+                lane = candidate;
+                return true;
+            }
+        }
+
+        for (int i = sweepLanes.Length - 1; i >= 0; i--)
+        {
+            if (!IsValidSweepLane(sweepLanes[i]))
+                continue;
+
+            lane = sweepLanes[i];
+            return true;
+        }
+
+        return false;
+    }
+
+    private bool IsValidSweepLane(SweepLane lane)
+    {
+        if (!IsFiniteFloat(lane.weight) || lane.weight <= 0f)
+            return false;
+
+        return HasUsableSweepLaneDirection(lane);
+    }
+
+    private bool HasUsableSweepLaneDirection(SweepLane lane)
+    {
+        return IsUsableHorizontalDirection(lane.direction) || IsUsableHorizontalDirection(sweepDirection);
+    }
+
     private Vector3 GetSweepOriginPosition()
+    {
+        return _hasActiveLane ? GetSweepOriginPosition(_activeLane) : GetDefaultSweepOriginPosition();
+    }
+
+    private Vector3 GetSweepOriginPosition(SweepLane lane)
+    {
+        return lane.origin != null ? lane.origin.position : GetDefaultSweepOriginPosition();
+    }
+
+    private Vector3 GetDefaultSweepOriginPosition()
     {
         return sweepOrigin != null ? sweepOrigin.position : transform.position;
     }
 
     private Vector3 GetSweepDirection()
     {
-        Vector3 direction = sweepDirection;
-        direction.y = 0f;
+        return _hasActiveLane ? GetSweepDirection(_activeLane) : GetDefaultSweepDirection();
+    }
 
-        if (!IsFiniteVector(direction) || direction.sqrMagnitude < 0.0001f)
-            direction = Vector3.right;
+    private Vector3 GetSweepDirection(SweepLane lane)
+    {
+        if (IsUsableHorizontalDirection(lane.direction))
+            return NormalizeHorizontalDirection(lane.direction);
 
-        return direction.normalized;
+        return GetDefaultSweepDirection();
+    }
+
+    private Vector3 GetDefaultSweepDirection()
+    {
+        if (IsUsableHorizontalDirection(sweepDirection))
+            return NormalizeHorizontalDirection(sweepDirection);
+
+        return Vector3.right;
     }
 
     private Vector3 GetResidueSlipDirection()
@@ -402,7 +538,7 @@ public class LiquidSweepGimmick : MonoBehaviour
         Vector3 direction = residueSlipDirection;
         direction.y = 0f;
 
-        if (!IsFiniteVector(direction) || direction.sqrMagnitude < 0.0001f)
+        if (!IsUsableHorizontalDirection(direction))
             direction = GetSweepDirection();
 
         return direction.normalized;
@@ -412,16 +548,38 @@ public class LiquidSweepGimmick : MonoBehaviour
     {
         Vector3 origin = GetSweepOriginPosition();
         Vector3 direction = GetSweepDirection();
-        float distance = Mathf.Max(0f, sweepDistance);
+        float distance = Mathf.Max(0f, GetSweepDistance());
+        return origin + direction * (distance * Mathf.Clamp01(progress));
+    }
+
+    private Vector3 GetSweepCenter(SweepLane lane, float progress)
+    {
+        Vector3 origin = GetSweepOriginPosition(lane);
+        Vector3 direction = GetSweepDirection(lane);
+        float distance = Mathf.Max(0f, GetSweepDistance(lane));
         return origin + direction * (distance * Mathf.Clamp01(progress));
     }
 
     private Vector3 GetResidueCenter()
     {
+        if (_hasActiveLane)
+            return GetResidueCenter(_activeLane);
+
         if (residueAreaCenter != null)
             return residueAreaCenter.position;
 
-        return GetSweepOriginPosition() + GetSweepDirection() * (Mathf.Max(0f, sweepDistance) * 0.5f);
+        return GetSweepOriginPosition() + GetSweepDirection() * (Mathf.Max(0f, GetSweepDistance()) * 0.5f);
+    }
+
+    private Vector3 GetResidueCenter(SweepLane lane)
+    {
+        if (lane.residueCenter != null)
+            return lane.residueCenter.position;
+
+        if (residueAreaCenter != null)
+            return residueAreaCenter.position;
+
+        return GetSweepOriginPosition(lane) + GetSweepDirection(lane) * (Mathf.Max(0f, GetSweepDistance(lane)) * 0.5f);
     }
 
     private void GetSweepBox(float progress, out Vector3 center, out Vector3 halfExtents, out Quaternion rotation)
@@ -431,11 +589,25 @@ public class LiquidSweepGimmick : MonoBehaviour
         rotation = GetSweepRotation();
     }
 
+    private void GetSweepBox(SweepLane lane, float progress, out Vector3 center, out Vector3 halfExtents, out Quaternion rotation)
+    {
+        center = GetSweepCenter(lane, progress);
+        halfExtents = GetSweepHalfExtents(lane);
+        rotation = GetSweepRotation(lane);
+    }
+
     private void GetResidueBox(out Vector3 center, out Vector3 halfExtents, out Quaternion rotation)
     {
         center = GetResidueCenter();
         halfExtents = GetResidueHalfExtents();
         rotation = GetSweepRotation();
+    }
+
+    private void GetResidueBox(SweepLane lane, out Vector3 center, out Vector3 halfExtents, out Quaternion rotation)
+    {
+        center = GetResidueCenter(lane);
+        halfExtents = GetResidueHalfExtents(lane);
+        rotation = GetSweepRotation(lane);
     }
 
     private Quaternion GetSweepRotation()
@@ -444,20 +616,89 @@ public class LiquidSweepGimmick : MonoBehaviour
         return Quaternion.LookRotation(direction, Vector3.up);
     }
 
+    private Quaternion GetSweepRotation(SweepLane lane)
+    {
+        Vector3 direction = GetSweepDirection(lane);
+        return Quaternion.LookRotation(direction, Vector3.up);
+    }
+
     private Vector3 GetSweepHalfExtents()
     {
         return new Vector3(
-            Mathf.Max(MinPositiveValue, sweepWidth) * 0.5f,
+            Mathf.Max(MinPositiveValue, GetSweepWidth()) * 0.5f,
             Mathf.Max(MinPositiveValue, sweepHeight) * 0.5f,
-            Mathf.Max(MinPositiveValue, sweepDepth) * 0.5f);
+            Mathf.Max(MinPositiveValue, GetSweepDepth()) * 0.5f);
+    }
+
+    private Vector3 GetSweepHalfExtents(SweepLane lane)
+    {
+        return new Vector3(
+            Mathf.Max(MinPositiveValue, GetSweepWidth(lane)) * 0.5f,
+            Mathf.Max(MinPositiveValue, sweepHeight) * 0.5f,
+            Mathf.Max(MinPositiveValue, GetSweepDepth(lane)) * 0.5f);
+    }
+
+    private float GetSweepDistance()
+    {
+        return _hasActiveLane ? GetSweepDistance(_activeLane) : sweepDistance;
+    }
+
+    private float GetSweepDistance(SweepLane lane)
+    {
+        return IsPositiveFinite(lane.distance) ? lane.distance : sweepDistance;
+    }
+
+    private float GetSweepWidth()
+    {
+        return _hasActiveLane ? GetSweepWidth(_activeLane) : sweepWidth;
+    }
+
+    private float GetSweepWidth(SweepLane lane)
+    {
+        return IsPositiveFinite(lane.width) ? lane.width : sweepWidth;
+    }
+
+    private float GetSweepDepth()
+    {
+        return _hasActiveLane ? GetSweepDepth(_activeLane) : sweepDepth;
+    }
+
+    private float GetSweepDepth(SweepLane lane)
+    {
+        return IsPositiveFinite(lane.depth) ? lane.depth : sweepDepth;
     }
 
     private Vector3 GetResidueHalfExtents()
     {
+        Vector3 size = _hasActiveLane ? GetResidueSize(_activeLane) : residueAreaSize;
+        return GetResidueHalfExtents(size);
+    }
+
+    private Vector3 GetResidueHalfExtents(SweepLane lane)
+    {
+        return GetResidueHalfExtents(GetResidueSize(lane));
+    }
+
+    private Vector3 GetResidueHalfExtents(Vector3 size)
+    {
         return new Vector3(
-            Mathf.Max(MinPositiveValue, residueAreaSize.x) * 0.5f,
-            Mathf.Max(MinPositiveValue, residueAreaSize.y) * 0.5f,
-            Mathf.Max(MinPositiveValue, residueAreaSize.z) * 0.5f);
+            Mathf.Max(MinPositiveValue, size.x) * 0.5f,
+            Mathf.Max(MinPositiveValue, size.y) * 0.5f,
+            Mathf.Max(MinPositiveValue, size.z) * 0.5f);
+    }
+
+    private Vector3 GetResidueSize(SweepLane lane)
+    {
+        if (IsPositiveFinite(lane.residueSize.x) && IsPositiveFinite(lane.residueSize.z))
+        {
+            Vector3 size = lane.residueSize;
+            if (!IsPositiveFinite(size.y))
+                size.y = residueAreaSize.y;
+
+            return size;
+        }
+
+        return residueAreaSize;
     }
 
     private int GetPlayerMask()
@@ -572,6 +813,7 @@ public class LiquidSweepGimmick : MonoBehaviour
         _sweepHitPlayers.Clear();
         _sweepTickPlayers.Clear();
         _residueTickPlayers.Clear();
+        ClearActiveSweepLane();
         _phase = SweepPhase.Idle;
     }
 
@@ -580,13 +822,84 @@ public class LiquidSweepGimmick : MonoBehaviour
         if (!drawGizmos)
             return;
 
+        if (sweepLanes != null && sweepLanes.Length > 0)
+        {
+            bool drewLane = false;
+            for (int i = 0; i < sweepLanes.Length; i++)
+            {
+                SweepLane lane = sweepLanes[i];
+                if (!HasUsableSweepLaneDirection(lane))
+                    continue;
+
+                DrawSweepLaneGizmos(lane, i);
+                drewLane = true;
+            }
+
+            if (drewLane)
+                return;
+        }
+
+        DrawDefaultSweepGizmos();
+    }
+
+    private void DrawDefaultSweepGizmos()
+    {
         GetSweepBox(0f, out Vector3 start, out Vector3 sweepHalfExtents, out Quaternion rotation);
         GetSweepBox(1f, out Vector3 end, out Vector3 endHalfExtents, out Quaternion endRotation);
         GetResidueBox(out Vector3 residueCenter, out Vector3 residueHalfExtents, out Quaternion residueRotation);
 
-        Gizmos.color = new Color(0.2f, 0.65f, 1f, 0.9f);
+        DrawSweepGizmos(start, end, rotation, endRotation, sweepHalfExtents, endHalfExtents, residueCenter, residueRotation, residueHalfExtents);
+    }
+
+    private void DrawSweepLaneGizmos(SweepLane lane, int index)
+    {
+        GetSweepBox(lane, 0f, out Vector3 start, out Vector3 sweepHalfExtents, out Quaternion rotation);
+        GetSweepBox(lane, 1f, out Vector3 end, out Vector3 endHalfExtents, out Quaternion endRotation);
+        GetResidueBox(lane, out Vector3 residueCenter, out Vector3 residueHalfExtents, out Quaternion residueRotation);
+
+        Color lineColor = index % 2 == 0 ? new Color(0.2f, 0.65f, 1f, 0.9f) : new Color(0.95f, 0.6f, 0.2f, 0.9f);
+        DrawSweepGizmos(start, end, rotation, endRotation, sweepHalfExtents, endHalfExtents, residueCenter, residueRotation, residueHalfExtents, lineColor);
+    }
+
+    private static void DrawSweepGizmos(
+        Vector3 start,
+        Vector3 end,
+        Quaternion startRotation,
+        Quaternion endRotation,
+        Vector3 startHalfExtents,
+        Vector3 endHalfExtents,
+        Vector3 residueCenter,
+        Quaternion residueRotation,
+        Vector3 residueHalfExtents)
+    {
+        DrawSweepGizmos(
+            start,
+            end,
+            startRotation,
+            endRotation,
+            startHalfExtents,
+            endHalfExtents,
+            residueCenter,
+            residueRotation,
+            residueHalfExtents,
+            new Color(0.2f, 0.65f, 1f, 0.9f));
+    }
+
+    private static void DrawSweepGizmos(
+        Vector3 start,
+        Vector3 end,
+        Quaternion startRotation,
+        Quaternion endRotation,
+        Vector3 startHalfExtents,
+        Vector3 endHalfExtents,
+        Vector3 residueCenter,
+        Quaternion residueRotation,
+        Vector3 residueHalfExtents,
+        Color lineColor)
+    {
+        Gizmos.color = lineColor;
         Gizmos.DrawLine(start, end);
-        DrawWireBox(start, rotation, sweepHalfExtents);
+        DrawWireBox(start, startRotation, startHalfExtents);
 
         Gizmos.color = new Color(0.1f, 0.9f, 1f, 0.9f);
         DrawWireBox(end, endRotation, endHalfExtents);
@@ -608,6 +921,18 @@ public class LiquidSweepGimmick : MonoBehaviour
         return IsFiniteFloat(value.x) && IsFiniteFloat(value.y) && IsFiniteFloat(value.z);
     }
 
+    private static bool IsUsableHorizontalDirection(Vector3 direction)
+    {
+        direction.y = 0f;
+        return IsFiniteVector(direction) && direction.sqrMagnitude >= 0.0001f;
+    }
+
+    private static Vector3 NormalizeHorizontalDirection(Vector3 direction)
+    {
+        direction.y = 0f;
+        return direction.normalized;
+    }
+
     private static bool IsFiniteQuaternion(Quaternion value)
     {
         return IsFiniteFloat(value.x) && IsFiniteFloat(value.y) && IsFiniteFloat(value.z) && IsFiniteFloat(value.w);
@@ -621,6 +946,16 @@ public class LiquidSweepGimmick : MonoBehaviour
     private static float GetFiniteFloatOrZero(float value)
     {
         return IsFiniteFloat(value) ? value : 0f;
+    }
+
+    private static bool IsPositiveFinite(float value)
+    {
+        return IsFiniteFloat(value) && value > 0f;
+    }
+
+    private static string GetLaneName(SweepLane lane)
+    {
+        return string.IsNullOrWhiteSpace(lane.name) ? "(Unnamed Lane)" : lane.name;
     }
 
     private void LogSourceDebug(string source, string message)
