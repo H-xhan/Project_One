@@ -5588,7 +5588,7 @@ GameObject:
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
   m_StaticEditorFlags: 0
-  m_IsActive: 1
+  m_IsActive: 0
 --- !u!135 &879198227
 SphereCollider:
   m_ObjectHideFlags: 0
@@ -7863,16 +7863,16 @@ MonoBehaviour:
   playerMask:
     serializedVersion: 2
     m_Bits: 64
-  bombDuration: 6
+  bombDuration: 10
   finalWarningTime: 2
   passCooldown: 0.75
   cooldownDuration: 1
   passRadius: 1.6
   passCheckInterval: 0.1
   samePairPassBlockTime: 0.6
-  explosionRadius: 4
-  explosionForce: 10
-  upwardForce: 2
+  explosionRadius: 5
+  explosionForce: 15
+  upwardForce: 4
   holderExplosionMultiplier: 1.2
   targetMarkerVisual: {fileID: 1809958022}
   finalWarningVisual: {fileID: 7905282036725252626}
@@ -7881,7 +7881,7 @@ MonoBehaviour:
   passAudio: {fileID: 0}
   warningAudio: {fileID: 0}
   explosionAudio: {fileID: 0}
-  enableDebugLogs: 1
+  enableDebugLogs: 0
   drawGizmos: 1
 --- !u!1001 &1258511063
 PrefabInstance:
