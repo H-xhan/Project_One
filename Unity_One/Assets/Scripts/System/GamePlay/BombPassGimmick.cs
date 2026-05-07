@@ -8,6 +8,7 @@ public class BombPassGimmick : MonoBehaviour
     private const float MinBombDuration = 1f;
     private const float MinPositiveValue = 0.01f;
     private const float MinDirectionSqrMagnitude = 0.0001f;
+    private const string BombMoveSpeedMultiplierKey = "BombPassGimmick";
 
     private enum BombPhase
     {
@@ -29,8 +30,23 @@ public class BombPassGimmick : MonoBehaviour
     [SerializeField, Tooltip("폭탄이 보유자를 따라다닐 때 보유자 위치에 더할 오프셋입니다.")]
     private Vector3 holderFollowOffset = new Vector3(0f, 1.5f, 0f);
 
+    [SerializeField, Tooltip("폭탄 비주얼을 보유자 월드 위치가 아니라 보유자 root 로컬 좌표 기준으로 따라가게 할지 여부입니다.")]
+    private bool useHolderLocalOffset = true;
+
+    [SerializeField, Tooltip("폭탄이 보유자 등에 붙어 보이도록 사용할 로컬 오프셋입니다.")]
+    private Vector3 holderLocalFollowOffset = new Vector3(0f, 0.9f, -0.4f);
+
+    [SerializeField, Tooltip("폭탄 비주얼에 적용할 로컬 회전 보정값입니다.")]
+    private Vector3 bombLocalEulerOffset = Vector3.zero;
+
     [SerializeField, Tooltip("폭탄 비주얼이 보유자를 따라다닐 속도입니다.")]
     private float followSpeed = 18f;
+
+    [SerializeField, Tooltip("폭탄 보유자에게 이동속도 증가 효과를 적용할지 여부입니다.")]
+    private bool boostHolderMoveSpeed = true;
+
+    [SerializeField, Tooltip("폭탄 보유자의 이동속도 배율입니다.")]
+    private float holderMoveSpeedMultiplier = 1.08f;
 
     [Header("Target Selection")]
     [SerializeField, Tooltip("폭탄 시작 시 반경 탐색 대신 현재 씬의 유효한 플레이어 중 랜덤으로 한 명을 선택할지 여부입니다.")]
@@ -125,6 +141,8 @@ public class BombPassGimmick : MonoBehaviour
     private BombPhase _phase = BombPhase.Idle;
     private float _lastPassTime;
     private bool _loggedEmptyPlayerMaskWarning;
+    private PlayerStatusModule _speedBoostedHolder;
+    private PlayerLocomotionModule _speedBoostedLocomotion;
 
     private void Update()
     {
@@ -140,6 +158,14 @@ public class BombPassGimmick : MonoBehaviour
             return;
 
         StopBombPassInternal(false);
+    }
+
+    private void OnDestroy()
+    {
+        if (!Application.isPlaying)
+            return;
+
+        ClearHolderSpeedBoost();
     }
 
     [ContextMenu("Debug Start Bomb Pass")]
@@ -370,28 +396,41 @@ public class BombPassGimmick : MonoBehaviour
         if (!IsValidPlayerStatus(newHolder))
             return;
 
+        ClearHolderSpeedBoost();
+
         _previousHolder = _currentHolder;
         _currentHolder = newHolder;
         _lastPassTime = Time.time;
         _nextPassAllowedTime = Time.time + GetPassCooldown();
         _nextPassCheckTime = Time.time;
 
-        Vector3 holderPosition = GetHolderFollowPosition(newHolder);
+        Vector3 markerPosition = GetHolderFollowPosition(newHolder);
 
         if (targetMarkerVisual != null)
         {
-            targetMarkerVisual.transform.position = holderPosition;
+            targetMarkerVisual.transform.position = markerPosition;
             targetMarkerVisual.SetActive(true);
         }
 
         if (bombVisual != null)
         {
-            if (!bombVisual.activeSelf)
-                bombVisual.transform.position = holderPosition;
+            if (TryGetBombVisualTargetPose(out Vector3 bombPosition, out Quaternion bombRotation))
+            {
+                if (!bombVisual.activeSelf)
+                {
+                    bombVisual.transform.position = bombPosition;
+                    bombVisual.transform.rotation = bombRotation;
+                }
+            }
+            else if (!bombVisual.activeSelf)
+            {
+                bombVisual.transform.position = markerPosition;
+            }
 
             bombVisual.SetActive(true);
         }
 
+        ApplyHolderSpeedBoost(_currentHolder);
         PlayAudio(passAudio);
         Log($"{LogPrefix} Holder changed: {newHolder.name}");
     }
@@ -473,6 +512,8 @@ public class BombPassGimmick : MonoBehaviour
 
     private void ExplodeBomb()
     {
+        ClearHolderSpeedBoost();
+
         if (_currentHolder == null)
         {
             Log($"{LogPrefix} Explosion skipped. Current holder is missing.");
@@ -549,26 +590,31 @@ public class BombPassGimmick : MonoBehaviour
             return;
         }
 
-        Vector3 holderPosition = GetCurrentHolderFollowPosition();
+        Vector3 markerPosition = GetCurrentHolderFollowPosition();
         float followT = Mathf.Clamp01(GetFollowSpeed() * Time.deltaTime);
 
         if (bombVisual != null)
         {
-            bombVisual.transform.position = Vector3.Lerp(bombVisual.transform.position, holderPosition, followT);
+            if (TryGetBombVisualTargetPose(out Vector3 bombPosition, out Quaternion bombRotation))
+            {
+                bombVisual.transform.position = Vector3.Lerp(bombVisual.transform.position, bombPosition, followT);
+                bombVisual.transform.rotation = Quaternion.Slerp(bombVisual.transform.rotation, bombRotation, followT);
+            }
+
             if (!bombVisual.activeSelf && _phase != BombPhase.Explode && _phase != BombPhase.Cooldown)
                 bombVisual.SetActive(true);
         }
 
         if (targetMarkerVisual != null)
         {
-            targetMarkerVisual.transform.position = holderPosition;
+            targetMarkerVisual.transform.position = markerPosition;
             if (!targetMarkerVisual.activeSelf && _phase != BombPhase.Explode && _phase != BombPhase.Cooldown)
                 targetMarkerVisual.SetActive(true);
         }
 
         if (_finalWarningTriggered && finalWarningVisual != null)
         {
-            finalWarningVisual.transform.position = holderPosition;
+            finalWarningVisual.transform.position = markerPosition;
             if (!finalWarningVisual.activeSelf && _phase != BombPhase.Explode && _phase != BombPhase.Cooldown)
                 finalWarningVisual.SetActive(true);
         }
@@ -596,6 +642,7 @@ public class BombPassGimmick : MonoBehaviour
 
     private void FinishBombPass()
     {
+        ClearHolderSpeedBoost();
         SetPhase(BombPhase.Idle);
         _routine = null;
         _currentHolder = null;
@@ -678,6 +725,45 @@ public class BombPassGimmick : MonoBehaviour
         return _currentHolder != null ? GetHolderFollowPosition(_currentHolder) : GetBombSpawnPosition();
     }
 
+    private bool TryGetBombVisualTargetPose(out Vector3 position, out Quaternion rotation)
+    {
+        position = GetBombSpawnPosition();
+        rotation = bombVisual != null ? bombVisual.transform.rotation : Quaternion.identity;
+
+        if (_currentHolder == null)
+            return false;
+
+        if (!useHolderLocalOffset)
+        {
+            position = GetHolderFollowPosition(_currentHolder);
+            return true;
+        }
+
+        Transform root = GetHolderRootTransform(_currentHolder);
+        if (root == null)
+            return false;
+
+        position = root.TransformPoint(GetHolderLocalFollowOffset());
+        rotation = root.rotation * Quaternion.Euler(GetBombLocalEulerOffset());
+        return true;
+    }
+
+    private Transform GetHolderRootTransform(PlayerStatusModule status)
+    {
+        if (status == null)
+            return null;
+
+        PlayerHub hub = status.GetComponentInParent<PlayerHub>();
+        if (hub != null)
+            return hub.transform;
+
+        Transform root = status.transform.root;
+        if (root != null)
+            return root;
+
+        return status.transform;
+    }
+
     private Vector3 GetHolderFollowPosition(PlayerStatusModule holder)
     {
         return holder.transform.position + GetHolderFollowOffset();
@@ -686,6 +772,75 @@ public class BombPassGimmick : MonoBehaviour
     private Vector3 GetHolderFollowOffset()
     {
         return IsFiniteVector(holderFollowOffset) ? holderFollowOffset : Vector3.zero;
+    }
+
+    private Vector3 GetHolderLocalFollowOffset()
+    {
+        return IsFiniteVector(holderLocalFollowOffset) ? holderLocalFollowOffset : Vector3.zero;
+    }
+
+    private Vector3 GetBombLocalEulerOffset()
+    {
+        return IsFiniteVector(bombLocalEulerOffset) ? bombLocalEulerOffset : Vector3.zero;
+    }
+
+    private float GetHolderMoveSpeedMultiplier()
+    {
+        return Mathf.Clamp(GetFiniteFloatOrDefault(holderMoveSpeedMultiplier, 1f), 0.1f, 3f);
+    }
+
+    private PlayerLocomotionModule FindLocomotionModule(PlayerStatusModule status)
+    {
+        if (status == null)
+            return null;
+
+        PlayerLocomotionModule parentLocomotion = status.GetComponentInParent<PlayerLocomotionModule>();
+        if (parentLocomotion != null)
+            return parentLocomotion;
+
+        PlayerLocomotionModule selfLocomotion = status.GetComponent<PlayerLocomotionModule>();
+        if (selfLocomotion != null)
+            return selfLocomotion;
+
+        PlayerHub hub = status.GetComponentInParent<PlayerHub>();
+        PlayerLocomotionModule hubLocomotion = hub != null ? hub.GetComponentInChildren<PlayerLocomotionModule>(true) : null;
+        if (hubLocomotion != null)
+            return hubLocomotion;
+
+        Transform root = status.transform.root;
+        return root != null ? root.GetComponentInChildren<PlayerLocomotionModule>(true) : null;
+    }
+
+    private void ApplyHolderSpeedBoost(PlayerStatusModule holder)
+    {
+        if (!boostHolderMoveSpeed || holder == null)
+            return;
+
+        PlayerLocomotionModule locomotion = FindLocomotionModule(holder);
+        if (locomotion == null)
+        {
+            LogWarning($"{LogPrefix} Holder speed boost skipped. PlayerLocomotionModule not found. holder={holder.name}");
+            return;
+        }
+
+        float multiplier = GetHolderMoveSpeedMultiplier();
+        locomotion.SetExternalMoveSpeedMultiplier(BombMoveSpeedMultiplierKey, multiplier);
+        _speedBoostedHolder = holder;
+        _speedBoostedLocomotion = locomotion;
+        Log($"{LogPrefix} Applied holder speed boost to {holder.name}, multiplier={multiplier:0.###}");
+    }
+
+    private void ClearHolderSpeedBoost()
+    {
+        if (_speedBoostedLocomotion != null)
+        {
+            _speedBoostedLocomotion.ClearExternalMoveSpeedMultiplier(BombMoveSpeedMultiplierKey);
+            string holderName = _speedBoostedHolder != null ? _speedBoostedHolder.name : "missing holder";
+            Log($"{LogPrefix} Cleared holder speed boost from {holderName}");
+        }
+
+        _speedBoostedHolder = null;
+        _speedBoostedLocomotion = null;
     }
 
     private float GetBombDuration()

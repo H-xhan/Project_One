@@ -3,6 +3,9 @@ using UnityEngine;
 
 public class PlayerLocomotionModule : MonoBehaviour
 {
+    private const float MinExternalMoveSpeedMultiplier = 0.1f;
+    private const float MaxExternalMoveSpeedMultiplier = 3f;
+
     [Header("Move Settings")]
     [Tooltip("걷기 이동 속도입니다. 값이 높을수록 기본 이동이 빨라집니다.")]
     [SerializeField] private float walkSpeed = 4f;
@@ -62,11 +65,28 @@ public class PlayerLocomotionModule : MonoBehaviour
     private float _verticalVelocity; // 수직 속도 (Y)
     private readonly Collider[] _bodyOverlapHits = new Collider[BodyOverlapBufferSize];
     private readonly HashSet<int> _processedOverlapRoots = new HashSet<int>(BodyOverlapBufferSize);
+    private readonly Dictionary<string, float> _externalMoveSpeedMultipliers = new Dictionary<string, float>();
     private float _movementReferenceYaw;
     private bool _movementReferenceYawCaptured;
 
     public bool IsGrounded => _cc != null && _cc.isGrounded;
     public float PlanarSpeed => new Vector2(_planarVelocity.x, _planarVelocity.z).magnitude;
+
+    public void SetExternalMoveSpeedMultiplier(string sourceKey, float multiplier)
+    {
+        if (string.IsNullOrEmpty(sourceKey))
+            return;
+
+        _externalMoveSpeedMultipliers[sourceKey] = ClampExternalMoveSpeedMultiplier(multiplier);
+    }
+
+    public void ClearExternalMoveSpeedMultiplier(string sourceKey)
+    {
+        if (string.IsNullOrEmpty(sourceKey))
+            return;
+
+        _externalMoveSpeedMultipliers.Remove(sourceKey);
+    }
 
     private void Awake()
     {
@@ -109,6 +129,9 @@ public class PlayerLocomotionModule : MonoBehaviour
 
         // 3. 이동 속도 계산 (핵심 수정!)
         float targetSpeed = sprintHeld ? sprintSpeed : walkSpeed;
+
+        if (hasMoveInput)
+            targetSpeed *= GetExternalMoveSpeedMultiplier();
 
         // 전진/후진 입력이 없으면 목표 속도는 0
         if (!hasMoveInput) targetSpeed = 0;
@@ -283,6 +306,40 @@ public class PlayerLocomotionModule : MonoBehaviour
         float targetYaw = Quaternion.LookRotation(moveDirection.normalized, Vector3.up).eulerAngles.y;
         float nextYaw = Mathf.MoveTowardsAngle(currentYaw, targetYaw, Mathf.Max(0f, moveFacingTurnSpeed) * dt);
         _cc.transform.rotation = Quaternion.Euler(0f, nextYaw, 0f);
+    }
+
+    private float GetExternalMoveSpeedMultiplier()
+    {
+        if (_externalMoveSpeedMultipliers.Count <= 0)
+            return 1f;
+
+        float multiplier = 1f;
+        foreach (float value in _externalMoveSpeedMultipliers.Values)
+        {
+            if (!IsFiniteFloat(value))
+                continue;
+
+            multiplier *= value;
+            if (!IsFiniteFloat(multiplier))
+                return MaxExternalMoveSpeedMultiplier;
+
+            multiplier = ClampExternalMoveSpeedMultiplier(multiplier);
+        }
+
+        return ClampExternalMoveSpeedMultiplier(multiplier);
+    }
+
+    private static float ClampExternalMoveSpeedMultiplier(float multiplier)
+    {
+        if (!IsFiniteFloat(multiplier))
+            return 1f;
+
+        return Mathf.Clamp(multiplier, MinExternalMoveSpeedMultiplier, MaxExternalMoveSpeedMultiplier);
+    }
+
+    private static bool IsFiniteFloat(float value)
+    {
+        return !float.IsNaN(value) && !float.IsInfinity(value);
     }
 
 }
