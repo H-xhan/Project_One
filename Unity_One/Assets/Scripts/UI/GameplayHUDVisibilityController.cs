@@ -15,8 +15,11 @@ public class GameplayHUDVisibilityController : MonoBehaviour
     [SerializeField, Tooltip("게임 상태를 읽을 상태 매니저입니다. 비워두면 씬에서 자동 탐색합니다.")]
     private GameStateManager gameStateManager;
 
+    [SerializeField, Tooltip("게임 상태를 확인하기 전까지 플레이 HUD를 기본 숨김 상태로 둘지 여부입니다.")]
+    private bool hideOnAwakeUntilGameplayState = true;
+
     [SerializeField, Tooltip("Countdown 상태에서 플레이 HUD를 표시할지 여부입니다.")]
-    private bool visibleDuringCountdown = true;
+    private bool visibleDuringCountdown = false;
 
     [SerializeField, Tooltip("Playing 상태에서 플레이 HUD를 표시할지 여부입니다.")]
     private bool visibleDuringPlaying = true;
@@ -36,13 +39,26 @@ public class GameplayHUDVisibilityController : MonoBehaviour
     private void Awake()
     {
         ResolveHudReferences();
-        isVisible = ReadCurrentVisibility();
+        if (hideOnAwakeUntilGameplayState)
+        {
+            ApplyVisibility(false);
+        }
+        else
+        {
+            isVisible = ReadCurrentVisibility();
+        }
+
         ResolveGameStateManager();
     }
 
     private void OnEnable()
     {
         ResolveHudReferences();
+        if (hideOnAwakeUntilGameplayState)
+        {
+            ApplyVisibility(false);
+        }
+
         ResolveGameStateManager();
         SubscribeToStateChanges();
         ForceRefresh();

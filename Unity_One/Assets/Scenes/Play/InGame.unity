@@ -240,7 +240,8 @@ MonoBehaviour:
   targetCanvasGroup: {fileID: 0}
   targetGraphicRaycaster: {fileID: 0}
   gameStateManager: {fileID: 1478549242}
-  visibleDuringCountdown: 1
+  hideOnAwakeUntilGameplayState: 1
+  visibleDuringCountdown: 0
   visibleDuringPlaying: 1
   hideWhenStateUnavailable: 1
   pollingInterval: 0.1
@@ -6397,7 +6398,7 @@ RectTransform:
   m_AnchorMin: {x: 0.5, y: 1}
   m_AnchorMax: {x: 0.5, y: 1}
   m_AnchoredPosition: {x: 0, y: -25}
-  m_SizeDelta: {x: 200, y: 50}
+  m_SizeDelta: {x: 400, y: 50}
   m_Pivot: {x: 0.5, y: 0.5}
 --- !u!114 &932311762
 MonoBehaviour:
@@ -12806,8 +12807,9 @@ GameObject:
   serializedVersion: 6
   m_Component:
   - component: {fileID: 2142491666}
+  - component: {fileID: 2142491667}
   m_Layer: 5
-  m_Name: TopCenter
+  m_Name: MatchTimerHUD
   m_TagString: Untagged
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
@@ -12833,6 +12835,27 @@ RectTransform:
   m_AnchoredPosition: {x: 0, y: -50}
   m_SizeDelta: {x: 100, y: 100}
   m_Pivot: {x: 0.5, y: 0.5}
+--- !u!114 &2142491667
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 2142491665}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: f09fe3d59d0238542a386fcfbe5143a1, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  timerText: {fileID: 932311762}
+  matchManager: {fileID: 1995524424}
+  gameStateManager: {fileID: 1478549242}
+  timerPrefix: "\uB0A8\uC740 \uC2DC\uAC04 "
+  missingTimerText: "\uB0A8\uC740 \uC2DC\uAC04 --:--"
+  showOnlyDuringPlaying: 1
+  showDuringCountdown: 0
+  hideTextWhenUnavailable: 0
+  refreshInterval: 0.1
 --- !u!1 &7905282036725252626 stripped
 GameObject:
   m_CorrespondingSourceObject: {fileID: 4063800123654293790, guid: 35b721410953a924b991461446a56aa1, type: 3}
