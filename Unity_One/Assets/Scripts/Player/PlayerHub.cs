@@ -141,6 +141,19 @@ public class PlayerHub : NetworkBehaviour
     [Tooltip("공격 상태 감지 최대 대기 시간(초). 상태명이 다르거나 전이가 꼬였을 때 무한 대기 방지")]
     [SerializeField] private float attackStateTimeout = 2.0f;
 
+    [Header("Basic Attack Stamina")]
+    [SerializeField, Tooltip("기본 공격 시 스테미너를 소비하고 부족하면 공격을 제한할지 여부입니다.")]
+    private bool useStaminaForBasicAttack = true;
+
+    [SerializeField, Tooltip("기본 공격 1회에 소비되는 스테미너 양입니다.")]
+    private float basicAttackStaminaCost = 6f;
+
+    [SerializeField, Tooltip("기본 공격을 시작하기 위해 필요한 최소 스테미너입니다.")]
+    private float basicAttackMinimumStaminaToStart = 6f;
+
+    [SerializeField, Tooltip("스테미너 모듈을 찾지 못했을 때 기존처럼 기본 공격을 허용할지 여부입니다.")]
+    private bool allowBasicAttackWhenStaminaModuleMissing = true;
+
     [Header("Spawn Settings")]
     [Tooltip("이 씬들에서는 초기 Owner 스폰 보정 루틴을 건너뜁니다. 인게임 씬은 InGameMatchManager가 배치를 전담하도록 비워두지 않는 것을 권장합니다.")]
     [SerializeField] private string[] skipInitialSpawnScenes = new[] { "InGame" };
@@ -993,6 +1006,9 @@ public class PlayerHub : NetworkBehaviour
         if (!CanAttackNow())
             return;
 
+        if (!ShouldAllowBasicAttackWithStamina())
+            return;
+
         _attackLockedServer = true;
 
         int weaponAnimId = 0;
@@ -1007,6 +1023,47 @@ public class PlayerHub : NetworkBehaviour
 
         if (_attackLockRoutine != null) StopCoroutine(_attackLockRoutine);
         _attackLockRoutine = StartCoroutine(ServerAttackLockRoutine());
+    }
+
+    private bool ShouldAllowBasicAttackWithStamina()
+    {
+        if (!useStaminaForBasicAttack)
+            return true;
+
+        if (Mathf.Max(0f, basicAttackStaminaCost) <= 0f)
+            return true;
+
+        PlayerStaminaModule targetStaminaModule = StaminaModule;
+        if (targetStaminaModule == null)
+            return allowBasicAttackWhenStaminaModuleMissing;
+
+        if (!CanUseBasicAttackStamina(targetStaminaModule))
+            return false;
+
+        return TryConsumeBasicAttackStamina(targetStaminaModule);
+    }
+
+    private bool CanUseBasicAttackStamina(PlayerStaminaModule targetStaminaModule)
+    {
+        if (Mathf.Max(0f, basicAttackStaminaCost) <= 0f)
+            return true;
+
+        if (targetStaminaModule == null)
+            return allowBasicAttackWhenStaminaModuleMissing;
+
+        return targetStaminaModule.ServerCanSpendStamina(Mathf.Max(0f, basicAttackMinimumStaminaToStart));
+    }
+
+    private bool TryConsumeBasicAttackStamina(PlayerStaminaModule targetStaminaModule)
+    {
+        float spendAmount = Mathf.Max(0f, basicAttackStaminaCost);
+        if (spendAmount <= 0f)
+            return true;
+
+        if (targetStaminaModule == null)
+            return allowBasicAttackWhenStaminaModuleMissing;
+
+        return targetStaminaModule.ServerTrySpendStamina(spendAmount);
     }
 
     private IEnumerator ServerAttackLockRoutine()
@@ -1089,6 +1146,8 @@ public class PlayerHub : NetworkBehaviour
 #if UNITY_EDITOR
     private void OnValidate()
     {
+        basicAttackStaminaCost = Mathf.Max(0f, basicAttackStaminaCost);
+        basicAttackMinimumStaminaToStart = Mathf.Max(0f, basicAttackMinimumStaminaToStart);
         ResolveRefs();
     }
 #endif

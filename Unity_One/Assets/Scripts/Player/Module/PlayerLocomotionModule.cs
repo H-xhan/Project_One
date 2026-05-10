@@ -48,6 +48,19 @@ public class PlayerLocomotionModule : MonoBehaviour
     [Tooltip("지면에 붙어 있도록 아래로 누르는 힘입니다. 값이 낮을수록 지면 접지가 강해집니다.")]
     [SerializeField] private float stickToGroundForce = -5f;
 
+    [Header("Jump Stamina")]
+    [SerializeField, Tooltip("점프 시 스테미너를 소비하고 부족하면 점프를 제한할지 여부입니다.")]
+    private bool useStaminaForJump = true;
+
+    [SerializeField, Tooltip("점프 1회에 소비되는 스테미너 양입니다.")]
+    private float jumpStaminaCost = 12f;
+
+    [SerializeField, Tooltip("점프를 시작하기 위해 필요한 최소 스테미너입니다.")]
+    private float jumpMinimumStaminaToStart = 12f;
+
+    [SerializeField, Tooltip("스테미너 모듈을 찾지 못했을 때 기존처럼 점프를 허용할지 여부입니다.")]
+    private bool allowJumpWhenStaminaModuleMissing = true;
+
     [Header("Rotate")]
     [Tooltip("서버 회전 입력 배율입니다. 값이 높을수록 같은 입력으로 더 빠르게 회전합니다.")]
     [SerializeField] private float yawScale = 1f;
@@ -139,7 +152,7 @@ public class PlayerLocomotionModule : MonoBehaviour
             if (_verticalVelocity <= 0f)
                 _verticalVelocity = stickToGroundForce;
 
-            if (jumpPressed)
+            if (jumpPressed && ShouldAllowJumpWithStamina())
             {
                 _verticalVelocity = Mathf.Sqrt(jumpHeight * -2f * gravity);
                 didJump = true;
@@ -391,6 +404,47 @@ public class PlayerLocomotionModule : MonoBehaviour
         return staminaModule.ServerTrySpendStamina(spendAmount);
     }
 
+    private bool ShouldAllowJumpWithStamina()
+    {
+        if (!useStaminaForJump)
+            return true;
+
+        if (Mathf.Max(0f, jumpStaminaCost) <= 0f)
+            return true;
+
+        PlayerStaminaModule staminaModule = ResolveStaminaModule();
+        if (staminaModule == null)
+            return allowJumpWhenStaminaModuleMissing;
+
+        if (!CanUseJumpStamina(staminaModule))
+            return false;
+
+        return TryConsumeJumpStamina(staminaModule);
+    }
+
+    private bool CanUseJumpStamina(PlayerStaminaModule staminaModule)
+    {
+        if (Mathf.Max(0f, jumpStaminaCost) <= 0f)
+            return true;
+
+        if (staminaModule == null)
+            return allowJumpWhenStaminaModuleMissing;
+
+        return staminaModule.ServerCanSpendStamina(Mathf.Max(0f, jumpMinimumStaminaToStart));
+    }
+
+    private bool TryConsumeJumpStamina(PlayerStaminaModule staminaModule)
+    {
+        float spendAmount = Mathf.Max(0f, jumpStaminaCost);
+        if (spendAmount <= 0f)
+            return true;
+
+        if (staminaModule == null)
+            return allowJumpWhenStaminaModuleMissing;
+
+        return staminaModule.ServerTrySpendStamina(spendAmount);
+    }
+
     private void RotateTowardsMoveDirection(Vector3 moveDirection, float dt)
     {
         if (_cc == null || moveDirection.sqrMagnitude <= 0.0001f)
@@ -441,6 +495,8 @@ public class PlayerLocomotionModule : MonoBehaviour
         sprintStaminaCostPerSecond = Mathf.Max(0f, sprintStaminaCostPerSecond);
         sprintMinimumStaminaToStart = Mathf.Max(0f, sprintMinimumStaminaToStart);
         sprintMinimumStaminaToContinue = Mathf.Max(0f, sprintMinimumStaminaToContinue);
+        jumpStaminaCost = Mathf.Max(0f, jumpStaminaCost);
+        jumpMinimumStaminaToStart = Mathf.Max(0f, jumpMinimumStaminaToStart);
     }
 
 }
