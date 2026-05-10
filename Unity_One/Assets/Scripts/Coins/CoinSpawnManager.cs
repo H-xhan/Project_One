@@ -11,6 +11,9 @@ public class CoinSpawnManager : NetworkBehaviour
     [SerializeField, Tooltip("코인이 생성될 위치 목록입니다. 비어 있으면 코인을 생성하지 않습니다.")]
     private Transform[] spawnPoints;
 
+    [SerializeField, Tooltip("코인이 랜덤 위치에 생성될 BoxCollider 기반 스폰 영역 목록입니다. 값이 있으면 Spawn Points보다 우선 사용합니다.")]
+    private BoxCollider[] spawnAreas;
+
     [SerializeField, Tooltip("라운드 시작 시 서버가 처음 생성할 코인 수입니다.")]
     private int initialSpawnCount = 20;
 
@@ -22,6 +25,24 @@ public class CoinSpawnManager : NetworkBehaviour
 
     [SerializeField, Tooltip("스폰 포인트 주변에 적용할 수평 랜덤 오프셋 반경입니다.")]
     private float spawnPositionRandomRadius = 0.25f;
+
+    [SerializeField, Tooltip("스폰 영역이 있을 때 기존 Spawn Points보다 스폰 영역을 우선 사용할지 여부입니다.")]
+    private bool preferSpawnAreas = true;
+
+    [SerializeField, Tooltip("스폰 영역의 윗면 기준으로 코인을 얼마나 위에 생성할지 설정합니다.")]
+    private float areaSpawnHeightOffset = 0.15f;
+
+    [SerializeField, Tooltip("유효한 랜덤 스폰 위치를 찾기 위해 시도할 최대 횟수입니다.")]
+    private int maxSpawnPositionAttempts = 20;
+
+    [SerializeField, Tooltip("코인이 다른 오브젝트와 겹치는 위치에 생성되지 않도록 검사할지 여부입니다.")]
+    private bool useSpawnBlockingCheck = false;
+
+    [SerializeField, Tooltip("스폰 위치 겹침 검사에 사용할 레이어입니다.")]
+    private LayerMask spawnBlockingLayers;
+
+    [SerializeField, Tooltip("스폰 위치 겹침 검사용 구 반경입니다.")]
+    private float spawnBlockingCheckRadius = 0.25f;
 
     [SerializeField, Tooltip("네트워크 스폰 시 서버가 초기 코인을 자동 생성할지 여부입니다.")]
     private bool spawnInitialCoinsOnNetworkSpawn = true;
@@ -78,10 +99,10 @@ public class CoinSpawnManager : NetworkBehaviour
         PruneSpawnedCoins();
         if (_spawnedCoins.Count >= Mathf.Max(0, maximumActiveCoins)) return false;
 
-        Transform spawnPoint = GetRandomSpawnPoint();
-        if (spawnPoint == null) return false;
+        if (!TryGetRandomSpawnPose(out Vector3 position, out Quaternion rotation))
+            return false;
 
-        return ServerTrySpawnCoinAt(spawnPoint);
+        return ServerTrySpawnCoinAtPosition(position, rotation);
     }
 
     public bool ServerTrySpawnCoinAt(Transform spawnPoint)
@@ -191,6 +212,120 @@ public class CoinSpawnManager : NetworkBehaviour
         return null;
     }
 
+    private bool HasValidSpawnAreas()
+    {
+        if (spawnAreas == null || spawnAreas.Length == 0)
+            return false;
+
+        for (int i = 0; i < spawnAreas.Length; i++)
+        {
+            if (spawnAreas[i] != null && spawnAreas[i].enabled)
+                return true;
+        }
+
+        return false;
+    }
+
+    private BoxCollider GetRandomSpawnArea()
+    {
+        if (!HasValidSpawnAreas())
+            return null;
+
+        int validCount = 0;
+        for (int i = 0; i < spawnAreas.Length; i++)
+        {
+            if (spawnAreas[i] != null && spawnAreas[i].enabled)
+                validCount++;
+        }
+
+        int selectedIndex = Random.Range(0, validCount);
+        for (int i = 0; i < spawnAreas.Length; i++)
+        {
+            BoxCollider spawnArea = spawnAreas[i];
+            if (spawnArea == null || !spawnArea.enabled)
+                continue;
+
+            if (selectedIndex == 0)
+                return spawnArea;
+
+            selectedIndex--;
+        }
+
+        return null;
+    }
+
+    private bool TryGetRandomAreaSpawnPose(out Vector3 position, out Quaternion rotation)
+    {
+        position = Vector3.zero;
+        rotation = Quaternion.identity;
+
+        if (!HasValidSpawnAreas())
+            return false;
+
+        int attemptCount = Mathf.Max(0, maxSpawnPositionAttempts);
+        if (attemptCount <= 0)
+            return false;
+
+        for (int i = 0; i < attemptCount; i++)
+        {
+            BoxCollider spawnArea = GetRandomSpawnArea();
+            if (spawnArea == null)
+                return false;
+
+            Vector3 center = spawnArea.center;
+            Vector3 size = spawnArea.size;
+            Vector3 localPosition = new Vector3(
+                Random.Range(center.x - size.x * 0.5f, center.x + size.x * 0.5f),
+                center.y + size.y * 0.5f + areaSpawnHeightOffset,
+                Random.Range(center.z - size.z * 0.5f, center.z + size.z * 0.5f)
+            );
+
+            Vector3 candidatePosition = spawnArea.transform.TransformPoint(localPosition);
+            if (IsSpawnPositionBlocked(candidatePosition))
+                continue;
+
+            position = candidatePosition;
+            rotation = GetSpawnRotation(spawnArea.transform);
+            return true;
+        }
+
+        return false;
+    }
+
+    private bool IsSpawnPositionBlocked(Vector3 position)
+    {
+        if (!useSpawnBlockingCheck)
+            return false;
+
+        float radius = Mathf.Max(0f, spawnBlockingCheckRadius);
+        if (radius <= 0f)
+            return false;
+
+        return Physics.CheckSphere(position, radius, spawnBlockingLayers, QueryTriggerInteraction.Ignore);
+    }
+
+    private bool TryGetRandomSpawnPose(out Vector3 position, out Quaternion rotation)
+    {
+        position = Vector3.zero;
+        rotation = Quaternion.identity;
+
+        if (preferSpawnAreas && TryGetRandomAreaSpawnPose(out position, out rotation))
+            return true;
+
+        Transform spawnPoint = GetRandomSpawnPoint();
+        if (spawnPoint != null)
+        {
+            position = GetSpawnPosition(spawnPoint);
+            rotation = GetSpawnRotation(spawnPoint);
+            return true;
+        }
+
+        if (!preferSpawnAreas && TryGetRandomAreaSpawnPose(out position, out rotation))
+            return true;
+
+        return false;
+    }
+
     private Vector3 GetSpawnPosition(Transform spawnPoint)
     {
         if (spawnPoint == null)
@@ -220,5 +355,8 @@ public class CoinSpawnManager : NetworkBehaviour
         maximumActiveCoins = Mathf.Max(0, maximumActiveCoins);
         respawnInterval = Mathf.Max(0f, respawnInterval);
         spawnPositionRandomRadius = Mathf.Max(0f, spawnPositionRandomRadius);
+        areaSpawnHeightOffset = Mathf.Max(0f, areaSpawnHeightOffset);
+        maxSpawnPositionAttempts = Mathf.Max(0, maxSpawnPositionAttempts);
+        spawnBlockingCheckRadius = Mathf.Max(0f, spawnBlockingCheckRadius);
     }
 }

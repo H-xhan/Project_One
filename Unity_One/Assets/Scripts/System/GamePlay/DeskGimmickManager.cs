@@ -156,12 +156,8 @@ public class DeskGimmickManager : NetworkBehaviour
     private bool _hasTriggeredThisRound;
     private bool _isGimmickRoundActive;
     private float _roundStartTime;
-    // Legacy debug mirror. _nextAllowedTriggerTime is the multi-active start gate.
     private float _nextAllowedGimmickTime;
     private float _nextAllowedTriggerTime;
-    private bool _isGimmickActive;
-    private ManagedDeskGimmickType _activeGimmickType;
-    private float _activeGimmickEndTime;
     private readonly List<ActiveGimmickState> _activeGimmicks = new List<ActiveGimmickState>();
     private readonly Dictionary<ManagedDeskGimmickType, int> _usesThisRound = new Dictionary<ManagedDeskGimmickType, int>();
     private float _lastKeyboardPopTime = float.NegativeInfinity;
@@ -263,7 +259,6 @@ public class DeskGimmickManager : NetworkBehaviour
         _nextAllowedTriggerTime = Time.time + Mathf.Max(0f, initialGimmickDelay);
         _nextAllowedGimmickTime = _nextAllowedTriggerTime;
         _activeGimmicks.Clear();
-        ResetLegacyActiveGimmickState();
         _usesThisRound.Clear();
         ResetLastGimmickTimes();
 
@@ -279,7 +274,6 @@ public class DeskGimmickManager : NetworkBehaviour
 
         _isGimmickRoundActive = false;
         _activeGimmicks.Clear();
-        ResetLegacyActiveGimmickState();
         _roundStartTime = 0f;
         _nextAllowedTriggerTime = 0f;
         _nextAllowedGimmickTime = 0f;
@@ -408,7 +402,7 @@ public class DeskGimmickManager : NetworkBehaviour
         Log($"{SchedulerLogPrefix} Default profiles filled. Assign missing targets in Inspector if any target is null.");
     }
 
-    [ServerRpc(RequireOwnership = false)]
+    [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Everyone)]
     private void DebugStartDeveloperIntrusionServerRpc()
     {
         StartDeveloperIntrusionServer();
@@ -969,7 +963,6 @@ public class DeskGimmickManager : NetworkBehaviour
         });
         _nextAllowedTriggerTime = now + Mathf.Max(0.1f, globalGimmickGap);
         _nextAllowedGimmickTime = _nextAllowedTriggerTime;
-        SyncLegacyActiveGimmickState();
         _hasTriggeredThisRound = true;
 
         int activeCount = GetActiveGimmickCount();
@@ -982,7 +975,6 @@ public class DeskGimmickManager : NetworkBehaviour
 
     private void PruneExpiredActiveGimmicks()
     {
-        bool removedAny = false;
         float now = Time.time;
         for (int i = _activeGimmicks.Count - 1; i >= 0; i--)
         {
@@ -991,12 +983,8 @@ public class DeskGimmickManager : NetworkBehaviour
                 continue;
 
             _activeGimmicks.RemoveAt(i);
-            removedAny = true;
             Log($"{SchedulerLogPrefix} Active gimmick ended. type={state.type} name={state.name} now={now:0.###}");
         }
-
-        if (removedAny)
-            SyncLegacyActiveGimmickState();
     }
 
     private int GetMaxActiveGimmicksForRoundTime(float roundTime)
@@ -1120,27 +1108,6 @@ public class DeskGimmickManager : NetworkBehaviour
         }
 
         return description;
-    }
-
-    private void SyncLegacyActiveGimmickState()
-    {
-        if (_activeGimmicks.Count == 0)
-        {
-            ResetLegacyActiveGimmickState();
-            return;
-        }
-
-        ActiveGimmickState latest = _activeGimmicks[_activeGimmicks.Count - 1];
-        _isGimmickActive = true;
-        _activeGimmickType = latest.type;
-        _activeGimmickEndTime = latest.endTime;
-    }
-
-    private void ResetLegacyActiveGimmickState()
-    {
-        _isGimmickActive = false;
-        _activeGimmickType = ManagedDeskGimmickType.KeyboardPop;
-        _activeGimmickEndTime = 0f;
     }
 
     private int CountValidPlayers()

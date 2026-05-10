@@ -167,6 +167,9 @@ public class PlayerHub : NetworkBehaviour
     [Tooltip("플레이어의 코인 보유량과 낙사 페널티 계산을 담당하는 모듈입니다. 비워두면 자식에서 자동 탐색합니다.")]
     [SerializeField] private PlayerCoinWalletModule coinWalletModule;
 
+    [Tooltip("플레이어의 스테미너 수치와 회복 처리를 담당하는 모듈입니다. 비워두면 자식에서 자동 탐색합니다.")]
+    [SerializeField] private PlayerStaminaModule staminaModule;
+
     [Tooltip("현재 게임 상태를 확인할 매니저입니다. 비워두면 씬에서 자동 탐색합니다.")]
     [SerializeField] private GameStateManager gameStateManager;
 
@@ -176,6 +179,7 @@ public class PlayerHub : NetworkBehaviour
     public Animator Animator => GetComponentInChildren<Animator>(true);
     public Camera PlayerCamera => GetComponentInChildren<Camera>(true);
     public PlayerCoinWalletModule CoinWalletModule => coinWalletModule;
+    public PlayerStaminaModule StaminaModule => staminaModule;
 
     private Vector2 _moveInput;
     private float _yawDelta;
@@ -278,6 +282,7 @@ public class PlayerHub : NetworkBehaviour
         if (interactModule == null) interactModule = GetComponentInChildren<PlayerInteractModule>(true);
         if (statusModule == null) statusModule = GetComponentInChildren<PlayerStatusModule>(true);
         if (coinWalletModule == null) coinWalletModule = GetComponentInChildren<PlayerCoinWalletModule>(true);
+        if (staminaModule == null) staminaModule = GetComponentInChildren<PlayerStaminaModule>(true);
         if (gameStateManager == null) gameStateManager = FindFirstObjectByType<GameStateManager>();
     }
 

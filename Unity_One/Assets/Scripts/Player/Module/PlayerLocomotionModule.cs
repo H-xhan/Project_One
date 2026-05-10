@@ -19,6 +19,25 @@ public class PlayerLocomotionModule : MonoBehaviour
     [Tooltip("멈출 때 얼마나 빨리 정지하는지 (높을수록 칼브레이크)")]
     [SerializeField] private float deceleration = 30f; // [추가] 멈출 때는 2배 더 강력하게!
 
+    [Header("Sprint Stamina")]
+    [SerializeField, Tooltip("달리기 중 스테미너를 소비하고 부족하면 달리기를 제한할지 여부입니다.")]
+    private bool useStaminaForSprint = true;
+
+    [SerializeField, Tooltip("달리기 중 초당 소비되는 스테미너 양입니다.")]
+    private float sprintStaminaCostPerSecond = 20f;
+
+    [SerializeField, Tooltip("달리기를 시작하기 위해 필요한 최소 스테미너입니다.")]
+    private float sprintMinimumStaminaToStart = 5f;
+
+    [SerializeField, Tooltip("달리기를 계속 유지하기 위해 필요한 최소 스테미너입니다.")]
+    private float sprintMinimumStaminaToContinue = 0.5f;
+
+    [SerializeField, Tooltip("이동 입력이 있을 때만 달리기 스테미너를 소비할지 여부입니다.")]
+    private bool consumeSprintStaminaOnlyWhileMoving = true;
+
+    [SerializeField, Tooltip("스테미너 모듈을 찾지 못했을 때 기존처럼 달리기를 허용할지 여부입니다.")]
+    private bool allowSprintWhenStaminaModuleMissing = true;
+
     [Header("Jump/Gravity")]
     [Tooltip("점프 높이입니다. 값이 높을수록 점프가 더 높아집니다.")]
     [SerializeField] private float jumpHeight = 1.5f;
@@ -68,6 +87,8 @@ public class PlayerLocomotionModule : MonoBehaviour
     private readonly Dictionary<string, float> _externalMoveSpeedMultipliers = new Dictionary<string, float>();
     private float _movementReferenceYaw;
     private bool _movementReferenceYawCaptured;
+    private PlayerHub _playerHub;
+    private bool _isSprintingWithStamina;
 
     public bool IsGrounded => _cc != null && _cc.isGrounded;
     public float PlanarSpeed => new Vector2(_planarVelocity.x, _planarVelocity.z).magnitude;
@@ -128,7 +149,8 @@ public class PlayerLocomotionModule : MonoBehaviour
         _verticalVelocity += gravity * dt;
 
         // 3. 이동 속도 계산 (핵심 수정!)
-        float targetSpeed = sprintHeld ? sprintSpeed : walkSpeed;
+        bool shouldApplySprint = ShouldApplySprint(sprintHeld, hasMoveInput, dt);
+        float targetSpeed = shouldApplySprint ? sprintSpeed : walkSpeed;
 
         if (hasMoveInput)
             targetSpeed *= GetExternalMoveSpeedMultiplier();
@@ -297,6 +319,78 @@ public class PlayerLocomotionModule : MonoBehaviour
         return _cc.transform.forward * forwardInput;
     }
 
+    private bool ShouldApplySprint(bool sprintHeld, bool hasMoveInput, float dt)
+    {
+        if (!sprintHeld || !hasMoveInput)
+        {
+            _isSprintingWithStamina = false;
+            return false;
+        }
+
+        if (!useStaminaForSprint)
+        {
+            _isSprintingWithStamina = true;
+            return true;
+        }
+
+        PlayerStaminaModule staminaModule = ResolveStaminaModule();
+        if (staminaModule == null)
+        {
+            _isSprintingWithStamina = allowSprintWhenStaminaModuleMissing;
+            return allowSprintWhenStaminaModuleMissing;
+        }
+
+        bool wasSprinting = _isSprintingWithStamina;
+        if (!CanUseSprintStamina(staminaModule, wasSprinting))
+        {
+            _isSprintingWithStamina = false;
+            return false;
+        }
+
+        if (!ShouldConsumeSprintStamina(hasMoveInput) || TryConsumeSprintStamina(staminaModule, dt))
+        {
+            _isSprintingWithStamina = true;
+            return true;
+        }
+
+        _isSprintingWithStamina = false;
+        return false;
+    }
+
+    private PlayerStaminaModule ResolveStaminaModule()
+    {
+        if (_playerHub == null)
+            _playerHub = GetComponentInParent<PlayerHub>();
+
+        return _playerHub != null ? _playerHub.StaminaModule : null;
+    }
+
+    private bool CanUseSprintStamina(PlayerStaminaModule staminaModule, bool isCurrentlySprinting)
+    {
+        if (staminaModule == null)
+            return allowSprintWhenStaminaModuleMissing;
+
+        float requiredStamina = isCurrentlySprinting ? sprintMinimumStaminaToContinue : sprintMinimumStaminaToStart;
+        return staminaModule.ServerCanSpendStamina(Mathf.Max(0f, requiredStamina));
+    }
+
+    private bool ShouldConsumeSprintStamina(bool hasMoveInput)
+    {
+        return hasMoveInput || !consumeSprintStaminaOnlyWhileMoving;
+    }
+
+    private bool TryConsumeSprintStamina(PlayerStaminaModule staminaModule, float dt)
+    {
+        if (staminaModule == null)
+            return allowSprintWhenStaminaModuleMissing;
+
+        float spendAmount = Mathf.Max(0f, sprintStaminaCostPerSecond) * Mathf.Max(0f, dt);
+        if (spendAmount <= 0f)
+            return true;
+
+        return staminaModule.ServerTrySpendStamina(spendAmount);
+    }
+
     private void RotateTowardsMoveDirection(Vector3 moveDirection, float dt)
     {
         if (_cc == null || moveDirection.sqrMagnitude <= 0.0001f)
@@ -340,6 +434,13 @@ public class PlayerLocomotionModule : MonoBehaviour
     private static bool IsFiniteFloat(float value)
     {
         return !float.IsNaN(value) && !float.IsInfinity(value);
+    }
+
+    private void OnValidate()
+    {
+        sprintStaminaCostPerSecond = Mathf.Max(0f, sprintStaminaCostPerSecond);
+        sprintMinimumStaminaToStart = Mathf.Max(0f, sprintMinimumStaminaToStart);
+        sprintMinimumStaminaToContinue = Mathf.Max(0f, sprintMinimumStaminaToContinue);
     }
 
 }

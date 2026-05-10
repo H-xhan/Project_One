@@ -7,17 +7,6 @@ public class KeyboardPopGimmick : MonoBehaviour
 {
     private const string LogPrefix = "[KEYBOARD_POP]";
 
-    private enum Phase
-    {
-        Idle = 0,
-        Telegraph = 1,
-        Launch = 2,
-        Land = 3,
-        Impact = 4,
-        StayScattered = 5,
-        Cooldown = 6
-    }
-
     [System.Serializable]
     private struct DeskLandingArea
     {
@@ -40,9 +29,6 @@ public class KeyboardPopGimmick : MonoBehaviour
 
     [Tooltip("이전 단순 팝 연출에서 사용하던 로컬 위치 오프셋입니다. 현재 분출형 이동에서는 사용하지 않습니다.")]
     [SerializeField] private Vector3 popLocalOffset = new Vector3(0f, 0.35f, 0f);
-
-    [Tooltip("이전 단순 팝 연출에서 사용하던 튀어나오는 시간입니다. 현재 분출형 이동에서는 사용하지 않습니다.")]
-    [SerializeField] private float popDuration = 0.12f;
 
     [Header("Timing")]
     [Tooltip("키가 튀어나오기 전 예고 연출 시간(초)입니다.")]
@@ -68,9 +54,6 @@ public class KeyboardPopGimmick : MonoBehaviour
 
     [Tooltip("착지 후 쿨다운으로 넘어가기 전까지 유지하는 시간입니다. 키는 이후에도 흩어진 위치에 남습니다.")]
     [SerializeField] private float activeDuration = 0.35f;
-
-    [Tooltip("이전 자동 복귀 연출에서 사용하던 시간입니다. 현재 StayScattered 모드에서는 자동 복귀에 사용하지 않습니다.")]
-    [SerializeField] private float returnDuration = 0.35f;
 
     [Tooltip("기믹 재발동을 막는 쿨다운 시간(초)입니다.")]
     [SerializeField] private float cooldownDuration = 1.0f;
@@ -163,7 +146,6 @@ public class KeyboardPopGimmick : MonoBehaviour
     private float[] _hideAtTimes;
     private readonly HashSet<PlayerStatusModule> _hitPlayers = new HashSet<PlayerStatusModule>();
     private Coroutine _runningRoutine;
-    private Phase _phase = Phase.Idle;
 
     private void Awake()
     {
@@ -223,32 +205,25 @@ public class KeyboardPopGimmick : MonoBehaviour
         Log($"{LogPrefix} Started.");
         _hitPlayers.Clear();
 
-        _phase = Phase.Telegraph;
         yield return PlayTelegraphRoutine();
 
-        _phase = Phase.Launch;
         yield return LaunchKeysRoutine();
         Log($"{LogPrefix} Launched keys: count={CountValidPreparedKeys()}");
 
-        _phase = Phase.Land;
         SetKeysToLandingTargets(rotateWhileFlying ? flyingRotationSpeed * Mathf.Max(0f, launchDuration) : 0f);
         ScheduleHideAfterLanding();
 
-        _phase = Phase.Impact;
         Log($"{LogPrefix} Impact.");
         ApplyServerKnockback();
 
-        _phase = Phase.StayScattered;
         yield return WaitForSecondsSafe(activeDuration);
         Log($"{LogPrefix} Stayed scattered.");
 
         if (!stayScatteredAfterImpact)
             RestoreOriginalTransforms();
 
-        _phase = Phase.Cooldown;
         yield return WaitForSecondsSafe(cooldownDuration);
 
-        _phase = Phase.Idle;
         _runningRoutine = null;
         Log($"{LogPrefix} Ended.");
     }
@@ -819,7 +794,6 @@ public class KeyboardPopGimmick : MonoBehaviour
 
         RestoreOriginalTransforms();
         _hitPlayers.Clear();
-        _phase = Phase.Idle;
     }
 
     private bool HasValidKey()
