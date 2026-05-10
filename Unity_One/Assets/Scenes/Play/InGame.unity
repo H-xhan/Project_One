@@ -7662,6 +7662,58 @@ MonoBehaviour:
   autoTriggerOnPlaying: 1
   autoTriggerDelay: 10
   minAutoTriggerPlayers: 1
+  initialGimmickDelay: 8
+  globalGimmickGap: 8
+  enableAutoGimmickSchedule: 1
+  schedulerTickInterval: 1
+  gimmickProfiles:
+  - name: KeyboardPop
+    type: 0
+    target: {fileID: 1243381396}
+    startMessageName: DebugStartKeyboardPop
+    weight: 25
+    maxUsesPerRound: 4
+    minRoundTime: 8
+    estimatedActiveDuration: 3.5
+    cooldownAfter: 5
+    isMajor: 0
+    requireAtLeastTwoPlayers: 0
+  - name: LiquidSweep
+    type: 1
+    target: {fileID: 1243381397}
+    startMessageName: DebugStartLiquidSweep
+    weight: 25
+    maxUsesPerRound: 3
+    minRoundTime: 20
+    estimatedActiveDuration: 5
+    cooldownAfter: 7
+    isMajor: 1
+    requireAtLeastTwoPlayers: 0
+  - name: BombPass
+    type: 2
+    target: {fileID: 1243381398}
+    startMessageName: DebugStartBombPass
+    weight: 30
+    maxUsesPerRound: 2
+    minRoundTime: 35
+    estimatedActiveDuration: 10
+    cooldownAfter: 10
+    isMajor: 1
+    requireAtLeastTwoPlayers: 0
+  - name: DeveloperIntrusion
+    type: 3
+    target: {fileID: 1243381394}
+    startMessageName: StartDeveloperIntrusionServer
+    weight: 20
+    maxUsesPerRound: 1
+    minRoundTime: 80
+    estimatedActiveDuration: 12
+    cooldownAfter: 15
+    isMajor: 1
+    requireAtLeastTwoPlayers: 0
+  developerIntrusionMinRoundTime: 80
+  developerIntrusionAfterBombBlockTime: 10
+  bombPassAfterLiquidDelay: 3
   enableDebugLogs: 0
 --- !u!114 &1243381396
 MonoBehaviour:
@@ -9267,7 +9319,7 @@ MonoBehaviour:
   readySystem: {fileID: 1995524426}
   inGameMatchManager: {fileID: 1995524424}
   countdownSeconds: 3
-  playSeconds: 120
+  playSeconds: 300
   resultsSeconds: 6
   autoReturnToLobby: 1
   teleportPlayersOnEnterLobby: 1

@@ -50,6 +50,9 @@ public class PlayerHub : NetworkBehaviour
     [SerializeField, Tooltip("Ragdoll 중심 위치에 더할 카메라 focus 높이 보정값입니다.")]
     private float ragdollCameraFocusHeightOffset = 0.4f;
 
+    [SerializeField, Tooltip("Ragdoll focus가 플레이어 루트 기준 이 높이보다 아래로 내려가지 않도록 보정합니다.")]
+    private float ragdollCameraMinimumFocusHeight = 0.85f;
+
     [SerializeField, Tooltip("Ragdoll focus를 따라갈 때의 보간 속도입니다.")]
     private float ragdollCameraBlendSpeed = 8f;
 
@@ -110,6 +113,8 @@ public class PlayerHub : NetworkBehaviour
     private bool _cameraRootBaseLocalPositionCaptured;
     private float _defaultQuarterViewYaw;
     private bool _defaultQuarterViewYawCaptured;
+    private float _cameraRootYawOffset;
+    private bool _cameraRootYawOffsetCaptured;
     private Vector3 _cameraCurrentLocalPosition;
     private bool _cameraLocalPositionInitialized;
     private bool _cameraWasObstructedLastFrame;
@@ -159,6 +164,9 @@ public class PlayerHub : NetworkBehaviour
     [Tooltip("넉백, 기상, 탈락 등 플레이어 상태를 담당하는 모듈입니다. 비워두면 자식에서 자동 탐색합니다.")]
     [SerializeField] private PlayerStatusModule statusModule;
 
+    [Tooltip("플레이어의 코인 보유량과 낙사 페널티 계산을 담당하는 모듈입니다. 비워두면 자식에서 자동 탐색합니다.")]
+    [SerializeField] private PlayerCoinWalletModule coinWalletModule;
+
     [Tooltip("현재 게임 상태를 확인할 매니저입니다. 비워두면 씬에서 자동 탐색합니다.")]
     [SerializeField] private GameStateManager gameStateManager;
 
@@ -167,6 +175,7 @@ public class PlayerHub : NetworkBehaviour
     public CharacterController CharacterController => GetComponentInChildren<CharacterController>(true);
     public Animator Animator => GetComponentInChildren<Animator>(true);
     public Camera PlayerCamera => GetComponentInChildren<Camera>(true);
+    public PlayerCoinWalletModule CoinWalletModule => coinWalletModule;
 
     private Vector2 _moveInput;
     private float _yawDelta;
@@ -268,6 +277,7 @@ public class PlayerHub : NetworkBehaviour
         if (combatModule == null) combatModule = GetComponentInChildren<PlayerCombatModule>(true);
         if (interactModule == null) interactModule = GetComponentInChildren<PlayerInteractModule>(true);
         if (statusModule == null) statusModule = GetComponentInChildren<PlayerStatusModule>(true);
+        if (coinWalletModule == null) coinWalletModule = GetComponentInChildren<PlayerCoinWalletModule>(true);
         if (gameStateManager == null) gameStateManager = FindFirstObjectByType<GameStateManager>();
     }
 
@@ -431,7 +441,7 @@ public class PlayerHub : NetworkBehaviour
 
         _cameraPitchVelocity = Mathf.Clamp(_cameraPitchVelocity, bottomClamp, topClamp);
         UpdateCameraLocalPosition();
-        cameraRoot.transform.localRotation = Quaternion.Euler(_cameraPitchVelocity, 0f, 0f);
+        ApplyStableCameraWorldRotation();
     }
 
     private void ApplyDefaultCameraPitchImmediate()
@@ -442,7 +452,7 @@ public class PlayerHub : NetworkBehaviour
         if (cameraRoot != null)
         {
             ApplyCameraLocalPositionImmediate();
-            cameraRoot.transform.localRotation = Quaternion.Euler(_cameraPitchVelocity, 0f, 0f);
+            ApplyStableCameraWorldRotation();
         }
     }
 
@@ -453,16 +463,25 @@ public class PlayerHub : NetworkBehaviour
 
     private void CacheCameraDefaults()
     {
-        if (!_cameraRootBaseLocalPositionCaptured && cameraRoot != null)
-        {
-            _cameraRootBaseLocalPosition = cameraRoot.transform.localPosition;
-            _cameraRootBaseLocalPositionCaptured = true;
-        }
-
         if (!_defaultQuarterViewYawCaptured)
         {
-            _defaultQuarterViewYaw = transform.eulerAngles.y;
+            _defaultQuarterViewYaw = GetStablePlayerYaw();
             _defaultQuarterViewYawCaptured = true;
+        }
+
+        if (!_cameraRootYawOffsetCaptured && cameraRoot != null)
+        {
+            _cameraRootYawOffset = Mathf.DeltaAngle(GetStablePlayerYaw(), GetYawOnly(cameraRoot.transform, GetStablePlayerYaw()));
+            if (!IsFiniteFloat(_cameraRootYawOffset))
+                _cameraRootYawOffset = 0f;
+
+            _cameraRootYawOffsetCaptured = true;
+        }
+
+        if (!_cameraRootBaseLocalPositionCaptured && cameraRoot != null)
+        {
+            _cameraRootBaseLocalPosition = GetCameraLocalPositionFromWorld(cameraRoot.transform.position);
+            _cameraRootBaseLocalPositionCaptured = true;
         }
     }
 
@@ -527,10 +546,7 @@ public class PlayerHub : NetworkBehaviour
             usingRagdollOrHold = true;
         }
 
-        Transform reference = cameraRoot != null && cameraRoot.transform.parent != null ? cameraRoot.transform.parent : transform;
-        Vector3 defaultLocal = reference.InverseTransformPoint(defaultFocusWorld);
-        Vector3 targetLocal = reference.InverseTransformPoint(desiredFocusWorld);
-        Vector3 desiredOffset = targetLocal - defaultLocal;
+        Vector3 desiredOffset = GetStableCameraLocalVectorFromWorld(desiredFocusWorld - defaultFocusWorld);
 
         if (!IsFiniteVector3(desiredOffset))
             return Vector3.zero;
@@ -560,6 +576,7 @@ public class PlayerHub : NetworkBehaviour
             return false;
 
         focusWorld += Vector3.up * GetFiniteOrZero(ragdollCameraFocusHeightOffset);
+        focusWorld = ClampRagdollCameraFocusWorldHeight(focusWorld);
         if (!IsFiniteVector3(focusWorld))
             return false;
 
@@ -611,6 +628,15 @@ public class PlayerHub : NetworkBehaviour
         return Mathf.Max(0f, GetFiniteOrZero(value));
     }
 
+    private Vector3 ClampRagdollCameraFocusWorldHeight(Vector3 focusWorld)
+    {
+        float minimumFocusY = GetStableCameraPositionOrigin().y + GetFiniteNonNegative(ragdollCameraMinimumFocusHeight);
+        if (focusWorld.y < minimumFocusY)
+            focusWorld.y = minimumFocusY;
+
+        return focusWorld;
+    }
+
     private void UpdateCameraLocalPosition()
     {
         if (cameraRoot == null)
@@ -633,7 +659,7 @@ public class PlayerHub : NetworkBehaviour
             _cameraCurrentLocalPosition = Vector3.MoveTowards(_cameraCurrentLocalPosition, targetLocalPosition, positionStep);
         }
 
-        cameraRoot.transform.localPosition = _cameraCurrentLocalPosition;
+        cameraRoot.transform.position = GetCameraWorldPositionFromLocal(_cameraCurrentLocalPosition);
         _cameraWasObstructedLastFrame = obstructed;
     }
 
@@ -647,7 +673,7 @@ public class PlayerHub : NetworkBehaviour
         targetLocalPosition += UpdateRagdollCameraFocusLocalOffset();
         _cameraCurrentLocalPosition = GetObstructionAdjustedCameraLocalPosition(targetLocalPosition, out obstructed);
         _cameraLocalPositionInitialized = true;
-        cameraRoot.transform.localPosition = _cameraCurrentLocalPosition;
+        cameraRoot.transform.position = GetCameraWorldPositionFromLocal(_cameraCurrentLocalPosition);
         _cameraWasObstructedLastFrame = obstructed;
     }
 
@@ -700,7 +726,7 @@ public class PlayerHub : NetworkBehaviour
         if (!IsFiniteVector3(_lastRagdollCameraFocusWorld))
             return defaultOrigin;
 
-        return _lastRagdollCameraFocusWorld;
+        return ClampRagdollCameraFocusWorldHeight(_lastRagdollCameraFocusWorld);
     }
 
     private Vector3 GetDefaultCameraObstructionOrigin()
@@ -740,18 +766,64 @@ public class PlayerHub : NetworkBehaviour
 
     private Vector3 GetCameraWorldPositionFromLocal(Vector3 localPosition)
     {
-        if (cameraRoot == null || cameraRoot.transform.parent == null)
-            return localPosition;
-
-        return cameraRoot.transform.parent.TransformPoint(localPosition);
+        Vector3 horizontalOffset = GetStableCameraYawRotation() * new Vector3(localPosition.x, 0f, localPosition.z);
+        return GetStableCameraPositionOrigin() + horizontalOffset + Vector3.up * localPosition.y;
     }
 
     private Vector3 GetCameraLocalPositionFromWorld(Vector3 worldPosition)
     {
-        if (cameraRoot == null || cameraRoot.transform.parent == null)
-            return worldPosition;
+        Vector3 fromOrigin = worldPosition - GetStableCameraPositionOrigin();
+        Vector3 horizontalWorld = new Vector3(fromOrigin.x, 0f, fromOrigin.z);
+        Vector3 horizontalLocal = Quaternion.Inverse(GetStableCameraYawRotation()) * horizontalWorld;
+        return new Vector3(horizontalLocal.x, fromOrigin.y, horizontalLocal.z);
+    }
 
-        return cameraRoot.transform.parent.InverseTransformPoint(worldPosition);
+    private Vector3 GetStableCameraLocalVectorFromWorld(Vector3 worldVector)
+    {
+        Vector3 horizontalWorld = new Vector3(worldVector.x, 0f, worldVector.z);
+        Vector3 horizontalLocal = Quaternion.Inverse(GetStableCameraYawRotation()) * horizontalWorld;
+        return new Vector3(horizontalLocal.x, worldVector.y, horizontalLocal.z);
+    }
+
+    private Vector3 GetStableCameraPositionOrigin()
+    {
+        return transform.position;
+    }
+
+    private Quaternion GetStableCameraYawRotation()
+    {
+        return Quaternion.Euler(0f, GetStableCameraYaw(), 0f);
+    }
+
+    private float GetStableCameraYaw()
+    {
+        return Mathf.Repeat(GetStablePlayerYaw() + _cameraRootYawOffset, 360f);
+    }
+
+    private float GetStablePlayerYaw()
+    {
+        return GetYawOnly(transform, transform.eulerAngles.y);
+    }
+
+    private static float GetYawOnly(Transform source, float fallbackYaw)
+    {
+        if (source == null)
+            return fallbackYaw;
+
+        Vector3 forward = Vector3.ProjectOnPlane(source.forward, Vector3.up);
+        if (forward.sqrMagnitude > 0.0001f)
+            return Quaternion.LookRotation(forward.normalized, Vector3.up).eulerAngles.y;
+
+        return fallbackYaw;
+    }
+
+    private void ApplyStableCameraWorldRotation()
+    {
+        if (cameraRoot == null)
+            return;
+
+        float stablePitch = Mathf.Clamp(_cameraPitchVelocity, bottomClamp, topClamp);
+        cameraRoot.transform.rotation = Quaternion.Euler(stablePitch, GetStableCameraYaw(), 0f);
     }
 
     private float GetCameraPositionBlendSpeed(Vector3 targetLocalPosition, bool obstructed)
@@ -832,14 +904,11 @@ public class PlayerHub : NetworkBehaviour
 
     private Vector3 GetCameraCollisionSampleRight()
     {
-        Camera playerCamera = PlayerCamera;
-        if (playerCamera != null && playerCamera.transform.right.sqrMagnitude > 0.0001f)
-            return playerCamera.transform.right.normalized;
+        Vector3 stableRight = GetStableCameraYawRotation() * Vector3.right;
+        if (stableRight.sqrMagnitude > 0.0001f)
+            return stableRight.normalized;
 
-        if (cameraRoot != null && cameraRoot.transform.right.sqrMagnitude > 0.0001f)
-            return cameraRoot.transform.right.normalized;
-
-        return transform.right;
+        return Vector3.right;
     }
 
     private float GetProcessedYawDelta(float yawDelta, Vector2 moveInput, bool allowLook)
@@ -854,7 +923,7 @@ public class PlayerHub : NetworkBehaviour
         if (moveInput.sqrMagnitude > 0.001f)
             return 0f;
 
-        float yawError = Mathf.DeltaAngle(transform.eulerAngles.y, _defaultQuarterViewYaw);
+        float yawError = Mathf.DeltaAngle(GetStablePlayerYaw(), _defaultQuarterViewYaw);
         float yawReturnStep = Mathf.Max(0f, cameraYawReturnSpeed) * Time.deltaTime;
         return Mathf.Clamp(yawError, -yawReturnStep, yawReturnStep);
     }
