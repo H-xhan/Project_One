@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using Unity.Netcode;
 using UnityEngine;
 
 public class PlayerLocomotionModule : MonoBehaviour
@@ -120,6 +121,31 @@ public class PlayerLocomotionModule : MonoBehaviour
             return;
 
         _externalMoveSpeedMultipliers.Remove(sourceKey);
+    }
+
+    public bool ServerTryApplyBounce(float upwardVelocity, bool overrideExistingUpwardVelocity = true)
+    {
+        NetworkManager networkManager = NetworkManager.Singleton;
+        if (networkManager == null || !networkManager.IsServer)
+            return false;
+
+        if (!IsFinitePositive(upwardVelocity))
+            return false;
+
+        if (_cc == null)
+            return false;
+
+        if (!_cc.enabled)
+            return false;
+
+        if (!gameObject.activeInHierarchy || !_cc.gameObject.activeInHierarchy)
+            return false;
+
+        _verticalVelocity = overrideExistingUpwardVelocity
+            ? upwardVelocity
+            : Mathf.Max(_verticalVelocity, upwardVelocity);
+
+        return true;
     }
 
     private void Awake()
@@ -488,6 +514,11 @@ public class PlayerLocomotionModule : MonoBehaviour
     private static bool IsFiniteFloat(float value)
     {
         return !float.IsNaN(value) && !float.IsInfinity(value);
+    }
+
+    private static bool IsFinitePositive(float value)
+    {
+        return IsFiniteFloat(value) && value > 0f;
     }
 
     private void OnValidate()
