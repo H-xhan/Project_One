@@ -822,6 +822,10 @@ MonoBehaviour:
   jumpHeight: 1.3
   gravity: -18
   stickToGroundForce: -5
+  useStaminaForJump: 1
+  jumpStaminaCost: 12
+  jumpMinimumStaminaToStart: 12
+  allowJumpWhenStaminaModuleMissing: 1
   yawScale: 1
   moveFacingTurnSpeed: 140
   moveFacingInputDeadzone: 0.01
@@ -890,6 +894,15 @@ MonoBehaviour:
   eliminationY: 3
   useRagdollFocusForElimination: 1
   ragdollFocusEliminationYOffset: 3
+  useCoinRespawnOnFall: 1
+  dropCoinsOnFallRespawn: 1
+  requirePlayingStateForCoinRespawn: 1
+  allowRespawnWhenMatchManagerMissing: 0
+  coinDropSpawnRadius: 1
+  coinDropSpawnHeightOffset: 0.25
+  maxCoinDropSpawnAttempts: 16
+  preferCoinSpawnManagerRandomDrop: 1
+  enableCoinRespawnDebugLogs: 0
   enableDebugLogs: 0
 --- !u!114 &3577343894024067653
 MonoBehaviour:
@@ -906,9 +919,9 @@ MonoBehaviour:
   ShowTopMostFoldoutHeaderGroup: 1
   startingCoins: 5
   maxCoins: 999
-  fallDropRatio: 0.3
-  fallDropMinimum: 1
-  fallDropMaximum: 8
+  fallDropRatio: 0.75
+  fallDropMinimum: 3
+  fallDropMaximum: 20
   eliminateWhenEmpty: 1
 --- !u!114 &4206412204477591311
 MonoBehaviour:
@@ -2465,6 +2478,10 @@ MonoBehaviour:
   allowAttackBuffer: 1
   attackBufferWindow: 0.2
   attackStateTimeout: 1
+  useStaminaForBasicAttack: 1
+  basicAttackStaminaCost: 6
+  basicAttackMinimumStaminaToStart: 6
+  allowBasicAttackWhenStaminaModuleMissing: 1
   skipInitialSpawnScenes:
   - InGame
   inputModule: {fileID: 346629790702925664}

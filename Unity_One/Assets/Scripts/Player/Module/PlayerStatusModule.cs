@@ -137,6 +137,34 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
     [Tooltip("Ragdoll 중심 위치가 낙사 판정에 사용될 때 추가로 적용할 Y 오프셋입니다.")]
     [SerializeField] private float ragdollFocusEliminationYOffset = 0f;
 
+    [Header("Coin Fall Respawn")]
+    [SerializeField, Tooltip("낙사 시 코인을 보유하고 있으면 기존 탈락 대신 코인 차감 후 리스폰할지 여부입니다.")]
+    private bool useCoinRespawnOnFall = true;
+
+    [SerializeField, Tooltip("코인 리스폰 처리 시 차감된 코인을 맵에 드랍할지 여부입니다.")]
+    private bool dropCoinsOnFallRespawn = true;
+
+    [SerializeField, Tooltip("Playing 상태에서만 코인 기반 낙사 리스폰을 허용할지 여부입니다.")]
+    private bool requirePlayingStateForCoinRespawn = true;
+
+    [SerializeField, Tooltip("매치 매니저를 찾지 못했을 때도 코인 기반 리스폰을 허용할지 여부입니다. 테스트 목적 외에는 끄는 것을 권장합니다.")]
+    private bool allowRespawnWhenMatchManagerMissing = false;
+
+    [SerializeField, Tooltip("리스폰 위치 주변에 드랍 코인을 흩뿌릴 반경입니다.")]
+    private float coinDropSpawnRadius = 0.75f;
+
+    [SerializeField, Tooltip("드랍 코인을 리스폰 위치보다 얼마나 위에 생성할지 설정합니다.")]
+    private float coinDropSpawnHeightOffset = 0.25f;
+
+    [SerializeField, Tooltip("드랍 코인을 생성할 때 실패를 대비해 시도할 최대 횟수입니다.")]
+    private int maxCoinDropSpawnAttempts = 16;
+
+    [SerializeField, Tooltip("드랍 코인을 특정 위치 주변이 아니라 CoinSpawnManager의 스폰 영역에 랜덤으로 생성할지 여부입니다.")]
+    private bool preferCoinSpawnManagerRandomDrop = true;
+
+    [SerializeField, Tooltip("코인 기반 낙사 리스폰 처리 로그를 출력할지 여부입니다.")]
+    private bool enableCoinRespawnDebugLogs = false;
+
     [Header("Debug")]
     [Tooltip("디버그 로그 출력 여부입니다.")]
     [SerializeField] private bool enableDebugLogs = false;
@@ -152,6 +180,9 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
     private Transform rootTransform;
     private RigidbodyConstraints cachedConstraints;
     private int backStandUpStateHash;
+    private PlayerHub playerHub;
+    private InGameMatchManager inGameMatchManager;
+    private CoinSpawnManager coinSpawnManager;
     private GameStateManager gameStateManager;
     private float nextGameStateManagerLookupAt;
     private bool hasLoggedMissingGameStateManager;
@@ -255,6 +286,9 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
 
         if (rootNetObj == null)
             rootNetObj = GetComponentInParent<NetworkObject>();
+
+        if (playerHub == null)
+            playerHub = GetComponentInParent<PlayerHub>();
 
         if (gameStateManager == null)
             gameStateManager = FindFirstObjectByType<GameStateManager>();
@@ -368,8 +402,205 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
             if (eliminationCheckY < rootY)
                 Log($"[PlayerStatus] Elimination triggered by ragdoll focus. rootY:{rootY:0.###}, checkY:{eliminationCheckY:0.###}, eliminationY:{eliminationY:0.###}");
 
+            if (TryHandleCoinFallRespawn())
+                return;
+
             HandleElimination();
         }
+    }
+
+    private bool TryHandleCoinFallRespawn()
+    {
+        if (!IsServer) return false;
+        if (!useCoinRespawnOnFall) return false;
+        if (isEliminated) return false;
+
+        if (requirePlayingStateForCoinRespawn && !IsCoinFallRespawnAllowedByGameState())
+            return false;
+
+        PlayerHub ownerHub = ResolvePlayerHub();
+        if (ownerHub == null)
+        {
+            LogCoinFallRespawn("Coin fall respawn skipped. PlayerHub not found.");
+            return false;
+        }
+
+        PlayerCoinWalletModule wallet = ownerHub.CoinWalletModule;
+        if (wallet == null)
+        {
+            LogCoinFallRespawn("Coin fall respawn skipped. Coin wallet not found.");
+            return false;
+        }
+
+        if (wallet.CurrentCoins <= 0)
+        {
+            LogCoinFallRespawn("Coin fall respawn skipped. Player has no coins.");
+            return false;
+        }
+
+        InGameMatchManager matchManager = ResolveInGameMatchManager();
+        if (matchManager == null)
+        {
+            if (allowRespawnWhenMatchManagerMissing)
+                LogCoinFallRespawn("Coin fall respawn skipped. Match manager missing and no safe fallback exists.");
+
+            return false;
+        }
+
+        if (!matchManager.ServerTryResolveGameSpawnPose(ownerHub, out Vector3 respawnPosition, out Quaternion respawnRotation))
+        {
+            LogCoinFallRespawn("Coin fall respawn skipped. Game spawn pose could not be resolved.");
+            return false;
+        }
+
+        int dropAmount = wallet.ServerPreviewFallDropAmount();
+        int removedAmount = dropAmount > 0 ? wallet.ServerRemoveCoins(dropAmount) : 0;
+        if (removedAmount <= 0)
+            LogCoinFallRespawn("Coin fall respawn continuing with no removed coins.");
+
+        ResetStateForCoinFallRespawn();
+
+        if (!matchManager.ServerTryRespawnPlayerToGameSpawn(ownerHub))
+        {
+            if (removedAmount > 0)
+            {
+                wallet.ServerTryAddCoins(removedAmount, out int restoredAmount);
+                LogCoinFallRespawn($"Coin fall respawn failed. Restored coins:{restoredAmount}/{removedAmount}");
+            }
+
+            return false;
+        }
+
+        if (dropCoinsOnFallRespawn && removedAmount > 0)
+            SpawnFallDroppedCoins(removedAmount, respawnPosition, respawnRotation);
+
+        LogCoinFallRespawn($"Coin fall respawn succeeded. removedCoins:{removedAmount}, remainingCoins:{wallet.CurrentCoins}");
+        return true;
+    }
+
+    private bool IsCoinFallRespawnAllowedByGameState()
+    {
+        if (!TryGetGameStateManager(out GameStateManager manager))
+            return false;
+
+        return manager.GetState() == GameStateManager.GameState.Playing;
+    }
+
+    private PlayerHub ResolvePlayerHub()
+    {
+        if (playerHub == null)
+            playerHub = GetComponentInParent<PlayerHub>();
+
+        return playerHub;
+    }
+
+    private InGameMatchManager ResolveInGameMatchManager()
+    {
+        if (inGameMatchManager == null)
+            inGameMatchManager = FindFirstObjectByType<InGameMatchManager>();
+
+        return inGameMatchManager;
+    }
+
+    private CoinSpawnManager ResolveCoinSpawnManager()
+    {
+        if (coinSpawnManager == null)
+            coinSpawnManager = FindFirstObjectByType<CoinSpawnManager>();
+
+        return coinSpawnManager;
+    }
+
+    private void SpawnFallDroppedCoins(int coinCount, Vector3 respawnPosition, Quaternion respawnRotation)
+    {
+        CoinSpawnManager spawnManager = ResolveCoinSpawnManager();
+        if (spawnManager == null)
+        {
+            LogCoinFallRespawn("Coin drop skipped. CoinSpawnManager not found.");
+            return;
+        }
+
+        int spawnedCount = preferCoinSpawnManagerRandomDrop
+            ? SpawnFallDroppedCoinsAtRandomSpawns(spawnManager, coinCount)
+            : SpawnFallDroppedCoinsNearRespawn(spawnManager, coinCount, respawnPosition, respawnRotation);
+
+        if (spawnedCount < coinCount)
+            LogCoinFallRespawn($"Coin drop partially failed. spawned:{spawnedCount}/{coinCount}");
+    }
+
+    private int SpawnFallDroppedCoinsAtRandomSpawns(CoinSpawnManager spawnManager, int coinCount)
+    {
+        int spawnedCount = 0;
+        for (int i = 0; i < coinCount; i++)
+        {
+            if (spawnManager.ServerTrySpawnCoin())
+                spawnedCount++;
+        }
+
+        return spawnedCount;
+    }
+
+    private int SpawnFallDroppedCoinsNearRespawn(CoinSpawnManager spawnManager, int coinCount, Vector3 respawnPosition, Quaternion respawnRotation)
+    {
+        int spawnedCount = 0;
+        int attemptsPerCoin = Mathf.Max(1, maxCoinDropSpawnAttempts);
+        float radius = Mathf.Max(0f, coinDropSpawnRadius);
+        float heightOffset = Mathf.Max(0f, coinDropSpawnHeightOffset);
+
+        for (int i = 0; i < coinCount; i++)
+        {
+            bool spawned = false;
+            for (int attempt = 0; attempt < attemptsPerCoin; attempt++)
+            {
+                Vector2 offset = radius > 0f ? Random.insideUnitCircle * radius : Vector2.zero;
+                if (radius > 0f && offset.sqrMagnitude < 0.01f)
+                    offset = Random.insideUnitCircle.normalized * radius;
+
+                Vector3 position = respawnPosition + new Vector3(offset.x, heightOffset, offset.y);
+                Quaternion rotation = Quaternion.Euler(0f, respawnRotation.eulerAngles.y + Random.Range(0f, 360f), 0f);
+                if (!spawnManager.ServerTrySpawnCoinAtPosition(position, rotation))
+                    continue;
+
+                spawned = true;
+                spawnedCount++;
+                break;
+            }
+
+            if (!spawned)
+                LogCoinFallRespawn($"Coin drop spawn failed. index:{i}");
+        }
+
+        return spawnedCount;
+    }
+
+    private void ResetStateForCoinFallRespawn()
+    {
+        isKnocked = false;
+        isStandingUp = false;
+        knockTimer = 0f;
+        standUpTimer = 0f;
+        _didSyncRootFromRagdollForCurrentKnockback = false;
+        _hasLastRagdollFocusForRootSync = false;
+        hasReachedSafePlayingPosition = false;
+        hasLoggedEliminationGateState = false;
+
+        if (locomotionModule != null)
+            locomotionModule.ResetMotionServer();
+
+        if (rootRigidbody != null)
+        {
+            if (!rootRigidbody.isKinematic)
+            {
+                rootRigidbody.linearVelocity = Vector3.zero;
+                rootRigidbody.angularVelocity = Vector3.zero;
+            }
+
+            rootRigidbody.constraints = cachedConstraints;
+            rootRigidbody.isKinematic = true;
+            rootRigidbody.Sleep();
+        }
+
+        if (charController != null && !charController.enabled)
+            charController.enabled = true;
     }
 
     private float GetEliminationCheckY(float rootY)
@@ -963,6 +1194,14 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
         Debug.Log(message, this);
     }
 
+    private void LogCoinFallRespawn(string message)
+    {
+        if (!enableCoinRespawnDebugLogs)
+            return;
+
+        Debug.Log($"[CoinFallRespawn] {message}", this);
+    }
+
     private void TryTriggerHitReaction()
     {
         if (!triggerHitOnDamage) return;
@@ -978,6 +1217,10 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
 #if UNITY_EDITOR
     private void OnValidate()
     {
+        coinDropSpawnRadius = Mathf.Max(0f, coinDropSpawnRadius);
+        coinDropSpawnHeightOffset = Mathf.Max(0f, coinDropSpawnHeightOffset);
+        maxCoinDropSpawnAttempts = Mathf.Max(1, maxCoinDropSpawnAttempts);
+
         ResolveRefs();
         backStandUpStateHash = Animator.StringToHash("Back Stand Up");
     }

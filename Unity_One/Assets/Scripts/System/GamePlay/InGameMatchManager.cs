@@ -109,6 +109,55 @@ public class InGameMatchManager : NetworkBehaviour
         StartTeleportRoutine(gameSpawnTag, gameSpawnNamePrefix);
     }
 
+    public bool ServerTryRespawnPlayerToGameSpawn(PlayerHub playerHub)
+    {
+        if (!IsServer) return false;
+        if (playerHub == null) return false;
+
+        if (!ServerTryResolveGameSpawnPose(playerHub, out Vector3 position, out Quaternion rotation))
+            return false;
+
+        NetworkObject playerObject = ResolvePlayerNetworkObject(playerHub);
+        if (playerObject == null || !playerObject.IsSpawned)
+            return false;
+
+        StartSinglePlayerTeleportRoutine(playerObject, position, rotation);
+        return true;
+    }
+
+    public bool ServerTryResolveGameSpawnPose(PlayerHub playerHub, out Vector3 position, out Quaternion rotation)
+    {
+        position = Vector3.zero;
+        rotation = Quaternion.identity;
+
+        if (!IsServer) return false;
+        if (playerHub == null) return false;
+        if (!IsGameSpawnRespawnAllowedByState()) return false;
+
+        NetworkObject playerObject = ResolvePlayerNetworkObject(playerHub);
+        if (playerObject == null || !playerObject.IsSpawned)
+            return false;
+
+        List<Transform> spawnPoints = FindSpawnPointsByTag(gameSpawnTag);
+        spawnPoints.Sort((a, b) => string.Compare(a.name, b.name, System.StringComparison.Ordinal));
+
+        if (spawnPoints.Count == 0)
+            return false;
+
+        ulong clientId = playerObject.OwnerClientId;
+        int fallbackIndex = ResolveFallbackSpawnIndexForClient(clientId);
+        Transform targetSpawn = ResolveSpawnPointForClient(spawnPoints, clientId, fallbackIndex, gameSpawnNamePrefix);
+        if (targetSpawn == null)
+            return false;
+
+        CharacterController cc = playerObject.GetComponent<CharacterController>();
+        position = ResolveExactSpawnPosition(targetSpawn.position, cc);
+
+        Vector3 euler = targetSpawn.rotation.eulerAngles;
+        rotation = Quaternion.Euler(0f, euler.y, 0f);
+        return true;
+    }
+
     private void StartTeleportRoutine(string tagName, string namePrefix)
     {
         if (!IsServer) return;
@@ -138,6 +187,25 @@ public class InGameMatchManager : NetworkBehaviour
 
         int requestVersion = _teleportVersion;
         Coroutine routine = StartCoroutine(TeleportSingleClientRoutine(clientId, requestVersion, nextToken));
+        _singleTeleportRoutines[clientId] = routine;
+    }
+
+    private void StartSinglePlayerTeleportRoutine(NetworkObject playerObject, Vector3 position, Quaternion rotation)
+    {
+        if (playerObject == null)
+            return;
+
+        ulong clientId = playerObject.OwnerClientId;
+        StopSingleClientTeleportRoutine(clientId);
+
+        int nextToken = 1;
+        if (_singleTeleportTokens.TryGetValue(clientId, out int prevToken))
+            nextToken = prevToken + 1;
+
+        _singleTeleportTokens[clientId] = nextToken;
+
+        int requestVersion = _teleportVersion;
+        Coroutine routine = StartCoroutine(TeleportSinglePlayerToPoseRoutine(playerObject, position, rotation, requestVersion, nextToken));
         _singleTeleportRoutines[clientId] = routine;
     }
 
@@ -349,6 +417,30 @@ public class InGameMatchManager : NetworkBehaviour
         CompleteSingleClientTeleportRoutine(clientId, requestToken);
     }
 
+    private IEnumerator TeleportSinglePlayerToPoseRoutine(NetworkObject playerObject, Vector3 position, Quaternion rotation, int requestVersion, int requestToken)
+    {
+        if (playerObject == null)
+            yield break;
+
+        ulong clientId = playerObject.OwnerClientId;
+        if (!IsSingleTeleportRequestValid(clientId, requestVersion, requestToken))
+        {
+            CompleteSingleClientTeleportRoutine(clientId, requestToken);
+            yield break;
+        }
+
+        if (!playerObject.IsSpawned)
+        {
+            CompleteSingleClientTeleportRoutine(clientId, requestToken);
+            yield break;
+        }
+
+        yield return TeleportPlayerSafely(playerObject, position, rotation);
+
+        if (IsSingleTeleportRequestValid(clientId, requestVersion, requestToken))
+            CompleteSingleClientTeleportRoutine(clientId, requestToken);
+    }
+
     private void ResolveCurrentSpawnSettings(out string tagName, out string namePrefix)
     {
         var gsm = FindFirstObjectByType<GameStateManager>();
@@ -372,6 +464,37 @@ public class InGameMatchManager : NetworkBehaviour
         }
 
         return true;
+    }
+
+    private bool IsGameSpawnRespawnAllowedByState()
+    {
+        GameStateManager gameStateManager = FindFirstObjectByType<GameStateManager>();
+        return gameStateManager != null && gameStateManager.GetState() == GameStateManager.GameState.Playing;
+    }
+
+    private NetworkObject ResolvePlayerNetworkObject(PlayerHub playerHub)
+    {
+        if (playerHub == null)
+            return null;
+
+        NetworkObject playerObject = playerHub.NetworkObject;
+        if (playerObject != null)
+            return playerObject;
+
+        return playerHub.GetComponentInParent<NetworkObject>();
+    }
+
+    private int ResolveFallbackSpawnIndexForClient(ulong clientId)
+    {
+        NetworkManager nm = NetworkManager.Singleton;
+        if (nm == null)
+            return 0;
+
+        List<ulong> clientIds = new List<ulong>(nm.ConnectedClientsIds);
+        clientIds.Sort();
+
+        int index = clientIds.IndexOf(clientId);
+        return Mathf.Max(0, index);
     }
 
     private Transform ResolveSpawnPointForClient(List<Transform> spawnPoints, ulong clientId, int fallbackIndex, string namePrefix)
