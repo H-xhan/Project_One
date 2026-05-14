@@ -5017,11 +5017,6 @@ Transform:
   m_CorrespondingSourceObject: {fileID: 8848273711885730594, guid: ce2707fd72b872945bda40b424bede0d, type: 3}
   m_PrefabInstance: {fileID: 616448390}
   m_PrefabAsset: {fileID: 0}
---- !u!1 &616448392 stripped
-GameObject:
-  m_CorrespondingSourceObject: {fileID: 5873909757659202783, guid: ce2707fd72b872945bda40b424bede0d, type: 3}
-  m_PrefabInstance: {fileID: 616448390}
-  m_PrefabAsset: {fileID: 0}
 --- !u!1 &640258919
 GameObject:
   m_ObjectHideFlags: 0
@@ -9595,9 +9590,26 @@ MonoBehaviour:
   residueSlipForce: 1.1
   residueTickInterval: 0.25
   residueSlipDirection: {x: 1, y: 0, z: 0}
+  useRandomCircularIcePatches: 1
+  circularIcePatchSpawnAreas:
+  - {fileID: 57654295}
+  - {fileID: 1975267347}
+  circularIcePatchCount: 5
+  circularIcePatchRadiusRange: {x: 0.45, y: 0.9}
+  circularIcePatchHeightOffset: 0.05
+  circularIcePatchDetectionHeight: 0.6
+  circularIcePatchDuration: 15
+  circularIcePatchTickInterval: 0.15
+  circularIcePatchSlipForce: 1
+  circularIcePatchVisualPrefab: {fileID: 2380779606351421330, guid: 46589d2748af98b4292639909802ee4b, type: 3}
+  circularIcePatchVisualYOffset: -0.2
+  circularIcePatchSlipCooldown: 5
+  maxCircularIcePatchSpawnAttempts: 32
+  minimumCircularIcePatchDistance: 1
+  fallbackToFullResidueWhenCircularPatchSetupMissing: 1
   telegraphVisual: {fileID: 0}
   sweepVisual: {fileID: 209508550}
-  residueVisual: {fileID: 616448392}
+  residueVisual: {fileID: 0}
   alignSweepVisualToSweepBox: 1
   autoScaleSweepVisual: 0
   sweepVisualYOffset: 0.06
@@ -9608,7 +9620,7 @@ MonoBehaviour:
   telegraphAudio: {fileID: 0}
   sweepAudio: {fileID: 0}
   residueAudio: {fileID: 0}
-  enableDebugLogs: 0
+  enableDebugLogs: 1
   drawGizmos: 1
 --- !u!114 &1243381398
 MonoBehaviour:

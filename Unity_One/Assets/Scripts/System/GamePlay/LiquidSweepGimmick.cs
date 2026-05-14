@@ -51,6 +51,16 @@ public class LiquidSweepGimmick : MonoBehaviour
         public float weight;
     }
 
+    private struct CircularIcePatchRuntimeData
+    {
+        public Vector3 center;
+        public Vector3 visualPosition;
+        public Quaternion rotation;
+        public float radius;
+        public float detectionHeight;
+        public GameObject visualInstance;
+    }
+
     [Header("Sweep Setup")]
     [SerializeField, Tooltip("스윕 시작 기준 위치입니다. 비어 있으면 이 오브젝트 위치를 사용합니다.")]
     private Transform sweepOrigin;
@@ -118,6 +128,52 @@ public class LiquidSweepGimmick : MonoBehaviour
     [SerializeField, Tooltip("잔여 미끄럼 힘이 적용되는 방향입니다. 비어 있으면 스윕 방향을 사용합니다.")]
     private Vector3 residueSlipDirection = Vector3.zero;
 
+    [Header("Random Circular Ice Patch")]
+    [SerializeField, Tooltip("Residue 단계에서 기존 전체 영역 대신 랜덤 원형 얼음 패치 판정을 사용할지 여부입니다.")]
+    private bool useRandomCircularIcePatches = true;
+
+    [SerializeField, Tooltip("원형 얼음 패치가 생성될 책상 위 영역들입니다. 비워두면 기존 Residue 영역 방식을 사용합니다.")]
+    private BoxCollider[] circularIcePatchSpawnAreas = System.Array.Empty<BoxCollider>();
+
+    [SerializeField, Tooltip("Residue 단계에서 생성할 원형 얼음 패치 개수입니다.")]
+    private int circularIcePatchCount = 5;
+
+    [SerializeField, Tooltip("원형 얼음 패치 반지름의 랜덤 범위입니다.")]
+    private Vector2 circularIcePatchRadiusRange = new Vector2(0.45f, 0.9f);
+
+    [SerializeField, Tooltip("스폰 영역 표면보다 얼음 패치 판정을 얼마나 위에 둘지 설정합니다.")]
+    private float circularIcePatchHeightOffset = 0.05f;
+
+    [SerializeField, Tooltip("원형 얼음 패치가 플레이어를 감지할 세로 판정 높이입니다.")]
+    private float circularIcePatchDetectionHeight = 0.6f;
+
+    [SerializeField, Tooltip("랜덤 원형 얼음 패치가 유지되는 시간입니다.")]
+    private float circularIcePatchDuration = 15f;
+
+    [SerializeField, Tooltip("원형 얼음 패치가 플레이어 미끄럼 판정을 갱신하는 간격입니다.")]
+    private float circularIcePatchTickInterval = 0.15f;
+
+    [SerializeField, Tooltip("원형 얼음 패치에 닿은 플레이어에게 적용할 미끄럼 힘입니다.")]
+    private float circularIcePatchSlipForce = 1.0f;
+
+    [SerializeField, Tooltip("원형 얼음 패치 위치를 표시할 선택적 비주얼 프리팹입니다. 비워두면 판정만 적용합니다.")]
+    private GameObject circularIcePatchVisualPrefab;
+
+    [SerializeField, Tooltip("원형 얼음 패치 비주얼을 책상 표면 기준으로 얼마나 위아래에 배치할지 설정합니다.")]
+    private float circularIcePatchVisualYOffset = 0.01f;
+
+    [SerializeField, Tooltip("같은 플레이어가 원형 얼음 패치 미끄럼 효과를 다시 받기까지의 대기 시간입니다.")]
+    private float circularIcePatchSlipCooldown = 2.5f;
+
+    [SerializeField, Tooltip("원형 얼음 패치 위치를 찾기 위해 시도할 최대 횟수입니다.")]
+    private int maxCircularIcePatchSpawnAttempts = 32;
+
+    [SerializeField, Tooltip("원형 얼음 패치끼리 너무 가까이 생기지 않도록 하는 최소 중심 거리입니다.")]
+    private float minimumCircularIcePatchDistance = 1.0f;
+
+    [SerializeField, Tooltip("원형 얼음 패치 설정이 부족할 때 기존 전체 Residue 방식을 사용할지 여부입니다.")]
+    private bool fallbackToFullResidueWhenCircularPatchSetupMissing = true;
+
     [Header("Visual And Sound")]
     [SerializeField, Tooltip("전조 단계에서 켤 오브젝트입니다.")]
     private GameObject telegraphVisual;
@@ -168,6 +224,8 @@ public class LiquidSweepGimmick : MonoBehaviour
     private readonly HashSet<PlayerStatusModule> _sweepHitPlayers = new HashSet<PlayerStatusModule>();
     private readonly HashSet<PlayerStatusModule> _sweepTickPlayers = new HashSet<PlayerStatusModule>();
     private readonly HashSet<PlayerStatusModule> _residueTickPlayers = new HashSet<PlayerStatusModule>();
+    private readonly List<GameObject> _activeCircularIcePatchVisuals = new List<GameObject>();
+    private readonly Dictionary<PlayerStatusModule, float> _circularIcePatchNextSlipTimes = new Dictionary<PlayerStatusModule, float>();
     private Coroutine _runningRoutine;
     private SweepPhase _phase = SweepPhase.Idle;
     private bool _loggedEmptyPlayerMaskWarning;
@@ -219,8 +277,18 @@ public class LiquidSweepGimmick : MonoBehaviour
         yield return RunSweepRoutine();
 
         SetPhase(SweepPhase.Residue);
-        UpdateResidueVisual();
-        SetPresentationActive(false, false, true);
+        bool shouldUseRandomCircularIcePatches = ShouldUseRandomCircularIcePatches();
+        LogCircularIcePatchResidueEntry(shouldUseRandomCircularIcePatches);
+        if (shouldUseRandomCircularIcePatches)
+        {
+            SetPresentationActive(false, false, false);
+        }
+        else
+        {
+            UpdateResidueVisual();
+            SetPresentationActive(false, false, true);
+        }
+
         PlayAudio(residueAudio);
         yield return RunResidueRoutine();
 
@@ -259,8 +327,21 @@ public class LiquidSweepGimmick : MonoBehaviour
 
     private IEnumerator RunResidueRoutine()
     {
+        if (ShouldUseRandomCircularIcePatches())
+        {
+            yield return RunRandomCircularIcePatchResidueRoutine();
+            yield break;
+        }
+
+        yield return RunFullResidueRoutine();
+    }
+
+    private IEnumerator RunFullResidueRoutine()
+    {
         if (!enableResidueSlip)
         {
+            UpdateResidueVisual();
+            SetPresentationActive(false, false, true);
             yield return WaitForSecondsSafe(residueDuration);
             yield break;
         }
@@ -271,6 +352,7 @@ public class LiquidSweepGimmick : MonoBehaviour
         float nextTickTime = 0f;
         GetResidueBox(out Vector3 center, out Vector3 halfExtents, out Quaternion rotation);
         UpdateResidueVisual(center, halfExtents, rotation);
+        SetPresentationActive(false, false, true);
 
         while (elapsed < duration)
         {
@@ -282,6 +364,56 @@ public class LiquidSweepGimmick : MonoBehaviour
 
             elapsed += Time.deltaTime;
             yield return null;
+        }
+    }
+
+    private IEnumerator RunRandomCircularIcePatchResidueRoutine()
+    {
+        ClearCircularIcePatchSlipCooldowns();
+
+        List<CircularIcePatchRuntimeData> patches = new List<CircularIcePatchRuntimeData>(Mathf.Max(0, circularIcePatchCount));
+        Log($"{LogPrefix} Circular ice patch build requested. targetCount={circularIcePatchCount}, maxAttempts={maxCircularIcePatchSpawnAttempts}, validSpawnAreas={CountValidCircularIcePatchSpawnAreas()}, visualPrefabNull={circularIcePatchVisualPrefab == null}");
+        if (!TryBuildCircularIcePatches(patches))
+        {
+            CleanupCircularIcePatches(patches);
+            Log($"{LogPrefix} Circular ice patch build produced 0 patches. fallbackToFullResidue={fallbackToFullResidueWhenCircularPatchSetupMissing}");
+
+            if (fallbackToFullResidueWhenCircularPatchSetupMissing)
+            {
+                yield return RunFullResidueRoutine();
+                yield break;
+            }
+
+            SetPresentationActive(false, false, false);
+            yield return WaitForSecondsSafe(Mathf.Max(0f, GetFiniteFloatOrZero(circularIcePatchDuration)));
+            yield break;
+        }
+
+        SetPresentationActive(false, false, false);
+
+        float duration = Mathf.Max(0f, GetFiniteFloatOrZero(circularIcePatchDuration));
+        float tickInterval = Mathf.Max(0.02f, GetFiniteFloatOrZero(circularIcePatchTickInterval));
+        float elapsed = 0f;
+        float nextTickTime = 0f;
+
+        try
+        {
+            while (elapsed < duration)
+            {
+                if (elapsed >= nextTickTime)
+                {
+                    TickCircularIcePatches(patches);
+                    nextTickTime += tickInterval;
+                }
+
+                elapsed += Time.deltaTime;
+                yield return null;
+            }
+        }
+        finally
+        {
+            CleanupCircularIcePatches(patches);
+            ClearCircularIcePatchSlipCooldowns();
         }
     }
 
@@ -369,6 +501,433 @@ public class LiquidSweepGimmick : MonoBehaviour
             LogSourceDebug(SourceResidue, $"Applied knockback to {status.name}");
             _residueTickPlayers.Add(status);
         }
+    }
+
+    private bool ShouldUseRandomCircularIcePatches()
+    {
+        if (!enableResidueSlip)
+            return false;
+
+        if (!useRandomCircularIcePatches)
+            return false;
+
+        if (circularIcePatchCount <= 0)
+            return false;
+
+        if (!IsFiniteFloat(circularIcePatchRadiusRange.y) || circularIcePatchRadiusRange.y <= 0f)
+            return false;
+
+        return HasValidCircularIcePatchSpawnArea();
+    }
+
+    private void LogCircularIcePatchResidueEntry(bool shouldUseRandomCircularIcePatches)
+    {
+        Log($"{LogPrefix} Circular ice patch residue entry. useRandomCircularIcePatches={useRandomCircularIcePatches}, enableResidueSlip={enableResidueSlip}, circularIcePatchCount={circularIcePatchCount}, validSpawnAreas={CountValidCircularIcePatchSpawnAreas()}, shouldUseRandomCircularIcePatches={shouldUseRandomCircularIcePatches}, visualPrefabNull={circularIcePatchVisualPrefab == null}");
+    }
+
+    private bool TryBuildCircularIcePatches(List<CircularIcePatchRuntimeData> patches)
+    {
+        if (patches == null)
+            return false;
+
+        patches.Clear();
+
+        if (!ShouldUseRandomCircularIcePatches())
+            return false;
+
+        int targetCount = Mathf.Max(0, circularIcePatchCount);
+        int attemptCount = Mathf.Max(1, maxCircularIcePatchSpawnAttempts);
+        for (int i = 0; i < attemptCount && patches.Count < targetCount; i++)
+        {
+            if (!TryGetRandomCircularIcePatchPose(out Vector3 center, out Quaternion rotation, out float radius))
+                continue;
+
+            if (!IsFarEnoughFromCircularIcePatches(patches, center))
+                continue;
+
+            Vector3 visualPosition = GetCircularIcePatchVisualPosition(center);
+            GameObject visualInstance = CreateCircularIcePatchVisual(center, visualPosition, rotation, radius);
+            patches.Add(new CircularIcePatchRuntimeData
+            {
+                center = center,
+                visualPosition = visualPosition,
+                rotation = rotation,
+                radius = radius,
+                detectionHeight = Mathf.Max(0.05f, GetFiniteFloatOrZero(circularIcePatchDetectionHeight)),
+                visualInstance = visualInstance
+            });
+            Log($"{LogPrefix} Circular ice patch created. index={patches.Count - 1}, center={center}, visualPosition={visualPosition}, radius={radius:0.###}, visualCreated={visualInstance != null}");
+        }
+
+        Log($"{LogPrefix} Circular ice patch build finished. created={patches.Count}, target={targetCount}, attempts={attemptCount}");
+        return patches.Count > 0;
+    }
+
+    private bool TryGetRandomCircularIcePatchPose(out Vector3 center, out Quaternion rotation, out float radius)
+    {
+        center = Vector3.zero;
+        rotation = Quaternion.identity;
+        radius = 0f;
+
+        if (!TryGetRandomCircularIcePatchSpawnArea(out BoxCollider spawnArea))
+            return false;
+
+        float minRadius = Mathf.Max(0f, GetFiniteFloatOrZero(circularIcePatchRadiusRange.x));
+        float maxRadius = Mathf.Max(minRadius, GetFiniteFloatOrZero(circularIcePatchRadiusRange.y));
+        if (!IsFiniteFloat(maxRadius) || maxRadius <= 0f)
+            return false;
+
+        radius = Random.Range(minRadius, maxRadius);
+        if (!IsFiniteFloat(radius) || radius <= 0f)
+            radius = maxRadius;
+
+        Vector3 areaCenter = spawnArea.center;
+        Vector3 areaSize = spawnArea.size;
+        float halfWidth = Mathf.Abs(areaSize.x) * 0.5f;
+        float halfDepth = Mathf.Abs(areaSize.z) * 0.5f;
+        Vector3 localPosition = new Vector3(
+            Random.Range(areaCenter.x - halfWidth, areaCenter.x + halfWidth),
+            areaCenter.y + areaSize.y * 0.5f + GetFiniteFloatOrZero(circularIcePatchHeightOffset),
+            Random.Range(areaCenter.z - halfDepth, areaCenter.z + halfDepth));
+
+        center = spawnArea.transform.TransformPoint(localPosition);
+        rotation = spawnArea.transform.rotation;
+        return IsFiniteVector(center) && IsFiniteQuaternion(rotation);
+    }
+
+    private bool TryGetRandomCircularIcePatchSpawnArea(out BoxCollider spawnArea)
+    {
+        spawnArea = null;
+
+        if (circularIcePatchSpawnAreas == null || circularIcePatchSpawnAreas.Length == 0)
+            return false;
+
+        int validCount = 0;
+        for (int i = 0; i < circularIcePatchSpawnAreas.Length; i++)
+        {
+            if (IsValidCircularIcePatchSpawnArea(circularIcePatchSpawnAreas[i]))
+                validCount++;
+        }
+
+        if (validCount <= 0)
+            return false;
+
+        int selectedIndex = Random.Range(0, validCount);
+        for (int i = 0; i < circularIcePatchSpawnAreas.Length; i++)
+        {
+            BoxCollider candidate = circularIcePatchSpawnAreas[i];
+            if (!IsValidCircularIcePatchSpawnArea(candidate))
+                continue;
+
+            if (selectedIndex == 0)
+            {
+                spawnArea = candidate;
+                return true;
+            }
+
+            selectedIndex--;
+        }
+
+        return false;
+    }
+
+    private bool HasValidCircularIcePatchSpawnArea()
+    {
+        return CountValidCircularIcePatchSpawnAreas() > 0;
+    }
+
+    private int CountValidCircularIcePatchSpawnAreas()
+    {
+        if (circularIcePatchSpawnAreas == null || circularIcePatchSpawnAreas.Length == 0)
+            return 0;
+
+        int validCount = 0;
+        for (int i = 0; i < circularIcePatchSpawnAreas.Length; i++)
+        {
+            if (IsValidCircularIcePatchSpawnArea(circularIcePatchSpawnAreas[i]))
+                validCount++;
+        }
+
+        return validCount;
+    }
+
+    private static bool IsValidCircularIcePatchSpawnArea(BoxCollider spawnArea)
+    {
+        if (spawnArea == null || !spawnArea.enabled || !spawnArea.gameObject.activeInHierarchy)
+            return false;
+
+        if (!IsFiniteVector(spawnArea.center) || !IsFiniteVector(spawnArea.size))
+            return false;
+
+        return Mathf.Abs(spawnArea.size.x) > 0.0001f && Mathf.Abs(spawnArea.size.z) > 0.0001f;
+    }
+
+    private bool IsFarEnoughFromCircularIcePatches(List<CircularIcePatchRuntimeData> patches, Vector3 center)
+    {
+        float minimumDistance = Mathf.Max(0f, GetFiniteFloatOrZero(minimumCircularIcePatchDistance));
+        if (minimumDistance <= 0f || patches == null)
+            return true;
+
+        float minimumSqrDistance = minimumDistance * minimumDistance;
+        for (int i = 0; i < patches.Count; i++)
+        {
+            Vector3 delta = patches[i].center - center;
+            delta.y = 0f;
+            if (delta.sqrMagnitude < minimumSqrDistance)
+                return false;
+        }
+
+        return true;
+    }
+
+    private GameObject CreateCircularIcePatchVisual(Vector3 center, Vector3 visualPosition, Quaternion rotation, float radius)
+    {
+        if (circularIcePatchVisualPrefab == null)
+        {
+            Log($"{LogPrefix} Circular ice patch visual skipped. prefabNull=True, center={center}, visualPosition={visualPosition}, radius={radius:0.###}");
+            return null;
+        }
+
+        GameObject visualInstance = Instantiate(circularIcePatchVisualPrefab, visualPosition, rotation);
+        ApplyCircularIcePatchVisualTransform(visualInstance, visualPosition, rotation, radius);
+
+        _activeCircularIcePatchVisuals.Add(visualInstance);
+        float diameter = Mathf.Max(0f, radius) * 2f;
+        Log($"{LogPrefix} Circular ice patch visual instantiated. success={visualInstance != null}, prefabNull=False, center={center}, visualPosition={visualPosition}, patchCenterY={center.y:0.###}, circularIcePatchHeightOffset={GetFiniteFloatOrZero(circularIcePatchHeightOffset):0.###}, circularIcePatchVisualYOffset={GetFiniteFloatOrZero(circularIcePatchVisualYOffset):0.###}, finalVisualY={visualInstance.transform.position.y:0.###}, radius={radius:0.###}, diameter={diameter:0.###}");
+        StartCoroutine(ReapplyCircularIcePatchVisualPositionNextFrame(visualInstance, visualPosition, rotation));
+        return visualInstance;
+    }
+
+    private void ApplyCircularIcePatchVisualTransform(GameObject visualInstance, Vector3 visualPosition, Quaternion rotation, float radius)
+    {
+        if (visualInstance == null)
+            return;
+
+        Transform visualTransform = visualInstance.transform;
+        visualTransform.SetPositionAndRotation(visualPosition, rotation);
+
+        Vector3 scale = visualTransform.localScale;
+        float diameter = Mathf.Max(0f, radius) * 2f;
+        scale.x = diameter;
+        scale.z = diameter;
+
+        if (IsFiniteVector(scale))
+            visualTransform.localScale = scale;
+
+        visualTransform.SetPositionAndRotation(visualPosition, rotation);
+    }
+
+    private IEnumerator ReapplyCircularIcePatchVisualPositionNextFrame(GameObject visualInstance, Vector3 visualPosition, Quaternion rotation)
+    {
+        yield return null;
+
+        if (visualInstance == null)
+            yield break;
+
+        visualInstance.transform.SetPositionAndRotation(visualPosition, rotation);
+    }
+
+    private Vector3 GetCircularIcePatchVisualPosition(Vector3 patchCenter)
+    {
+        Vector3 visualPosition = patchCenter;
+        visualPosition.y = patchCenter.y - GetFiniteFloatOrZero(circularIcePatchHeightOffset) + GetFiniteFloatOrZero(circularIcePatchVisualYOffset);
+
+        return IsFiniteVector(visualPosition) ? visualPosition : patchCenter;
+    }
+
+    private void TickCircularIcePatches(List<CircularIcePatchRuntimeData> patches)
+    {
+        _residueTickPlayers.Clear();
+
+        if (patches == null || patches.Count == 0)
+            return;
+
+        for (int i = 0; i < patches.Count; i++)
+        {
+            ApplyCircularIcePatchSlip(patches[i], _residueTickPlayers);
+        }
+    }
+
+    private void ApplyCircularIcePatchSlip(CircularIcePatchRuntimeData patch, HashSet<PlayerStatusModule> affectedPlayersThisTick)
+    {
+        if (affectedPlayersThisTick == null)
+            return;
+
+        float radius = Mathf.Max(0f, patch.radius);
+        if (radius <= 0f)
+            return;
+
+        float halfHeight = Mathf.Max(0.05f, patch.detectionHeight) * 0.5f;
+        Vector3 halfExtents = new Vector3(radius, halfHeight, radius);
+        int mask = GetPlayerMask();
+        Collider[] colliders = Physics.OverlapBox(
+            patch.center,
+            halfExtents,
+            patch.rotation,
+            mask,
+            QueryTriggerInteraction.Ignore);
+
+        Vector3 slipDirection = GetResidueSlipDirection();
+        Vector3 slipImpulse = slipDirection * Mathf.Max(0f, GetFiniteFloatOrZero(circularIcePatchSlipForce));
+        int appliedCount = 0;
+
+        for (int i = 0; i < colliders.Length; i++)
+        {
+            Collider candidate = colliders[i];
+            Vector3 testPoint = GetCircularIcePatchTestPoint(candidate, patch.center);
+            float xzDistance = GetHorizontalDistance(testPoint, patch.center);
+            bool isInsideCircle = IsInsideCircularIcePatch(testPoint, patch.center, radius);
+            PlayerStatusModule status = FindPlayerStatusFromCollider(candidate, SourceResidue);
+            if (!IsValidTarget(status))
+            {
+                LogCircularIcePatchCandidate(candidate, status, testPoint, xzDistance, radius, isInsideCircle, false, "invalid target");
+                continue;
+            }
+
+            if (affectedPlayersThisTick.Contains(status))
+            {
+                LogCircularIcePatchCandidate(candidate, status, testPoint, xzDistance, radius, isInsideCircle, false, "already affected this tick");
+                continue;
+            }
+
+            if (!isInsideCircle)
+            {
+                LogCircularIcePatchCandidate(candidate, status, testPoint, xzDistance, radius, false, false, "outside circle");
+                continue;
+            }
+
+            if (IsCircularIcePatchSlipOnCooldown(status, out float cooldownRemaining))
+            {
+                LogCircularIcePatchCandidate(candidate, status, testPoint, xzDistance, radius, true, false, $"slip cooldown {cooldownRemaining:0.##}s");
+                continue;
+            }
+
+            status.ApplyKnockbackServer(slipImpulse);
+            affectedPlayersThisTick.Add(status);
+            SetCircularIcePatchSlipCooldown(status);
+            appliedCount++;
+            LogCircularIcePatchCandidate(candidate, status, testPoint, xzDistance, radius, true, true, "applied");
+        }
+
+        Log($"{LogPrefix} Circular ice patch tick. center={patch.center}, radius={radius:0.###}, candidateCount={colliders.Length}, appliedInCircleCount={appliedCount}");
+    }
+
+    private void LogCircularIcePatchCandidate(Collider candidate, PlayerStatusModule status, Vector3 testPoint, float xzDistance, float radius, bool insideCircle, bool applied, string reason)
+    {
+        Log($"{LogPrefix} Circular ice patch candidate. collider={(candidate != null ? candidate.name : "null")}, status={(status != null ? status.name : "null")}, testPoint={testPoint}, xzDistance={xzDistance:0.###}, radius={radius:0.###}, inside={insideCircle}, applied={applied}, reason={reason}");
+    }
+
+    private bool IsCircularIcePatchSlipOnCooldown(PlayerStatusModule status, out float remainingTime)
+    {
+        remainingTime = 0f;
+        if (status == null)
+            return false;
+
+        if (!_circularIcePatchNextSlipTimes.TryGetValue(status, out float nextAllowedTime))
+            return false;
+
+        float now = Time.time;
+        if (now >= nextAllowedTime)
+        {
+            _circularIcePatchNextSlipTimes.Remove(status);
+            return false;
+        }
+
+        remainingTime = nextAllowedTime - now;
+        return true;
+    }
+
+    private void SetCircularIcePatchSlipCooldown(PlayerStatusModule status)
+    {
+        if (status == null)
+            return;
+
+        float cooldown = Mathf.Max(0f, GetFiniteFloatOrZero(circularIcePatchSlipCooldown));
+        if (cooldown <= 0f)
+        {
+            _circularIcePatchNextSlipTimes.Remove(status);
+            return;
+        }
+
+        _circularIcePatchNextSlipTimes[status] = Time.time + cooldown;
+    }
+
+    private void ClearCircularIcePatchSlipCooldowns()
+    {
+        _circularIcePatchNextSlipTimes.Clear();
+    }
+
+    private static Vector3 GetCircularIcePatchTestPoint(Collider candidate, Vector3 patchCenter)
+    {
+        if (candidate == null)
+            return patchCenter;
+
+        Vector3 closestPoint = candidate.ClosestPoint(patchCenter);
+        if (IsUsableCircularIcePatchTestPoint(closestPoint, patchCenter))
+            return closestPoint;
+
+        return candidate.bounds.center;
+    }
+
+    private static bool IsUsableCircularIcePatchTestPoint(Vector3 point, Vector3 patchCenter)
+    {
+        if (!IsFiniteVector(point))
+            return false;
+
+        float deltaX = point.x - patchCenter.x;
+        float deltaY = point.y - patchCenter.y;
+        float deltaZ = point.z - patchCenter.z;
+        return deltaX * deltaX + deltaY * deltaY + deltaZ * deltaZ > 0.000001f;
+    }
+
+    private static bool IsInsideCircularIcePatch(Vector3 testPoint, Vector3 patchCenter, float radius)
+    {
+        if (!IsFiniteVector(testPoint) || !IsFiniteVector(patchCenter) || !IsFiniteFloat(radius) || radius <= 0f)
+            return false;
+
+        float deltaX = testPoint.x - patchCenter.x;
+        float deltaZ = testPoint.z - patchCenter.z;
+        return deltaX * deltaX + deltaZ * deltaZ <= radius * radius;
+    }
+
+    private static float GetHorizontalDistance(Vector3 a, Vector3 b)
+    {
+        if (!IsFiniteVector(a) || !IsFiniteVector(b))
+            return float.PositiveInfinity;
+
+        float deltaX = a.x - b.x;
+        float deltaZ = a.z - b.z;
+        return Mathf.Sqrt(deltaX * deltaX + deltaZ * deltaZ);
+    }
+
+    private void CleanupCircularIcePatches(List<CircularIcePatchRuntimeData> patches)
+    {
+        if (patches == null)
+            return;
+
+        for (int i = 0; i < patches.Count; i++)
+        {
+            GameObject visualInstance = patches[i].visualInstance;
+            if (visualInstance == null)
+                continue;
+
+            _activeCircularIcePatchVisuals.Remove(visualInstance);
+            Destroy(visualInstance);
+        }
+
+        patches.Clear();
+    }
+
+    private void CleanupActiveCircularIcePatchVisuals()
+    {
+        for (int i = _activeCircularIcePatchVisuals.Count - 1; i >= 0; i--)
+        {
+            GameObject visualInstance = _activeCircularIcePatchVisuals[i];
+            if (visualInstance != null)
+                Destroy(visualInstance);
+        }
+
+        _activeCircularIcePatchVisuals.Clear();
     }
 
     private PlayerStatusModule FindPlayerStatusFromCollider(Collider hit, string source)
@@ -813,8 +1372,35 @@ public class LiquidSweepGimmick : MonoBehaviour
         _sweepHitPlayers.Clear();
         _sweepTickPlayers.Clear();
         _residueTickPlayers.Clear();
+        CleanupActiveCircularIcePatchVisuals();
+        ClearCircularIcePatchSlipCooldowns();
         ClearActiveSweepLane();
         _phase = SweepPhase.Idle;
+    }
+
+    private void OnValidate()
+    {
+        circularIcePatchCount = Mathf.Max(0, circularIcePatchCount);
+
+        float minRadius = Mathf.Max(0f, GetFiniteFloatOrZero(circularIcePatchRadiusRange.x));
+        float maxRadius = Mathf.Max(0f, GetFiniteFloatOrZero(circularIcePatchRadiusRange.y));
+        if (maxRadius < minRadius)
+            maxRadius = minRadius;
+
+        circularIcePatchRadiusRange = new Vector2(minRadius, maxRadius);
+        if (!IsFiniteFloat(circularIcePatchHeightOffset))
+            circularIcePatchHeightOffset = 0f;
+
+        circularIcePatchDetectionHeight = Mathf.Max(0.05f, GetFiniteFloatOrZero(circularIcePatchDetectionHeight));
+        circularIcePatchDuration = Mathf.Max(0f, GetFiniteFloatOrZero(circularIcePatchDuration));
+        circularIcePatchTickInterval = Mathf.Max(0.02f, GetFiniteFloatOrZero(circularIcePatchTickInterval));
+        circularIcePatchSlipForce = Mathf.Max(0f, GetFiniteFloatOrZero(circularIcePatchSlipForce));
+        if (!IsFiniteFloat(circularIcePatchVisualYOffset))
+            circularIcePatchVisualYOffset = 0f;
+
+        circularIcePatchSlipCooldown = Mathf.Max(0f, GetFiniteFloatOrZero(circularIcePatchSlipCooldown));
+        maxCircularIcePatchSpawnAttempts = Mathf.Max(1, maxCircularIcePatchSpawnAttempts);
+        minimumCircularIcePatchDistance = Mathf.Max(0f, GetFiniteFloatOrZero(minimumCircularIcePatchDistance));
     }
 
     private void OnDrawGizmosSelected()
