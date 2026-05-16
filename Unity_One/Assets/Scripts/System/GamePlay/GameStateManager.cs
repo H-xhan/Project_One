@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using Unity.Netcode;
 using UnityEngine;
 
@@ -38,6 +39,19 @@ public class GameStateManager : NetworkBehaviour
     [SerializeField, Tooltip("Playing 진입 시 플레이어를 게임 존으로 보낼지 여부")]
     private bool teleportPlayersOnEnterPlaying = true;
 
+    [Header("라운드 결과")]
+    [SerializeField, Tooltip("Playing 상태에서 마지막 생존자 승리 판정을 사용할지 여부입니다.")]
+    private bool enableLastSurvivorWinCheck = true;
+
+    [SerializeField, Tooltip("생존자 수를 다시 확인하는 간격입니다.")]
+    private float survivorCheckInterval = 0.25f;
+
+    [SerializeField, Tooltip("마지막 생존자 승리 판정을 적용하기 위한 최소 라운드 참가자 수입니다.")]
+    private int minimumParticipantsForLastSurvivorWin = 2;
+
+    [SerializeField, Tooltip("승자가 없을 때 사용할 winner client id 값입니다.")]
+    private ulong invalidWinnerClientId = ulong.MaxValue;
+
     [Header("Debug")]
     [SerializeField, Tooltip("디버그 로그 출력 여부입니다.")]
     private bool enableDebugLogs = false;
@@ -48,9 +62,47 @@ public class GameStateManager : NetworkBehaviour
     [Tooltip("현재 게임 상태의 남은 시간을 네트워크로 동기화하는 값입니다.")]
     public NetworkVariable<float> StateTimer = new NetworkVariable<float>(0f);
 
+    [Tooltip("라운드 승자 client id를 네트워크로 동기화하는 값입니다.")]
+    public NetworkVariable<ulong> WinnerClientIdValue =
+        new NetworkVariable<ulong>(
+            ulong.MaxValue,
+            NetworkVariableReadPermission.Everyone,
+            NetworkVariableWritePermission.Server
+        );
+
+    [Tooltip("현재 라운드에 승자가 있는지 네트워크로 동기화하는 값입니다.")]
+    public NetworkVariable<bool> RoundHasWinnerValue =
+        new NetworkVariable<bool>(
+            false,
+            NetworkVariableReadPermission.Everyone,
+            NetworkVariableWritePermission.Server
+        );
+
+    [Tooltip("현재 라운드가 무승부인지 네트워크로 동기화하는 값입니다.")]
+    public NetworkVariable<bool> RoundIsDrawValue =
+        new NetworkVariable<bool>(
+            false,
+            NetworkVariableReadPermission.Everyone,
+            NetworkVariableWritePermission.Server
+        );
+
+    private readonly List<ulong> _roundParticipantClientIds = new List<ulong>();
+    private float _nextSurvivorCheckTime;
+    private bool _roundResultResolved;
+
+    public bool HasRoundWinner => RoundHasWinnerValue.Value;
+    public bool IsRoundDraw => RoundIsDrawValue.Value;
+    public ulong WinnerClientId => WinnerClientIdValue.Value;
+
     public GameState GetState()
     {
         return (GameState)StateValue.Value;
+    }
+
+    public bool TryGetWinnerClientId(out ulong winnerClientId)
+    {
+        winnerClientId = WinnerClientIdValue.Value;
+        return RoundHasWinnerValue.Value && winnerClientId != invalidWinnerClientId;
     }
 
     public override void OnNetworkSpawn()
@@ -92,6 +144,13 @@ public class GameStateManager : NetworkBehaviour
             return;
         }
 
+        if (state == GameState.Playing)
+        {
+            TickRoundEndCheckServer();
+            if (GetState() != GameState.Playing)
+                return;
+        }
+
         float timer = StateTimer.Value;
         if (timer > 0f)
         {
@@ -109,7 +168,7 @@ public class GameStateManager : NetworkBehaviour
         }
         else if (state == GameState.Playing)
         {
-            EnterResults();
+            EnterResultsWithCurrentSurvivorEvaluationServer();
         }
         else if (state == GameState.Results && autoReturnToLobby)
         {
@@ -121,6 +180,8 @@ public class GameStateManager : NetworkBehaviour
     {
         StateValue.Value = (int)GameState.Lobby;
         StateTimer.Value = 0f;
+        ResetRoundResultServer();
+        _roundParticipantClientIds.Clear();
 
         if (readySystem != null)
             readySystem.ResetAllReadyServer();
@@ -143,8 +204,12 @@ public class GameStateManager : NetworkBehaviour
 
     private void EnterPlaying()
     {
+        ResetRoundResultServer();
+        CaptureRoundParticipantsServer();
+
         StateValue.Value = (int)GameState.Playing;
         StateTimer.Value = playSeconds;
+        _nextSurvivorCheckTime = Time.unscaledTime + Mathf.Max(0f, survivorCheckInterval);
 
         if (teleportPlayersOnEnterPlaying && inGameMatchManager != null && inGameMatchManager.IsSpawned)
         {
@@ -160,6 +225,156 @@ public class GameStateManager : NetworkBehaviour
         StateTimer.Value = resultsSeconds;
 
         Log("[GameStateManager] EnterResults");
+    }
+
+    private void CaptureRoundParticipantsServer()
+    {
+        _roundParticipantClientIds.Clear();
+
+        if (!IsServer) return;
+
+        NetworkManager networkManager = NetworkManager.Singleton;
+        if (networkManager == null) return;
+
+        List<ulong> clientIds = new List<ulong>(networkManager.ConnectedClientsIds);
+        clientIds.Sort();
+
+        for (int i = 0; i < clientIds.Count; i++)
+        {
+            ulong clientId = clientIds[i];
+            if (!networkManager.ConnectedClients.TryGetValue(clientId, out var client) || client == null)
+                continue;
+
+            NetworkObject playerObject = client.PlayerObject;
+            if (playerObject == null || !playerObject.IsSpawned)
+                continue;
+
+            _roundParticipantClientIds.Add(clientId);
+        }
+    }
+
+    private void ResetRoundResultServer()
+    {
+        if (!IsServer) return;
+
+        WinnerClientIdValue.Value = invalidWinnerClientId;
+        RoundHasWinnerValue.Value = false;
+        RoundIsDrawValue.Value = false;
+        _roundResultResolved = false;
+        _nextSurvivorCheckTime = 0f;
+    }
+
+    private void TickRoundEndCheckServer()
+    {
+        if (!CanUseLastSurvivorWinCheck())
+            return;
+
+        float now = Time.unscaledTime;
+        if (now < _nextSurvivorCheckTime)
+            return;
+
+        _nextSurvivorCheckTime = now + Mathf.Max(0f, survivorCheckInterval);
+
+        int aliveCount = CountAliveParticipantsServer(out ulong lastAliveClientId);
+        if (aliveCount == 1)
+        {
+            ResolveRoundWinnerServer(lastAliveClientId);
+        }
+        else if (aliveCount == 0)
+        {
+            ResolveRoundDrawServer();
+        }
+    }
+
+    private bool TryGetPlayerStatusForClient(ulong clientId, out PlayerStatusModule status)
+    {
+        status = null;
+
+        NetworkManager networkManager = NetworkManager.Singleton;
+        if (networkManager == null)
+            return false;
+
+        if (!networkManager.ConnectedClients.TryGetValue(clientId, out var client) || client == null)
+            return false;
+
+        NetworkObject playerObject = client.PlayerObject;
+        if (playerObject == null || !playerObject.IsSpawned)
+            return false;
+
+        status = playerObject.GetComponentInChildren<PlayerStatusModule>(true);
+        return status != null && status.IsSpawned;
+    }
+
+    private int CountAliveParticipantsServer(out ulong lastAliveClientId)
+    {
+        lastAliveClientId = invalidWinnerClientId;
+        int aliveCount = 0;
+
+        for (int i = 0; i < _roundParticipantClientIds.Count; i++)
+        {
+            ulong clientId = _roundParticipantClientIds[i];
+            if (!TryGetPlayerStatusForClient(clientId, out PlayerStatusModule status))
+                continue;
+
+            if (status.IsEliminated)
+                continue;
+
+            aliveCount++;
+            lastAliveClientId = clientId;
+        }
+
+        return aliveCount;
+    }
+
+    private void ResolveRoundWinnerServer(ulong winnerClientId)
+    {
+        if (!IsServer) return;
+        if (_roundResultResolved) return;
+
+        WinnerClientIdValue.Value = winnerClientId;
+        RoundHasWinnerValue.Value = true;
+        RoundIsDrawValue.Value = false;
+        _roundResultResolved = true;
+
+        EnterResults();
+    }
+
+    private void ResolveRoundDrawServer()
+    {
+        if (!IsServer) return;
+        if (_roundResultResolved) return;
+
+        WinnerClientIdValue.Value = invalidWinnerClientId;
+        RoundHasWinnerValue.Value = false;
+        RoundIsDrawValue.Value = true;
+        _roundResultResolved = true;
+
+        EnterResults();
+    }
+
+    private void EnterResultsWithCurrentSurvivorEvaluationServer()
+    {
+        if (!IsServer) return;
+        if (_roundResultResolved) return;
+
+        int aliveCount = CountAliveParticipantsServer(out ulong lastAliveClientId);
+        if (aliveCount == 1)
+        {
+            ResolveRoundWinnerServer(lastAliveClientId);
+            return;
+        }
+
+        ResolveRoundDrawServer();
+    }
+
+    private bool CanUseLastSurvivorWinCheck()
+    {
+        if (!IsServer) return false;
+        if (!enableLastSurvivorWinCheck) return false;
+        if (_roundResultResolved) return false;
+        if (GetState() != GameState.Playing) return false;
+
+        return _roundParticipantClientIds.Count >= Mathf.Max(1, minimumParticipantsForLastSurvivorWin);
     }
 
     private void Log(string message)
