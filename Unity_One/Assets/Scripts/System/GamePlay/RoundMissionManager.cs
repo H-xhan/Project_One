@@ -185,19 +185,23 @@ public class RoundMissionManager : NetworkBehaviour
     private readonly Dictionary<ulong, MissionAssignment> _assignmentsByClientId = new Dictionary<ulong, MissionAssignment>();
     private readonly Dictionary<ulong, MissionResult> _resultsByClientId = new Dictionary<ulong, MissionResult>();
     private readonly List<MissionResult> _resultsSnapshot = new List<MissionResult>();
+    private readonly List<MissionResult> _localResultsSnapshot = new List<MissionResult>();
     private readonly Dictionary<ulong, int> _fallContributionCounts = new Dictionary<ulong, int>();
     private readonly HashSet<ulong> _submittedGuessClientIds = new HashSet<ulong>();
 
     private bool _isMissionRoundActive;
     private bool _hasEvaluatedResults;
     private bool _hasLocalMissionAssignment;
+    private bool _hasLocalResultsSnapshot;
     private MissionAssignment _localMissionAssignment;
 
     public bool IsMissionRoundActive => _isMissionRoundActive;
     public bool HasEvaluatedResults => _hasEvaluatedResults;
     public bool HasLocalMissionAssignment => _hasLocalMissionAssignment;
+    public bool HasLocalResultsSnapshot => _hasLocalResultsSnapshot;
 
     public event Action<MissionAssignment> LocalMissionAssignmentChanged;
+    public event Action LocalMissionResultsChanged;
 
     private void Awake()
     {
@@ -251,12 +255,14 @@ public class RoundMissionManager : NetworkBehaviour
         _assignmentsByClientId.Clear();
         _resultsByClientId.Clear();
         _resultsSnapshot.Clear();
+        ClearLocalMissionResultsCache();
         _fallContributionCounts.Clear();
         _submittedGuessClientIds.Clear();
         _isMissionRoundActive = false;
         _hasEvaluatedResults = false;
 
         SendClearLocalMissionAssignmentsServer();
+        SendClearLocalMissionResultsServer();
     }
 
     public bool ServerEvaluateMissionsAndApplyRewards()
@@ -277,6 +283,7 @@ public class RoundMissionManager : NetworkBehaviour
 
         _hasEvaluatedResults = true;
         _isMissionRoundActive = false;
+        SendMissionResultsToClientsServer();
         return true;
     }
 
@@ -342,6 +349,11 @@ public class RoundMissionManager : NetworkBehaviour
         LocalMissionAssignmentChanged?.Invoke(_localMissionAssignment);
     }
 
+    public void RequestLocalMissionResultsRefresh()
+    {
+        LocalMissionResultsChanged?.Invoke();
+    }
+
     public bool TryGetResult(ulong clientId, out MissionResult result)
     {
         return _resultsByClientId.TryGetValue(clientId, out result);
@@ -349,6 +361,12 @@ public class RoundMissionManager : NetworkBehaviour
 
     public IReadOnlyList<MissionResult> GetResultsSnapshot()
     {
+        if (IsServer)
+            return _resultsSnapshot;
+
+        if (_hasLocalResultsSnapshot)
+            return _localResultsSnapshot;
+
         return _resultsSnapshot;
     }
 
@@ -445,6 +463,39 @@ public class RoundMissionManager : NetworkBehaviour
         SendClearLocalMissionAssignmentsClientRpc();
     }
 
+    private void SendMissionResultsToClientsServer()
+    {
+        if (!IsServer || !IsSpawned)
+            return;
+
+        ClearMissionResultsClientRpc();
+
+        for (int i = 0; i < _resultsSnapshot.Count; i++)
+        {
+            MissionResult result = _resultsSnapshot[i];
+            ReceiveMissionResultClientRpc(
+                result.clientId,
+                (int)result.family,
+                result.missionId ?? string.Empty,
+                GetMissionResultDisplayName(result),
+                (int)result.resultState,
+                result.succeeded,
+                result.rewardCoins,
+                result.finalCoins,
+                result.reason ?? string.Empty);
+        }
+
+        CompleteMissionResultsClientRpc();
+    }
+
+    private void SendClearLocalMissionResultsServer()
+    {
+        if (!IsServer || !IsSpawned)
+            return;
+
+        ClearMissionResultsClientRpc();
+    }
+
     [ClientRpc]
     private void ReceiveLocalMissionAssignmentClientRpc(
         ulong clientId,
@@ -496,6 +547,85 @@ public class RoundMissionManager : NetworkBehaviour
         _localMissionAssignment = default;
         _hasLocalMissionAssignment = false;
         LocalMissionAssignmentChanged?.Invoke(_localMissionAssignment);
+    }
+
+    [ClientRpc]
+    private void ClearMissionResultsClientRpc()
+    {
+        ClearLocalMissionResultsCache();
+    }
+
+    [ClientRpc]
+    private void ReceiveMissionResultClientRpc(
+        ulong clientId,
+        int familyValue,
+        string missionId,
+        string displayName,
+        int resultStateValue,
+        bool succeeded,
+        int rewardCoins,
+        int finalCoins,
+        string reason)
+    {
+        _localResultsSnapshot.Add(BuildMissionResultFromRpc(
+            clientId,
+            familyValue,
+            missionId,
+            displayName,
+            resultStateValue,
+            succeeded,
+            rewardCoins,
+            finalCoins,
+            reason));
+    }
+
+    [ClientRpc]
+    private void CompleteMissionResultsClientRpc()
+    {
+        _hasLocalResultsSnapshot = true;
+        LocalMissionResultsChanged?.Invoke();
+    }
+
+    private void ClearLocalMissionResultsCache()
+    {
+        _localResultsSnapshot.Clear();
+        _hasLocalResultsSnapshot = false;
+    }
+
+    private MissionResult BuildMissionResultFromRpc(
+        ulong clientId,
+        int familyValue,
+        string missionId,
+        string displayName,
+        int resultStateValue,
+        bool succeeded,
+        int rewardCoins,
+        int finalCoins,
+        string reason)
+    {
+        MissionFamily family = SafeMissionFamilyFromInt(familyValue);
+        MissionResultState resultState = SafeMissionResultStateFromInt(resultStateValue);
+        string fallbackName = !string.IsNullOrWhiteSpace(displayName) ? displayName : family.ToString();
+
+        return new MissionResult
+        {
+            clientId = clientId,
+            family = family,
+            missionId = string.IsNullOrWhiteSpace(missionId) ? fallbackName : missionId,
+            resultState = resultState,
+            succeeded = succeeded,
+            rewardCoins = rewardCoins,
+            finalCoins = finalCoins,
+            reason = string.IsNullOrWhiteSpace(reason) ? "결과 사유 없음" : reason
+        };
+    }
+
+    private string GetMissionResultDisplayName(MissionResult result)
+    {
+        if (!string.IsNullOrWhiteSpace(result.missionId))
+            return result.missionId;
+
+        return result.family.ToString();
     }
 
     private MissionResult EvaluateClientMissionServer(ulong clientId)
@@ -1029,10 +1159,23 @@ public class RoundMissionManager : NetworkBehaviour
 
     private MissionFamily ToMissionFamily(int value)
     {
+        return SafeMissionFamilyFromInt(value);
+    }
+
+    private MissionFamily SafeMissionFamilyFromInt(int value)
+    {
         if (value < (int)MissionFamily.LastLocation || value > (int)MissionFamily.GuessMission)
             return MissionFamily.LastLocation;
 
         return (MissionFamily)value;
+    }
+
+    private MissionResultState SafeMissionResultStateFromInt(int value)
+    {
+        if (value < (int)MissionResultState.NotEvaluated || value > (int)MissionResultState.Failed)
+            return MissionResultState.NotEvaluated;
+
+        return (MissionResultState)value;
     }
 
     private void AddRewardCoinsServer(ulong clientId, int rewardCoins, out int addedCoins)
