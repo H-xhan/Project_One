@@ -14,6 +14,10 @@ public class RelayManager : MonoBehaviour
     public static RelayManager Instance { get; private set; }
 
     public string CurrentJoinCode { get; private set; } = string.Empty;
+    public string LastJoinFailureReason { get; private set; } = string.Empty;
+    public string LastJoinFailureMessage { get; private set; } = string.Empty;
+    public int LastJoinFailureStatusCode { get; private set; }
+    public bool HasJoinFailure => !string.IsNullOrEmpty(LastJoinFailureReason);
 
     [Header("Relay 설정")]
     [SerializeField, Tooltip("Join 후 실제 연결(OnClientConnected)까지 기다리는 최대 시간(초)")]
@@ -67,6 +71,10 @@ public class RelayManager : MonoBehaviour
     private void OnClientDisconnected(ulong clientId)
     {
         LogWarning($"[Relay] OnClientDisconnected: {clientId}");
+
+        if (IsWaitingForClientConnection())
+            SetJoinFailure("ClientDisconnected", "호스트와의 연결이 끊어졌습니다.");
+
         _clientConnectedTcs?.TrySetResult(false);
     }
 
@@ -74,6 +82,12 @@ public class RelayManager : MonoBehaviour
     {
         Debug.LogError("[Relay] OnTransportFailure: transport failed. NetworkManager will shutdown.");
         SetCurrentJoinCode(string.Empty);
+
+        if (IsWaitingForClientConnection())
+        {
+            SetJoinFailure("TransportFailure", "네트워크 전송 연결에 실패했습니다.");
+            _clientConnectedTcs?.TrySetResult(false);
+        }
 
         if (NetworkManager.Singleton != null && NetworkManager.Singleton.IsListening)
         {
@@ -87,7 +101,7 @@ public class RelayManager : MonoBehaviour
             ? string.Empty
             : code.Trim().ToUpper();
 
-        Log($"[Relay] CurrentJoinCode={CurrentJoinCode}");
+        Log($"[Relay] CurrentJoinCode={MaskJoinCode(CurrentJoinCode)}");
     }
 
     private bool TryGetNet(out NetworkManager nm, out UnityTransport utp)
@@ -158,7 +172,7 @@ public class RelayManager : MonoBehaviour
                 false
             );
 
-            Log($"[Relay] Host Prepared. Code={joinCode} (UDP)");
+            Log($"[Relay] Host Prepared. Code={MaskJoinCode(joinCode)} (UDP)");
 
             bool ok = nm.StartHost();
             Log($"[Relay] StartHost={ok}");
@@ -187,27 +201,64 @@ public class RelayManager : MonoBehaviour
 
     public async Task<bool> JoinRelay(string joinCode)
     {
+        ClearJoinFailure();
+
         try
         {
             await EnsureServicesInitialized();
 
             if (!TryGetNet(out var nm, out var utp))
+            {
+                SetJoinFailure("RelayJoinFailed", "네트워크 설정을 확인할 수 없습니다.");
                 return false;
+            }
 
             if (nm.IsListening)
             {
                 LogWarning("[Relay] JoinRelay called but Network already running.");
+                SetJoinFailure("RelayJoinFailed", "이미 네트워크가 실행 중입니다.");
                 return false;
             }
 
             string code = (joinCode ?? string.Empty).Trim().ToUpper();
-            if (code.Length < 6)
+            if (string.IsNullOrWhiteSpace(joinCode))
             {
-                LogWarning("[Relay] Join code invalid.");
+                LogWarning("[Relay] Join code is empty.");
+                SetJoinFailure("EmptyJoinCode", "참가 코드가 비어 있습니다.");
                 return false;
             }
 
-            JoinAllocation joinAlloc = await RelayService.Instance.JoinAllocationAsync(code);
+            if (code.Length < 6)
+            {
+                LogWarning("[Relay] Join code invalid.");
+                SetJoinFailure("RelayJoinFailed", "참가 코드가 올바르지 않습니다.");
+                return false;
+            }
+
+            JoinAllocation joinAlloc;
+            try
+            {
+                joinAlloc = await RelayService.Instance.JoinAllocationAsync(code);
+            }
+            catch (RelayServiceException e)
+            {
+                int statusCode = GetRelayFailureStatusCode(e);
+                if (IsRelayJoinNotFound(e))
+                    SetJoinFailure("RelayJoinNotFound", "방 연결 정보가 만료되었습니다. 새 방 코드로 다시 참가해주세요.", statusCode);
+                else
+                    SetJoinFailure("RelayJoinFailed", "Relay 접속에 실패했습니다.", statusCode);
+
+                Debug.LogError($"[Relay] JoinAllocation failed. reason={LastJoinFailureReason}, status={LastJoinFailureStatusCode}, exception={e}");
+                SetCurrentJoinCode(string.Empty);
+                return false;
+            }
+            catch (RequestFailedException e)
+            {
+                SetJoinFailure("RelayJoinFailed", "Relay 접속에 실패했습니다.", GetRelayFailureStatusCode(e));
+                Debug.LogError($"[Relay] JoinAllocation request failed. reason={LastJoinFailureReason}, status={LastJoinFailureStatusCode}, exception={e}");
+                SetCurrentJoinCode(string.Empty);
+                return false;
+            }
 
             utp.SetRelayServerData(
                 joinAlloc.RelayServer.IpV4,
@@ -219,7 +270,7 @@ public class RelayManager : MonoBehaviour
                 false
             );
 
-            Log($"[Relay] Join Prepared. Code={code} (UDP)");
+            Log($"[Relay] Join Prepared. Code={MaskJoinCode(code)} (UDP)");
 
             _clientConnectedTcs = new TaskCompletionSource<bool>();
 
@@ -227,26 +278,46 @@ public class RelayManager : MonoBehaviour
             Log($"[Relay] StartClient={startOk}");
             if (!startOk)
             {
+                SetJoinFailure("StartClientFailed", "클라이언트 연결 시작에 실패했습니다.");
                 SetCurrentJoinCode(string.Empty);
                 return false;
             }
 
             using (var cts = new CancellationTokenSource(TimeSpan.FromSeconds(joinConnectTimeoutSec)))
             {
-                cts.Token.Register(() => _clientConnectedTcs.TrySetResult(false));
+                cts.Token.Register(() =>
+                {
+                    if (IsWaitingForClientConnection())
+                    {
+                        SetJoinFailure("Timeout", "호스트 연결 시간이 초과되었습니다.");
+                        _clientConnectedTcs.TrySetResult(false);
+                    }
+                });
+
                 bool connected = await _clientConnectedTcs.Task;
                 Log($"[Relay] Client Connected Result={connected}");
 
                 if (connected)
+                {
+                    ClearJoinFailure();
                     SetCurrentJoinCode(code);
+                }
                 else
+                {
+                    if (!HasJoinFailure)
+                        SetJoinFailure("ClientDisconnected", "호스트와의 연결이 끊어졌습니다.");
+
                     SetCurrentJoinCode(string.Empty);
+                }
 
                 return connected;
             }
         }
         catch (Exception e)
         {
+            if (!HasJoinFailure)
+                SetJoinFailure("RelayJoinFailed", "Relay 접속에 실패했습니다.");
+
             Debug.LogError($"[Relay] JoinRelay failed: {e}");
             SetCurrentJoinCode(string.Empty);
             return false;
@@ -256,6 +327,84 @@ public class RelayManager : MonoBehaviour
     public async Task<bool> JoinViaCode(string joinCode)
     {
         return await JoinRelay(joinCode);
+    }
+
+    private void ClearJoinFailure()
+    {
+        LastJoinFailureReason = string.Empty;
+        LastJoinFailureMessage = string.Empty;
+        LastJoinFailureStatusCode = 0;
+    }
+
+    private void SetJoinFailure(string reason, string message, int statusCode = 0)
+    {
+        LastJoinFailureReason = string.IsNullOrWhiteSpace(reason)
+            ? "RelayJoinFailed"
+            : reason;
+        LastJoinFailureMessage = string.IsNullOrWhiteSpace(message)
+            ? "Relay 접속에 실패했습니다."
+            : message;
+        LastJoinFailureStatusCode = statusCode;
+
+        LogWarning($"[Relay] Join failure. reason={LastJoinFailureReason}, status={LastJoinFailureStatusCode}, message={LastJoinFailureMessage}");
+    }
+
+    private bool IsWaitingForClientConnection()
+    {
+        return _clientConnectedTcs != null && !_clientConnectedTcs.Task.IsCompleted;
+    }
+
+    private bool IsRelayJoinNotFound(RelayServiceException exception)
+    {
+        if (exception == null)
+            return false;
+
+        if (exception.ErrorCode == 404)
+            return true;
+
+        if (exception.Reason == RelayExceptionReason.JoinCodeNotFound ||
+            exception.Reason == RelayExceptionReason.AllocationNotFound ||
+            exception.Reason == RelayExceptionReason.EntityNotFound)
+            return true;
+
+        string message = exception.Message ?? string.Empty;
+        return message.IndexOf("404", StringComparison.OrdinalIgnoreCase) >= 0 ||
+               message.IndexOf("not found", StringComparison.OrdinalIgnoreCase) >= 0;
+    }
+
+    private int GetRelayFailureStatusCode(RequestFailedException exception)
+    {
+        if (exception == null)
+            return 0;
+
+        int errorCode = exception.ErrorCode;
+        if (errorCode >= 100 && errorCode <= 599)
+            return errorCode;
+
+        int mappedHttpStatus = errorCode - (int)RelayExceptionReason.Min;
+        if (mappedHttpStatus >= 100 && mappedHttpStatus <= 599)
+            return mappedHttpStatus;
+
+        if (exception is RelayServiceException relayException && IsRelayJoinNotFound(relayException))
+            return 404;
+
+        return errorCode;
+    }
+
+    private string MaskJoinCode(string code)
+    {
+        if (string.IsNullOrWhiteSpace(code))
+            return "len=0";
+
+        string normalized = code.Trim().ToUpper();
+        int length = normalized.Length;
+        if (length <= 2)
+            return $"len={length}, code=**";
+
+        int visibleCount = length <= 4 ? 1 : 2;
+        string prefix = normalized.Substring(0, visibleCount);
+        string suffix = normalized.Substring(length - visibleCount, visibleCount);
+        return $"len={length}, code={prefix}...{suffix}";
     }
 
     private void Log(string message)
