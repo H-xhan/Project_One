@@ -221,6 +221,38 @@ public class PlayerInteractModule : NetworkBehaviour
         return ResolveHeldCache();
     }
 
+    public bool TryGetHeldItemId(out int itemId)
+    {
+        itemId = 0;
+
+        if (!ResolveHeldCache())
+            return false;
+
+        if (_heldPickup != null)
+        {
+            int pickupItemId = _heldPickup.ItemId;
+            if (pickupItemId > 0)
+            {
+                itemId = pickupItemId;
+                return true;
+            }
+        }
+
+        if (_heldItemData != null && _heldItemData.itemId > 0)
+        {
+            itemId = _heldItemData.itemId;
+            return true;
+        }
+
+        if (_heldWeaponData != null && _heldWeaponData.itemId > 0)
+        {
+            itemId = _heldWeaponData.itemId;
+            return true;
+        }
+
+        return false;
+    }
+
     public WeaponItemDataSO GetHeldWeaponData()
     {
         if (!ResolveHeldCache())

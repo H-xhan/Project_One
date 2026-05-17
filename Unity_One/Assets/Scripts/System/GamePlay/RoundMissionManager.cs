@@ -802,9 +802,9 @@ public class RoundMissionManager : NetworkBehaviour
             return false;
         }
 
-        if (!TryGetHeldItemIdServer(assignment.clientId, out int heldItemId))
+        if (!TryGetHeldItemIdServer(assignment.clientId, out int heldItemId, out string heldItemReason))
         {
-            reason = "현재 들고 있는 아이템 ID를 확인할 수 없습니다.";
+            reason = heldItemReason;
             return false;
         }
 
@@ -1057,22 +1057,35 @@ public class RoundMissionManager : NetworkBehaviour
         return interact != null;
     }
 
-    private bool TryGetHeldItemIdServer(ulong clientId, out int itemId)
+    private bool TryGetHeldItemIdServer(ulong clientId, out int itemId, out string reason)
     {
         itemId = 0;
+        reason = string.Empty;
 
         if (!TryGetPlayerInteract(clientId, out PlayerInteractModule interact))
+        {
+            reason = "현재 들고 있는 아이템 ID를 확인할 수 없습니다.";
             return false;
+        }
+
+        if (interact.TryGetHeldItemId(out itemId) && itemId > 0)
+            return true;
 
         if (!interact.HasHeldItem())
+        {
+            reason = "현재 들고 있는 아이템이 없습니다.";
             return false;
+        }
 
         WeaponItemDataSO weaponData = interact.GetHeldWeaponData();
-        if (weaponData == null || weaponData.itemId <= 0)
-            return false;
+        if (weaponData != null && weaponData.itemId > 0)
+        {
+            itemId = weaponData.itemId;
+            return true;
+        }
 
-        itemId = weaponData.itemId;
-        return true;
+        reason = "현재 들고 있는 아이템 ID를 확인할 수 없습니다.";
+        return false;
     }
 
     private bool IsClientInsideZone(ulong clientId, string zoneId)
