@@ -182,12 +182,20 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
     [Tooltip("디버그 로그 출력 여부입니다.")]
     [SerializeField] private bool enableDebugLogs = false;
 
+    [Tooltip("임시 조작 잠금 상태의 시작/종료 디버그 로그를 출력할지 여부입니다.")]
+    [SerializeField] private bool enableTemporaryControlLockDebugLogs = false;
+
     private bool isKnocked;
     private bool isStandingUp;
     private bool isEliminated;
     private float knockTimer;
     private float nextHitReactionAt;
     private float standUpTimer;
+    private bool _hasTemporaryControlLock;
+    private float _temporaryControlLockUntil;
+    private bool _temporaryControlLockMove;
+    private bool _temporaryControlLockAttack;
+    private bool _temporaryControlLockInteract;
 
     private NetworkObject rootNetObj;
     private Transform rootTransform;
@@ -217,10 +225,64 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
     public bool IsKnocked => isKnocked;
     public bool IsStandingUp => isStandingUp;
     public bool IsEliminated => isEliminated;
-    public bool CanMove => !isKnocked && !isStandingUp && !isEliminated;
-    public bool CanAttack => !isKnocked && !isStandingUp && !isEliminated;
-    public bool CanInteract => !isKnocked && !isStandingUp && !isEliminated;
+    public bool IsTemporaryControlLocked => IsTemporaryControlLockActive();
+    public float TemporaryControlLockRemainingSeconds
+    {
+        get
+        {
+            if (!IsTemporaryControlLockActive())
+                return 0f;
+
+            return Mathf.Max(0f, _temporaryControlLockUntil - Time.time);
+        }
+    }
+    public bool CanMove => !isKnocked && !isStandingUp && !isEliminated && !ShouldBlockMoveByTemporaryLock();
+    public bool CanAttack => !isKnocked && !isStandingUp && !isEliminated && !ShouldBlockAttackByTemporaryLock();
+    public bool CanInteract => !isKnocked && !isStandingUp && !isEliminated && !ShouldBlockInteractByTemporaryLock();
     public bool HasRecentCombatFallContributor => IsServer && IsRecentCombatContributorValid();
+
+    public bool ServerApplyTemporaryControlLock(float duration)
+    {
+        return ServerApplyTemporaryControlLock(duration, true, true, true);
+    }
+
+    public bool ServerApplyTemporaryControlLock(float duration, bool lockMove, bool lockAttack, bool lockInteract)
+    {
+        if (!IsServer)
+            return false;
+
+        if (isEliminated)
+            return false;
+
+        if (!lockMove && !lockAttack && !lockInteract)
+            return false;
+
+        float finiteDuration = GetFiniteOrZero(duration);
+        if (finiteDuration <= 0f)
+            return false;
+
+        RefreshTemporaryControlLock();
+
+        float lockUntil = Time.time + finiteDuration;
+        if (!_hasTemporaryControlLock || lockUntil > _temporaryControlLockUntil)
+            _temporaryControlLockUntil = lockUntil;
+
+        _hasTemporaryControlLock = true;
+        _temporaryControlLockMove |= lockMove;
+        _temporaryControlLockAttack |= lockAttack;
+        _temporaryControlLockInteract |= lockInteract;
+
+        LogTemporaryControlLock($"applied. duration:{finiteDuration:0.###}, remaining:{TemporaryControlLockRemainingSeconds:0.###}, move:{_temporaryControlLockMove}, attack:{_temporaryControlLockAttack}, interact:{_temporaryControlLockInteract}");
+        return true;
+    }
+
+    public void ServerClearTemporaryControlLock()
+    {
+        if (!IsServer)
+            return;
+
+        ClearTemporaryControlLockLocal();
+    }
 
     private void Awake()
     {
@@ -244,11 +306,63 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
     private void Update()
     {
         if (!IsServer) return;
+        RefreshTemporaryControlLock();
         if (isEliminated) return;
 
         UpdateKnockState();
         UpdateStandUpState();
         CheckElimination();
+    }
+
+    private bool IsTemporaryControlLockActive()
+    {
+        RefreshTemporaryControlLock();
+        return _hasTemporaryControlLock;
+    }
+
+    private void RefreshTemporaryControlLock()
+    {
+        if (!_hasTemporaryControlLock)
+            return;
+
+        if (Time.time < _temporaryControlLockUntil)
+            return;
+
+        ClearTemporaryControlLockLocal();
+    }
+
+    private void ClearTemporaryControlLockLocal()
+    {
+        bool hadTemporaryControlLock =
+            _hasTemporaryControlLock ||
+            _temporaryControlLockUntil > 0f ||
+            _temporaryControlLockMove ||
+            _temporaryControlLockAttack ||
+            _temporaryControlLockInteract;
+
+        _hasTemporaryControlLock = false;
+        _temporaryControlLockUntil = 0f;
+        _temporaryControlLockMove = false;
+        _temporaryControlLockAttack = false;
+        _temporaryControlLockInteract = false;
+
+        if (hadTemporaryControlLock)
+            LogTemporaryControlLock("cleared.");
+    }
+
+    private bool ShouldBlockMoveByTemporaryLock()
+    {
+        return IsTemporaryControlLockActive() && _temporaryControlLockMove;
+    }
+
+    private bool ShouldBlockAttackByTemporaryLock()
+    {
+        return IsTemporaryControlLockActive() && _temporaryControlLockAttack;
+    }
+
+    private bool ShouldBlockInteractByTemporaryLock()
+    {
+        return IsTemporaryControlLockActive() && _temporaryControlLockInteract;
     }
 
     public void ApplyKnockbackServer(Vector3 impulse)
@@ -783,6 +897,7 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
         isStandingUp = false;
         knockTimer = 0f;
         standUpTimer = 0f;
+        ClearTemporaryControlLockLocal();
         _didSyncRootFromRagdollForCurrentKnockback = false;
         _hasLastRagdollFocusForRootSync = false;
         hasReachedSafePlayingPosition = false;
@@ -1359,6 +1474,7 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
         isKnocked = false;
         isStandingUp = false;
         standUpTimer = 0f;
+        ClearTemporaryControlLockLocal();
         ClearRecentCombatContributorServer();
 
         Log($"[PlayerStatus] {name} eliminated.");
@@ -1420,6 +1536,14 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
             return;
 
         Debug.Log($"[CombatFallContribution] {message}", this);
+    }
+
+    private void LogTemporaryControlLock(string message)
+    {
+        if (!enableTemporaryControlLockDebugLogs)
+            return;
+
+        Debug.Log($"[TemporaryControlLock] {message}", this);
     }
 
     private void TryTriggerHitReaction()
