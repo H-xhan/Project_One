@@ -421,15 +421,8 @@ public class PlayerHub : NetworkBehaviour
 
         if (interactPressed && CanInteractNow() && interactModule != null)
         {
-            if (interactModule.HasHeldItem())
-            {
-                DropItemServerRpc();
-            }
-            else
-            {
-                if (interactModule.TryFindPickupTarget(out NetworkObjectReference target))
-                    TryPickupServerRpc(target);
-            }
+            if (!interactModule.HasHeldItem() && interactModule.TryFindPickupTarget(out NetworkObjectReference target))
+                TryPickupServerRpc(target);
         }
 
         if (dropPressed && CanInteractNow())
