@@ -734,7 +734,7 @@ MonoBehaviour:
     m_Bits: 2048
   hitVfxPrefab: {fileID: 5501628190135194678, guid: b7a18035444df4e48a96614773e02086, type: 3}
   hitVfxYOffset: 0.2
-  enableDebugLogs: 0
+  enableDebugLogs: 1
 --- !u!114 &346629790702925664
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -903,6 +903,10 @@ MonoBehaviour:
   maxCoinDropSpawnAttempts: 16
   preferCoinSpawnManagerRandomDrop: 1
   enableCoinRespawnDebugLogs: 0
+  enableCombatFallContributionTracking: 1
+  recentCombatContributorValidSeconds: 4
+  countCoinRespawnFallAsKnockOff: 1
+  enableCombatFallContributionDebugLogs: 1
   enableDebugLogs: 0
 --- !u!114 &3577343894024067653
 MonoBehaviour:

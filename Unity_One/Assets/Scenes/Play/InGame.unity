@@ -206,7 +206,7 @@ RectTransform:
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
   m_AnchorMin: {x: 0.5, y: 0.5}
   m_AnchorMax: {x: 0.5, y: 0.5}
-  m_AnchoredPosition: {x: 0, y: -70}
+  m_AnchoredPosition: {x: 0, y: -100}
   m_SizeDelta: {x: 620, y: 60}
   m_Pivot: {x: 0.5, y: 0.5}
 --- !u!114 &20891674
@@ -4799,6 +4799,8 @@ MonoBehaviour:
   missionSuccessText: "\uC131\uACF5"
   missionFailedText: "\uC2E4\uD328"
   noMissionResultsText: "\uBBF8\uC158 \uACB0\uACFC\uB97C \uD655\uC778 \uC911..."
+  unknownMissionNameText: "\uC54C \uC218 \uC5C6\uB294 \uBBF8\uC158"
+  emptyReasonText: "\uACB0\uACFC \uC0AC\uC720 \uC5C6\uC74C"
   hideMissionResultsWhenEmpty: 0
 --- !u!1 &509254353
 GameObject:

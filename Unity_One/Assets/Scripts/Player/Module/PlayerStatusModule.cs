@@ -165,6 +165,19 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
     [SerializeField, Tooltip("코인 기반 낙사 리스폰 처리 로그를 출력할지 여부입니다.")]
     private bool enableCoinRespawnDebugLogs = false;
 
+    [Header("Combat Fall Contribution")]
+    [SerializeField, Tooltip("전투 공격으로 인한 낙사 기여 기록을 사용할지 여부입니다.")]
+    private bool enableCombatFallContributionTracking = true;
+
+    [SerializeField, Tooltip("최근 전투 기여자가 KnockOff 낙사 기여자로 인정되는 유효 시간입니다.")]
+    private float recentCombatContributorValidSeconds = 4f;
+
+    [SerializeField, Tooltip("코인을 소모하고 리스폰되는 낙사도 KnockOff 기여로 인정할지 여부입니다.")]
+    private bool countCoinRespawnFallAsKnockOff = true;
+
+    [SerializeField, Tooltip("전투 낙사 기여 기록 디버그 로그를 출력할지 여부입니다.")]
+    private bool enableCombatFallContributionDebugLogs = false;
+
     [Header("Debug")]
     [Tooltip("디버그 로그 출력 여부입니다.")]
     [SerializeField] private bool enableDebugLogs = false;
@@ -195,6 +208,11 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
     private float _lastRagdollFocusForRootSyncTime;
     private bool _hasLastRagdollFocusForRootSync;
     private bool _didSyncRootFromRagdollForCurrentKnockback;
+    private bool _hasRecentCombatFallContributor;
+    private ulong _recentCombatFallContributorClientId;
+    private float _recentCombatFallContributorRecordedAt;
+    private bool _hasReportedFallContributionForCurrentFall;
+    private RoundMissionManager _roundMissionManager;
 
     public bool IsKnocked => isKnocked;
     public bool IsStandingUp => isStandingUp;
@@ -202,6 +220,7 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
     public bool CanMove => !isKnocked && !isStandingUp && !isEliminated;
     public bool CanAttack => !isKnocked && !isStandingUp && !isEliminated;
     public bool CanInteract => !isKnocked && !isStandingUp && !isEliminated;
+    public bool HasRecentCombatFallContributor => IsServer && IsRecentCombatContributorValid();
 
     private void Awake()
     {
@@ -234,6 +253,62 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
 
     public void ApplyKnockbackServer(Vector3 impulse)
     {
+        ApplyKnockbackServerInternal(impulse, true);
+    }
+
+    public bool ServerTryApplyCombatKnockback(Vector3 impulse, ulong actorClientId)
+    {
+        if (!CanStartKnockbackServer())
+            return false;
+
+        bool recordedContributor = ServerRecordRecentCombatFallContributor(actorClientId);
+        ApplyKnockbackServerInternal(impulse, false);
+        return recordedContributor;
+    }
+
+    public bool ServerRecordRecentCombatFallContributor(ulong actorClientId)
+    {
+        if (!IsServer)
+            return false;
+
+        if (!enableCombatFallContributionTracking)
+            return false;
+
+        if (!TryGetOwnerClientId(out ulong targetClientId))
+            return false;
+
+        if (!IsValidCombatContributor(actorClientId, targetClientId))
+            return false;
+
+        _hasRecentCombatFallContributor = true;
+        _recentCombatFallContributorClientId = actorClientId;
+        _recentCombatFallContributorRecordedAt = Time.time;
+        LogCombatFallContribution($"Recorded recent contributor actor:{actorClientId} target:{targetClientId}");
+        return true;
+    }
+
+    public void ServerClearRecentCombatFallContributor()
+    {
+        if (!IsServer)
+            return;
+
+        ClearRecentCombatContributorServer();
+    }
+
+    public bool TryGetRecentCombatFallContributor(out ulong actorClientId)
+    {
+        actorClientId = _recentCombatFallContributorClientId;
+        if (!IsServer || !IsRecentCombatContributorValid())
+        {
+            actorClientId = ulong.MaxValue;
+            return false;
+        }
+
+        return true;
+    }
+
+    private void ApplyKnockbackServerInternal(Vector3 impulse, bool clearCombatContributor)
+    {
         if (!IsServer) return;
         if (isEliminated) return;
         if (isKnocked) return;
@@ -243,6 +318,9 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
             Debug.LogWarning("[PlayerStatus] Knockback skipped. Missing Rigidbody or CharacterController.");
             return;
         }
+
+        if (clearCombatContributor)
+            ClearRecentCombatContributorServer();
 
         if (isStandingUp)
             isStandingUp = false;
@@ -293,8 +371,15 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
         if (gameStateManager == null)
             gameStateManager = FindFirstObjectByType<GameStateManager>();
 
+        ResolveRoundMissionManager();
         ResolveActiveRagdollController();
         rootTransform = rootNetObj != null ? rootNetObj.transform : transform.root;
+    }
+
+    private void ResolveRoundMissionManager()
+    {
+        if (_roundMissionManager == null)
+            _roundMissionManager = FindFirstObjectByType<RoundMissionManager>();
     }
 
     private SugaActiveRagdollController ResolveActiveRagdollController()
@@ -336,6 +421,117 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
         Vector3 ragdollImpulse = impulse * activeRagdollHitImpulseScale;
         controller.ApplyHit(ragdollImpulse);
         Log("[PlayerStatus] Active ragdoll hit reaction triggered.");
+    }
+
+    private bool CanStartKnockbackServer()
+    {
+        if (!IsServer)
+            return false;
+
+        if (isEliminated || isKnocked)
+            return false;
+
+        return rootRigidbody != null && charController != null;
+    }
+
+    private bool TryGetOwnerClientId(out ulong clientId)
+    {
+        clientId = ulong.MaxValue;
+
+        if (rootNetObj == null)
+            rootNetObj = GetComponentInParent<NetworkObject>();
+
+        NetworkObject ownerObject = rootNetObj != null ? rootNetObj : NetworkObject;
+        if (ownerObject == null)
+            return false;
+
+        clientId = ownerObject.OwnerClientId;
+        return clientId != ulong.MaxValue;
+    }
+
+    private bool IsRecentCombatContributorValid()
+    {
+        if (!_hasRecentCombatFallContributor)
+            return false;
+
+        if (!enableCombatFallContributionTracking)
+        {
+            ClearRecentCombatContributorServer();
+            return false;
+        }
+
+        float validSeconds = Mathf.Max(0f, recentCombatContributorValidSeconds);
+        float elapsedSeconds = Mathf.Max(0f, Time.time - _recentCombatFallContributorRecordedAt);
+        if (elapsedSeconds <= validSeconds)
+            return true;
+
+        ClearRecentCombatContributorServer();
+        return false;
+    }
+
+    private void ClearRecentCombatContributorServer()
+    {
+        _hasRecentCombatFallContributor = false;
+        _recentCombatFallContributorClientId = ulong.MaxValue;
+        _recentCombatFallContributorRecordedAt = 0f;
+    }
+
+    private bool TryReportCombatFallContributionServer(string context)
+    {
+        if (!IsServer)
+            return false;
+
+        if (_hasReportedFallContributionForCurrentFall)
+            return false;
+
+        if (!TryGetRecentCombatFallContributor(out ulong actorClientId))
+            return false;
+
+        if (!TryGetOwnerClientId(out ulong targetClientId))
+        {
+            ClearRecentCombatContributorServer();
+            return false;
+        }
+
+        if (!IsValidCombatContributor(actorClientId, targetClientId))
+        {
+            ClearRecentCombatContributorServer();
+            return false;
+        }
+
+        ResolveRoundMissionManager();
+        if (_roundMissionManager == null)
+        {
+            ClearRecentCombatContributorServer();
+            return false;
+        }
+
+        _roundMissionManager.ServerRecordFallContribution(actorClientId, targetClientId);
+        _hasReportedFallContributionForCurrentFall = true;
+        ClearRecentCombatContributorServer();
+        LogCombatFallContribution($"Reported fall contribution actor:{actorClientId} target:{targetClientId} context:{context}");
+        return true;
+    }
+
+    private void ResetFallContributionReportGuard()
+    {
+        _hasReportedFallContributionForCurrentFall = false;
+    }
+
+    private bool IsValidCombatContributor(ulong actorClientId, ulong targetClientId)
+    {
+        if (actorClientId == ulong.MaxValue || targetClientId == ulong.MaxValue)
+            return false;
+
+        if (actorClientId == targetClientId)
+            return false;
+
+        NetworkManager networkManager = NetworkManager.Singleton;
+        if (networkManager != null && networkManager.IsListening &&
+            !networkManager.ConnectedClients.ContainsKey(actorClientId))
+            return false;
+
+        return true;
     }
 
     private void UpdateKnockState()
@@ -402,8 +598,15 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
             if (eliminationCheckY < rootY)
                 Log($"[PlayerStatus] Elimination triggered by ragdoll focus. rootY:{rootY:0.###}, checkY:{eliminationCheckY:0.###}, eliminationY:{eliminationY:0.###}");
 
+            bool reportedFallContribution = false;
+            if (countCoinRespawnFallAsKnockOff)
+                reportedFallContribution = TryReportCombatFallContributionServer("coin-or-elimination fall");
+
             if (TryHandleCoinFallRespawn())
                 return;
+
+            if (!reportedFallContribution)
+                TryReportCombatFallContributionServer("final elimination fall");
 
             HandleElimination();
         }
@@ -475,6 +678,8 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
             SpawnFallDroppedCoins(removedAmount, respawnPosition, respawnRotation);
 
         LogCoinFallRespawn($"Coin fall respawn succeeded. removedCoins:{removedAmount}, remainingCoins:{wallet.CurrentCoins}");
+        ClearRecentCombatContributorServer();
+        ResetFallContributionReportGuard();
         return true;
     }
 
@@ -582,6 +787,7 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
         _hasLastRagdollFocusForRootSync = false;
         hasReachedSafePlayingPosition = false;
         hasLoggedEliminationGateState = false;
+        ResetFallContributionReportGuard();
 
         if (locomotionModule != null)
             locomotionModule.ResetMotionServer();
@@ -650,6 +856,8 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
         if (currentState != GameStateManager.GameState.Playing)
         {
             hasReachedSafePlayingPosition = false;
+            ClearRecentCombatContributorServer();
+            ResetFallContributionReportGuard();
 
             if (!hasLoggedEliminationGateState || lastLoggedGameState != currentState)
             {
@@ -666,6 +874,7 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
         if (!hasReachedSafePlayingPosition && checkTf.position.y >= eliminationY)
         {
             hasReachedSafePlayingPosition = true;
+            ResetFallContributionReportGuard();
             lastLoggedGameState = currentState;
             hasLoggedEliminationGateState = true;
             Log("[PlayerStatus] Elimination allowed. GameState is Playing.");
@@ -1113,6 +1322,8 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
         isStandingUp = false;
         standUpTimer = 0f;
         ApplyStandingPhysicsState();
+        ClearRecentCombatContributorServer();
+        ResetFallContributionReportGuard();
     }
 
     private void ApplyStandingPhysicsState()
@@ -1148,6 +1359,7 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
         isKnocked = false;
         isStandingUp = false;
         standUpTimer = 0f;
+        ClearRecentCombatContributorServer();
 
         Log($"[PlayerStatus] {name} eliminated.");
 
@@ -1202,6 +1414,14 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
         Debug.Log($"[CoinFallRespawn] {message}", this);
     }
 
+    private void LogCombatFallContribution(string message)
+    {
+        if (!enableCombatFallContributionDebugLogs)
+            return;
+
+        Debug.Log($"[CombatFallContribution] {message}", this);
+    }
+
     private void TryTriggerHitReaction()
     {
         if (!triggerHitOnDamage) return;
@@ -1220,6 +1440,7 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
         coinDropSpawnRadius = Mathf.Max(0f, coinDropSpawnRadius);
         coinDropSpawnHeightOffset = Mathf.Max(0f, coinDropSpawnHeightOffset);
         maxCoinDropSpawnAttempts = Mathf.Max(1, maxCoinDropSpawnAttempts);
+        recentCombatContributorValidSeconds = Mathf.Max(0f, recentCombatContributorValidSeconds);
 
         ResolveRefs();
         backStandUpStateHash = Animator.StringToHash("Back Stand Up");

@@ -149,8 +149,16 @@ public class PlayerCombatModule : NetworkBehaviour
 
             Vector3 impulse = dir * profile.hitForce + Vector3.up * profile.upwardForce;
 
-            Log($"[PlayerCombat] ApplyKnockback -> {targetStatus.name}, impulse:{impulse}");
-            targetStatus.ApplyKnockbackServer(impulse);
+            if (TryGetAttackerClientId(out ulong attackerClientId))
+            {
+                Log($"[PlayerCombat] ApplyCombatKnockback -> attacker:{attackerClientId}, target:{targetStatus.name}, impulse:{impulse}");
+                targetStatus.ServerTryApplyCombatKnockback(impulse, attackerClientId);
+            }
+            else
+            {
+                Log($"[PlayerCombat] ApplyKnockback fallback -> {targetStatus.name}, impulse:{impulse}");
+                targetStatus.ApplyKnockbackServer(impulse);
+            }
 
             Vector3 hitVfxPosition = GetHitVfxPosition(hit, originTf.position, targetRoot);
             PlayHitVfxClientRpc(hitVfxPosition);
@@ -177,6 +185,21 @@ public class PlayerCombatModule : NetworkBehaviour
         }
 
         return profile;
+    }
+
+    private bool TryGetAttackerClientId(out ulong attackerClientId)
+    {
+        attackerClientId = ulong.MaxValue;
+
+        NetworkObject ownerObject = NetworkObject;
+        if (ownerObject == null)
+            ownerObject = GetComponentInParent<NetworkObject>();
+
+        if (ownerObject == null)
+            return false;
+
+        attackerClientId = ownerObject.OwnerClientId;
+        return attackerClientId != ulong.MaxValue;
     }
 
     private void Log(string message)
