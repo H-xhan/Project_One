@@ -127,6 +127,16 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
     [Tooltip("Active Ragdoll 피격 반응에 전달할 넉백 힘 배율입니다.")]
     [SerializeField] private float activeRagdollHitImpulseScale = 1f;
 
+    [Header("Knockback Auto Drop")]
+    [Tooltip("공격이나 맵 기믹 넉백으로 플레이어가 강제로 날아갈 때 들고 있는 아이템을 자동으로 떨어뜨릴지 여부입니다.")]
+    [SerializeField] private bool dropHeldItemOnKnockback = true;
+
+    [Tooltip("넉백 자동 드랍이 짧은 시간 안에 중복 호출되는 것을 막기 위한 쿨다운입니다.")]
+    [SerializeField] private float dropHeldItemOnKnockbackCooldown = 0.35f;
+
+    [Tooltip("넉백 자동 드랍 디버그 로그를 출력할지 여부입니다.")]
+    [SerializeField] private bool enableDropHeldItemOnKnockbackDebugLogs = false;
+
     [Header("Elimination")]
     [Tooltip("이 높이 아래로 떨어지면 탈락 처리되는 Y값")]
     [SerializeField] private float eliminationY = -15f;
@@ -221,6 +231,8 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
     private float _recentCombatFallContributorRecordedAt;
     private bool _hasReportedFallContributionForCurrentFall;
     private RoundMissionManager _roundMissionManager;
+    private float _nextDropHeldItemOnKnockbackAllowedAt;
+    private PlayerInteractModule _cachedInteractModule;
 
     public bool IsKnocked => isKnocked;
     public bool IsStandingUp => isStandingUp;
@@ -439,6 +451,7 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
         if (isStandingUp)
             isStandingUp = false;
 
+        ServerTryDropHeldItemBecauseOfKnockback("Knockback");
         BeginKnockback(impulse);
         TryApplyActiveRagdollHit(impulse);
     }
@@ -811,6 +824,67 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
             playerHub = GetComponentInParent<PlayerHub>();
 
         return playerHub;
+    }
+
+    private bool TryResolveInteractModule(out PlayerInteractModule interact)
+    {
+        if (_cachedInteractModule != null)
+        {
+            interact = _cachedInteractModule;
+            return true;
+        }
+
+        PlayerHub ownerHub = ResolvePlayerHub();
+        if (ownerHub != null)
+        {
+            _cachedInteractModule = ownerHub.GetComponentInChildren<PlayerInteractModule>(true);
+            if (_cachedInteractModule != null)
+            {
+                interact = _cachedInteractModule;
+                return true;
+            }
+        }
+
+        _cachedInteractModule = GetComponentInParent<PlayerInteractModule>();
+        if (_cachedInteractModule == null)
+            _cachedInteractModule = GetComponentInChildren<PlayerInteractModule>(true);
+
+        interact = _cachedInteractModule;
+        return interact != null;
+    }
+
+    private void ServerTryDropHeldItemBecauseOfKnockback(string reason)
+    {
+        if (!IsServer)
+            return;
+
+        if (!dropHeldItemOnKnockback)
+            return;
+
+        if (isEliminated)
+            return;
+
+        if (Time.time < _nextDropHeldItemOnKnockbackAllowedAt)
+        {
+            LogDropHeldItemOnKnockback($"Skip knockback drop: cooldown active reason={reason}");
+            return;
+        }
+
+        if (!TryResolveInteractModule(out PlayerInteractModule interact) || interact == null)
+        {
+            LogDropHeldItemOnKnockback($"Skip knockback drop: interact module missing reason={reason}");
+            return;
+        }
+
+        if (!interact.HasHeldItem())
+        {
+            LogDropHeldItemOnKnockback($"Skip knockback drop: no held item reason={reason}");
+            return;
+        }
+
+        interact.ServerTryDrop();
+        _nextDropHeldItemOnKnockbackAllowedAt = Time.time + Mathf.Max(0f, dropHeldItemOnKnockbackCooldown);
+        LogDropHeldItemOnKnockback($"Drop held item on knockback reason={reason}");
     }
 
     private InGameMatchManager ResolveInGameMatchManager()
@@ -1546,6 +1620,14 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
         Debug.Log($"[TemporaryControlLock] {message}", this);
     }
 
+    private void LogDropHeldItemOnKnockback(string message)
+    {
+        if (!enableDropHeldItemOnKnockbackDebugLogs)
+            return;
+
+        Debug.Log($"[PlayerStatus] {message}", this);
+    }
+
     private void TryTriggerHitReaction()
     {
         if (!triggerHitOnDamage) return;
@@ -1565,6 +1647,7 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
         coinDropSpawnHeightOffset = Mathf.Max(0f, coinDropSpawnHeightOffset);
         maxCoinDropSpawnAttempts = Mathf.Max(1, maxCoinDropSpawnAttempts);
         recentCombatContributorValidSeconds = Mathf.Max(0f, recentCombatContributorValidSeconds);
+        dropHeldItemOnKnockbackCooldown = Mathf.Max(0f, dropHeldItemOnKnockbackCooldown);
 
         ResolveRefs();
         backStandUpStateHash = Animator.StringToHash("Back Stand Up");
