@@ -2,7 +2,7 @@ using System.Collections.Generic;
 using Unity.Netcode;
 using UnityEngine;
 
-public class PlayerLocomotionModule : MonoBehaviour
+public class PlayerLocomotionModule : NetworkBehaviour
 {
     private const float MinExternalMoveSpeedMultiplier = 0.1f;
     private const float MaxExternalMoveSpeedMultiplier = 3f;
@@ -66,6 +66,9 @@ public class PlayerLocomotionModule : MonoBehaviour
     [SerializeField, Tooltip("코드 기반 SpinDash 돌진 기능을 사용할지 여부입니다.")]
     private bool enableSpinDash = true;
 
+    [SerializeField, Tooltip("SpinDash 중 코드 기반 회전/어지러움 시각 피드백을 사용할지 여부입니다.")]
+    private bool enableSpinDashVisualFeedback = true;
+
     [SerializeField, Tooltip("SpinDash 시작 시 소모할 스태미나입니다.")]
     private float spinDashStaminaCost = 40f;
 
@@ -89,6 +92,15 @@ public class PlayerLocomotionModule : MonoBehaviour
 
     [SerializeField, Tooltip("SpinDash 중 회전시킬 비주얼 루트입니다. 비워두면 안전한 child를 자동 탐색하거나 회전을 생략합니다.")]
     private Transform spinDashVisualRoot;
+
+    [SerializeField, Tooltip("SpinDash 종료 후 어지러움 흔들림 피드백이 지속되는 시간입니다.")]
+    private float spinDashDizzyFeedbackDuration = 0.7f;
+
+    [SerializeField, Tooltip("어지러움 피드백 중 visual child가 좌우로 흔들리는 각도입니다.")]
+    private float spinDashDizzyWobbleAngle = 8f;
+
+    [SerializeField, Tooltip("어지러움 피드백 중 visual child가 흔들리는 속도입니다.")]
+    private float spinDashDizzyWobbleSpeed = 18f;
 
     [SerializeField, Tooltip("SpinDash 시작/종료 디버그 로그를 출력할지 여부입니다.")]
     private bool enableSpinDashDebugLogs = false;
@@ -140,8 +152,14 @@ public class PlayerLocomotionModule : MonoBehaviour
     private float _spinDashEndTime;
     private float _spinDashCooldownUntil;
     private Transform _resolvedSpinDashVisualRoot;
-    private Quaternion _spinDashVisualOriginalLocalRotation;
-    private bool _hasSpinDashVisualOriginalRotation;
+    private bool _isSpinDashVisualFeedbackActive;
+    private float _spinDashVisualFeedbackEndTime;
+    private float _spinDashVisualFeedbackElapsed;
+    private bool _isSpinDashDizzyFeedbackActive;
+    private float _spinDashDizzyFeedbackEndTime;
+    private Transform _spinDashFeedbackVisualRoot;
+    private Quaternion _spinDashFeedbackOriginalLocalRotation;
+    private bool _hasSpinDashFeedbackOriginalLocalRotation;
 
     public bool IsGrounded => _cc != null && _cc.isGrounded;
     public float PlanarSpeed => new Vector2(_planarVelocity.x, _planarVelocity.z).magnitude;
@@ -249,6 +267,17 @@ public class PlayerLocomotionModule : MonoBehaviour
         _cc = GetComponentInParent<CharacterController>();
     }
 
+    private void Update()
+    {
+        TickSpinDashFeedbackLocal(Time.deltaTime);
+    }
+
+    private void OnDisable()
+    {
+        StopSpinDashFeedbackLocal();
+        RestoreSpinDashFeedbackVisualLocal();
+    }
+
     public bool TickServer(Vector2 moveInput, float yawDelta, bool jumpPressed, bool sprintHeld)
     {
         if (_cc == null) return false;
@@ -283,9 +312,6 @@ public class PlayerLocomotionModule : MonoBehaviour
         // 1. 회전 처리 (A/D 탱크 회전)
         if (canUseNormalInputMovement && Mathf.Abs(turnInput) > 0f)
             ApplyTurnInput(turnInput, dt);
-
-        if (spinDashActive)
-            RotateSpinDashVisual(dt);
 
         // 2. 점프 및 중력 처리
         bool grounded = IsGrounded;
@@ -391,7 +417,7 @@ public class PlayerLocomotionModule : MonoBehaviour
         _planarVelocity = _spinDashDirection * GetFiniteNonNegative(spinDashSpeed);
         _isSprintingWithStamina = false;
 
-        PrepareSpinDashVisualRotation();
+        TriggerSpinDashVisualFeedback(duration);
         LogSpinDash($"started. duration:{duration:0.###}, cooldown:{cooldown:0.###}, direction:{_spinDashDirection}");
     }
 
@@ -407,7 +433,7 @@ public class PlayerLocomotionModule : MonoBehaviour
     {
         if (!_isSpinDashing)
         {
-            RestoreSpinDashVisualRotation();
+            StopSpinDashVisualFeedback();
             return;
         }
 
@@ -417,64 +443,235 @@ public class PlayerLocomotionModule : MonoBehaviour
         _planarVelocity = Vector3.zero;
         _isSprintingWithStamina = false;
 
-        RestoreSpinDashVisualRotation();
+        StopSpinDashVisualFeedback();
 
         if (applyStun)
         {
             PlayerStatusModule statusModule = ResolveStatusModule();
             if (statusModule != null)
                 statusModule.ServerApplyTemporaryControlLock(GetFiniteNonNegative(spinDashStunDuration), true, true, true);
+
+            TriggerSpinDashDizzyFeedback(GetSpinDashDizzyFeedbackDuration());
         }
 
         LogSpinDash($"finished. applyStun:{applyStun}");
     }
 
-    private void RotateSpinDashVisual(float deltaTime)
+    private void TriggerSpinDashVisualFeedback(float duration)
     {
-        if (!spinDashRotateVisual || !_hasSpinDashVisualOriginalRotation || _resolvedSpinDashVisualRoot == null)
+        if (!enableSpinDashVisualFeedback)
             return;
 
-        float rotationStep = GetFiniteNonNegative(spinDashVisualRotationDegreesPerSecond) * Mathf.Max(0f, deltaTime);
-        if (rotationStep <= 0f)
+        float validDuration = GetFiniteNonNegative(duration);
+        if (validDuration <= 0f)
             return;
 
-        _resolvedSpinDashVisualRoot.Rotate(0f, rotationStep, 0f, Space.Self);
+        if (IsSpawned)
+        {
+            PlaySpinDashVisualFeedbackClientRpc(validDuration);
+            return;
+        }
+
+        BeginSpinDashVisualFeedbackLocal(validDuration);
     }
 
-    private void PrepareSpinDashVisualRotation()
+    private void TriggerSpinDashDizzyFeedback(float duration)
     {
-        RestoreSpinDashVisualRotation();
-
-        if (!spinDashRotateVisual)
+        if (!enableSpinDashVisualFeedback)
             return;
 
-        if (!TryResolveSpinDashVisualRoot(out Transform visualRoot))
+        float validDuration = GetFiniteNonNegative(duration);
+        if (validDuration <= 0f)
             return;
 
-        _resolvedSpinDashVisualRoot = visualRoot;
-        _spinDashVisualOriginalLocalRotation = visualRoot.localRotation;
-        _hasSpinDashVisualOriginalRotation = true;
+        if (IsSpawned)
+        {
+            PlaySpinDashDizzyFeedbackClientRpc(validDuration);
+            return;
+        }
+
+        BeginSpinDashDizzyFeedbackLocal(validDuration);
     }
 
-    private void RestoreSpinDashVisualRotation()
+    [ClientRpc]
+    private void PlaySpinDashVisualFeedbackClientRpc(float duration)
     {
-        if (_hasSpinDashVisualOriginalRotation && _resolvedSpinDashVisualRoot != null)
-            _resolvedSpinDashVisualRoot.localRotation = _spinDashVisualOriginalLocalRotation;
-
-        _hasSpinDashVisualOriginalRotation = false;
+        BeginSpinDashVisualFeedbackLocal(duration);
     }
 
-    private bool TryResolveSpinDashVisualRoot(out Transform visualRoot)
+    [ClientRpc]
+    private void PlaySpinDashDizzyFeedbackClientRpc(float duration)
+    {
+        BeginSpinDashDizzyFeedbackLocal(duration);
+    }
+
+    [ClientRpc]
+    private void StopSpinDashVisualFeedbackClientRpc()
+    {
+        StopSpinDashFeedbackLocal();
+        RestoreSpinDashFeedbackVisualLocal();
+    }
+
+    private void BeginSpinDashVisualFeedbackLocal(float duration)
+    {
+        if (!enableSpinDashVisualFeedback || !spinDashRotateVisual)
+            return;
+
+        if (!TryPrepareSpinDashFeedbackVisualRoot(out Transform visualRoot))
+            return;
+
+        _spinDashFeedbackVisualRoot = visualRoot;
+        _isSpinDashDizzyFeedbackActive = false;
+        _isSpinDashVisualFeedbackActive = true;
+        _spinDashVisualFeedbackElapsed = 0f;
+        _spinDashVisualFeedbackEndTime = Time.time + GetFiniteNonNegative(duration);
+        _spinDashFeedbackVisualRoot.localRotation = _spinDashFeedbackOriginalLocalRotation;
+    }
+
+    private void BeginSpinDashDizzyFeedbackLocal(float duration)
+    {
+        if (!enableSpinDashVisualFeedback)
+            return;
+
+        if (!TryPrepareSpinDashFeedbackVisualRoot(out Transform visualRoot))
+            return;
+
+        _spinDashFeedbackVisualRoot = visualRoot;
+        _isSpinDashVisualFeedbackActive = false;
+        _isSpinDashDizzyFeedbackActive = true;
+        _spinDashDizzyFeedbackEndTime = Time.time + GetFiniteNonNegative(duration);
+        _spinDashFeedbackVisualRoot.localRotation = _spinDashFeedbackOriginalLocalRotation;
+    }
+
+    private void TickSpinDashFeedbackLocal(float deltaTime)
+    {
+        if (_isSpinDashVisualFeedbackActive)
+            TickSpinDashVisualFeedbackLocal(deltaTime);
+
+        if (_isSpinDashDizzyFeedbackActive)
+            TickSpinDashDizzyFeedbackLocal(deltaTime);
+    }
+
+    private void TickSpinDashVisualFeedbackLocal(float deltaTime)
+    {
+        if (!_isSpinDashVisualFeedbackActive)
+            return;
+
+        if (!EnsureSpinDashFeedbackVisualRoot())
+        {
+            StopSpinDashFeedbackLocal();
+            return;
+        }
+
+        if (Time.time >= _spinDashVisualFeedbackEndTime)
+        {
+            _isSpinDashVisualFeedbackActive = false;
+            RestoreSpinDashFeedbackVisualLocal();
+            return;
+        }
+
+        float rotationSpeed = GetFiniteNonNegative(spinDashVisualRotationDegreesPerSecond);
+        if (rotationSpeed <= 0f)
+            return;
+
+        _spinDashVisualFeedbackElapsed += Mathf.Max(0f, deltaTime);
+        float rotationAngle = _spinDashVisualFeedbackElapsed * rotationSpeed;
+        _spinDashFeedbackVisualRoot.localRotation =
+            _spinDashFeedbackOriginalLocalRotation * Quaternion.Euler(0f, rotationAngle, 0f);
+    }
+
+    private void TickSpinDashDizzyFeedbackLocal(float deltaTime)
+    {
+        if (!_isSpinDashDizzyFeedbackActive)
+            return;
+
+        if (!EnsureSpinDashFeedbackVisualRoot())
+        {
+            StopSpinDashFeedbackLocal();
+            return;
+        }
+
+        if (Time.time >= _spinDashDizzyFeedbackEndTime)
+        {
+            _isSpinDashDizzyFeedbackActive = false;
+            RestoreSpinDashFeedbackVisualLocal();
+            return;
+        }
+
+        float wobbleAngle = GetFiniteNonNegative(spinDashDizzyWobbleAngle);
+        float wobbleSpeed = GetFiniteNonNegative(spinDashDizzyWobbleSpeed);
+        if (wobbleAngle <= 0f || wobbleSpeed <= 0f)
+            return;
+
+        float wobble = Mathf.Sin(Time.time * wobbleSpeed) * wobbleAngle;
+        _spinDashFeedbackVisualRoot.localRotation =
+            _spinDashFeedbackOriginalLocalRotation * Quaternion.Euler(0f, 0f, wobble);
+    }
+
+    private void StopSpinDashFeedbackLocal()
+    {
+        _isSpinDashVisualFeedbackActive = false;
+        _isSpinDashDizzyFeedbackActive = false;
+        _spinDashVisualFeedbackElapsed = 0f;
+        _spinDashVisualFeedbackEndTime = 0f;
+        _spinDashDizzyFeedbackEndTime = 0f;
+    }
+
+    private void StopSpinDashVisualFeedback()
+    {
+        if (IsSpawned)
+        {
+            StopSpinDashVisualFeedbackClientRpc();
+            return;
+        }
+
+        StopSpinDashFeedbackLocal();
+        RestoreSpinDashFeedbackVisualLocal();
+    }
+
+    private bool TryPrepareSpinDashFeedbackVisualRoot(out Transform visualRoot)
     {
         visualRoot = null;
 
-        if (IsSafeSpinDashVisualRoot(spinDashVisualRoot))
+        if (!TryResolveSpinDashFeedbackVisualRoot(out visualRoot))
+            return false;
+
+        bool visualRootChanged = _spinDashFeedbackVisualRoot != visualRoot;
+        _spinDashFeedbackVisualRoot = visualRoot;
+        if (visualRootChanged || !_hasSpinDashFeedbackOriginalLocalRotation)
+        {
+            _spinDashFeedbackOriginalLocalRotation = visualRoot.localRotation;
+            _hasSpinDashFeedbackOriginalLocalRotation = true;
+        }
+
+        return true;
+    }
+
+    private bool EnsureSpinDashFeedbackVisualRoot()
+    {
+        if (_spinDashFeedbackVisualRoot != null)
+            return true;
+
+        return TryPrepareSpinDashFeedbackVisualRoot(out _spinDashFeedbackVisualRoot);
+    }
+
+    private void RestoreSpinDashFeedbackVisualLocal()
+    {
+        if (_hasSpinDashFeedbackOriginalLocalRotation && _spinDashFeedbackVisualRoot != null)
+            _spinDashFeedbackVisualRoot.localRotation = _spinDashFeedbackOriginalLocalRotation;
+    }
+
+    private bool TryResolveSpinDashFeedbackVisualRoot(out Transform visualRoot)
+    {
+        visualRoot = null;
+
+        if (!IsUnsafeSpinDashVisualRoot(spinDashVisualRoot))
         {
             visualRoot = spinDashVisualRoot;
             return true;
         }
 
-        if (IsSafeSpinDashVisualRoot(_resolvedSpinDashVisualRoot))
+        if (!IsUnsafeSpinDashVisualRoot(_resolvedSpinDashVisualRoot))
         {
             visualRoot = _resolvedSpinDashVisualRoot;
             return true;
@@ -487,7 +684,7 @@ public class PlayerLocomotionModule : MonoBehaviour
         for (int i = 0; i < candidates.Length; i++)
         {
             Transform candidate = candidates[i];
-            if (!IsSafeSpinDashVisualRoot(candidate) || !IsLikelySpinDashVisualRoot(candidate))
+            if (IsUnsafeSpinDashVisualRoot(candidate) || !IsLikelySpinDashVisualRoot(candidate))
                 continue;
 
             _resolvedSpinDashVisualRoot = candidate;
@@ -498,24 +695,25 @@ public class PlayerLocomotionModule : MonoBehaviour
         return false;
     }
 
-    private bool IsSafeSpinDashVisualRoot(Transform candidate)
+    private bool IsUnsafeSpinDashVisualRoot(Transform candidate)
     {
         if (candidate == null || _cc == null)
-            return false;
+            return true;
 
         Transform ccTransform = _cc.transform;
-        if (candidate == ccTransform || candidate == transform || candidate == ccTransform.root)
-            return false;
+        Transform playerRoot = transform.root;
+        if (candidate == ccTransform || candidate == transform || candidate == ccTransform.root || candidate == playerRoot)
+            return true;
 
         if (!candidate.IsChildOf(ccTransform))
-            return false;
+            return true;
 
         if (candidate.GetComponent<CharacterController>() != null ||
             candidate.GetComponent<Rigidbody>() != null ||
             candidate.GetComponent<NetworkObject>() != null)
-            return false;
+            return true;
 
-        return true;
+        return false;
     }
 
     private static bool IsLikelySpinDashVisualRoot(Transform candidate)
@@ -544,6 +742,15 @@ public class PlayerLocomotionModule : MonoBehaviour
             return false;
 
         return staminaModule.ServerTrySpendStamina(staminaCost);
+    }
+
+    private float GetSpinDashDizzyFeedbackDuration()
+    {
+        float configuredDuration = GetFiniteNonNegative(spinDashDizzyFeedbackDuration);
+        if (configuredDuration > 0f)
+            return configuredDuration;
+
+        return GetFiniteNonNegative(spinDashStunDuration);
     }
 
     private bool CanSpinDashByStatusServer()
@@ -928,6 +1135,9 @@ public class PlayerLocomotionModule : MonoBehaviour
         spinDashSpeed = GetFiniteNonNegative(spinDashSpeed);
         spinDashCooldown = GetFiniteNonNegative(spinDashCooldown);
         spinDashStunDuration = GetFiniteNonNegative(spinDashStunDuration);
+        spinDashDizzyFeedbackDuration = GetFiniteNonNegative(spinDashDizzyFeedbackDuration);
+        spinDashDizzyWobbleAngle = GetFiniteNonNegative(spinDashDizzyWobbleAngle);
+        spinDashDizzyWobbleSpeed = GetFiniteNonNegative(spinDashDizzyWobbleSpeed);
         spinDashVisualRotationDegreesPerSecond = GetFiniteNonNegative(spinDashVisualRotationDegreesPerSecond);
     }
 
