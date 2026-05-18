@@ -419,7 +419,14 @@ public class PlayerHub : NetworkBehaviour
         if (attackPressed && CanAttackNow())
             AttackServerRpc();
 
-        if (interactPressed && CanInteractNow() && interactModule != null)
+        bool consumedInteractForSpinDash = false;
+        if (interactPressed && sprintHeld && CanMoveNow() && locomotionModule != null)
+        {
+            locomotionModule.ServerTryStartSpinDash();
+            consumedInteractForSpinDash = true;
+        }
+
+        if (interactPressed && !consumedInteractForSpinDash && CanInteractNow() && interactModule != null)
         {
             if (!interactModule.HasHeldItem() && interactModule.TryFindPickupTarget(out NetworkObjectReference target))
                 TryPickupServerRpc(target);

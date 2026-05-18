@@ -62,6 +62,37 @@ public class PlayerLocomotionModule : MonoBehaviour
     [SerializeField, Tooltip("스테미너 모듈을 찾지 못했을 때 기존처럼 점프를 허용할지 여부입니다.")]
     private bool allowJumpWhenStaminaModuleMissing = true;
 
+    [Header("SpinDash")]
+    [SerializeField, Tooltip("코드 기반 SpinDash 돌진 기능을 사용할지 여부입니다.")]
+    private bool enableSpinDash = true;
+
+    [SerializeField, Tooltip("SpinDash 시작 시 소모할 스태미나입니다.")]
+    private float spinDashStaminaCost = 40f;
+
+    [SerializeField, Tooltip("SpinDash 돌진이 지속되는 시간입니다.")]
+    private float spinDashDuration = 0.6f;
+
+    [SerializeField, Tooltip("SpinDash 중 전방으로 이동하는 속도입니다.")]
+    private float spinDashSpeed = 9f;
+
+    [SerializeField, Tooltip("SpinDash 재사용 대기 시간입니다.")]
+    private float spinDashCooldown = 1.2f;
+
+    [SerializeField, Tooltip("SpinDash 종료 후 적용할 짧은 조작 잠금 시간입니다.")]
+    private float spinDashStunDuration = 0.7f;
+
+    [SerializeField, Tooltip("SpinDash 중 visual child를 코드로 회전시킬지 여부입니다.")]
+    private bool spinDashRotateVisual = true;
+
+    [SerializeField, Tooltip("SpinDash 중 visual child가 회전하는 속도입니다.")]
+    private float spinDashVisualRotationDegreesPerSecond = 1080f;
+
+    [SerializeField, Tooltip("SpinDash 중 회전시킬 비주얼 루트입니다. 비워두면 안전한 child를 자동 탐색하거나 회전을 생략합니다.")]
+    private Transform spinDashVisualRoot;
+
+    [SerializeField, Tooltip("SpinDash 시작/종료 디버그 로그를 출력할지 여부입니다.")]
+    private bool enableSpinDashDebugLogs = false;
+
     [Header("Rotate")]
     [Tooltip("서버 회전 입력 배율입니다. 값이 높을수록 같은 입력으로 더 빠르게 회전합니다.")]
     [SerializeField] private float yawScale = 1f;
@@ -102,10 +133,21 @@ public class PlayerLocomotionModule : MonoBehaviour
     private float _movementReferenceYaw;
     private bool _movementReferenceYawCaptured;
     private PlayerHub _playerHub;
+    private PlayerStatusModule _statusModule;
     private bool _isSprintingWithStamina;
+    private bool _isSpinDashing;
+    private Vector3 _spinDashDirection;
+    private float _spinDashEndTime;
+    private float _spinDashCooldownUntil;
+    private Transform _resolvedSpinDashVisualRoot;
+    private Quaternion _spinDashVisualOriginalLocalRotation;
+    private bool _hasSpinDashVisualOriginalRotation;
 
     public bool IsGrounded => _cc != null && _cc.isGrounded;
     public float PlanarSpeed => new Vector2(_planarVelocity.x, _planarVelocity.z).magnitude;
+    public bool IsSpinDashing => _isSpinDashing;
+    public float SpinDashRemainingSeconds => _isSpinDashing ? Mathf.Max(0f, _spinDashEndTime - Time.time) : 0f;
+    public float SpinDashCooldownRemainingSeconds => Mathf.Max(0f, _spinDashCooldownUntil - Time.time);
 
     public void SetExternalMoveSpeedMultiplier(string sourceKey, float multiplier)
     {
@@ -148,6 +190,60 @@ public class PlayerLocomotionModule : MonoBehaviour
         return true;
     }
 
+    public bool ServerCanStartSpinDash()
+    {
+        if (!IsServerActive())
+            return false;
+
+        if (!enableSpinDash || _isSpinDashing)
+            return false;
+
+        if (Time.time < _spinDashCooldownUntil)
+            return false;
+
+        if (_cc == null || !_cc.enabled || !gameObject.activeInHierarchy || !_cc.gameObject.activeInHierarchy)
+            return false;
+
+        if (!CanSpinDashByStatusServer())
+            return false;
+
+        if (!IsFinitePositive(spinDashDuration) || !IsFinitePositive(spinDashSpeed))
+            return false;
+
+        if (!TryGetSpinDashDirection(out _))
+            return false;
+
+        PlayerStaminaModule staminaModule = ResolveStaminaModule();
+        float staminaCost = GetFiniteNonNegative(spinDashStaminaCost);
+        if (staminaModule != null && !staminaModule.ServerCanSpendStamina(staminaCost))
+            return false;
+
+        return true;
+    }
+
+    public bool ServerTryStartSpinDash()
+    {
+        if (!ServerCanStartSpinDash())
+            return false;
+
+        if (!TryGetSpinDashDirection(out Vector3 direction))
+            return false;
+
+        if (!TrySpendSpinDashStaminaServer())
+            return false;
+
+        BeginSpinDashServer(direction);
+        return true;
+    }
+
+    public void ServerCancelSpinDash(bool applyStun)
+    {
+        if (!IsServerActive())
+            return;
+
+        FinishSpinDashServer(applyStun);
+    }
+
     private void Awake()
     {
         _cc = GetComponentInParent<CharacterController>();
@@ -160,12 +256,36 @@ public class PlayerLocomotionModule : MonoBehaviour
         float dt = Time.deltaTime;
         float forwardInput = GetForwardInput(moveInput.y);
         float turnInput = GetTurnInput(moveInput.x);
-        Vector3 inputDir = GetMoveFacingDirection(moveInput);
-        bool hasMoveInput = Mathf.Abs(forwardInput) > 0f;
+        bool spinDashActive = IsSpinDashActive();
+        bool blockNormalInputMovementThisTick = false;
+
+        if (spinDashActive)
+        {
+            if (!CanContinueSpinDashByStatusServer())
+            {
+                FinishSpinDashServer(false);
+                spinDashActive = false;
+                blockNormalInputMovementThisTick = true;
+            }
+            else if (Time.time >= _spinDashEndTime)
+            {
+                FinishSpinDashServer(true);
+                spinDashActive = false;
+                blockNormalInputMovementThisTick = true;
+            }
+        }
+
+        bool canUseNormalInputMovement =
+            !spinDashActive &&
+            !blockNormalInputMovementThisTick &&
+            CanUseNormalMovementByStatusServer();
 
         // 1. 회전 처리 (A/D 탱크 회전)
-        if (Mathf.Abs(turnInput) > 0f)
+        if (canUseNormalInputMovement && Mathf.Abs(turnInput) > 0f)
             ApplyTurnInput(turnInput, dt);
+
+        if (spinDashActive)
+            RotateSpinDashVisual(dt);
 
         // 2. 점프 및 중력 처리
         bool grounded = IsGrounded;
@@ -178,7 +298,7 @@ public class PlayerLocomotionModule : MonoBehaviour
             if (_verticalVelocity <= 0f)
                 _verticalVelocity = stickToGroundForce;
 
-            if (jumpPressed && ShouldAllowJumpWithStamina())
+            if (canUseNormalInputMovement && jumpPressed && ShouldAllowJumpWithStamina())
             {
                 _verticalVelocity = Mathf.Sqrt(jumpHeight * -2f * gravity);
                 didJump = true;
@@ -187,28 +307,38 @@ public class PlayerLocomotionModule : MonoBehaviour
 
         _verticalVelocity += gravity * dt;
 
-        // 3. 이동 속도 계산 (핵심 수정!)
-        bool shouldApplySprint = ShouldApplySprint(sprintHeld, hasMoveInput, dt);
-        float targetSpeed = shouldApplySprint ? sprintSpeed : walkSpeed;
-
-        if (hasMoveInput)
-            targetSpeed *= GetExternalMoveSpeedMultiplier();
-
-        // 전진/후진 입력이 없으면 목표 속도는 0
-        if (!hasMoveInput) targetSpeed = 0;
-
-        Vector3 desiredVelocity = inputDir * targetSpeed;
-
-        // [핵심] 입력이 있으면 '가속도', 입력이 없으면(멈출 때) '감속도' 적용
-        float currentAccel = hasMoveInput ? acceleration : deceleration;
-
-        // 부드러운 속도 변화 (Lerp)
-        _planarVelocity = Vector3.Lerp(_planarVelocity, desiredVelocity, 1f - Mathf.Exp(-currentAccel * dt));
-
-        // 속도가 아주 미세하게 남았을 때 완벽하게 0으로 만들기 (떨림 방지)
-        if (targetSpeed == 0 && _planarVelocity.sqrMagnitude < 0.01f)
+        if (spinDashActive)
         {
-            _planarVelocity = Vector3.zero;
+            TickSpinDashServer();
+        }
+        else
+        {
+            bool hasMoveInput = canUseNormalInputMovement && Mathf.Abs(forwardInput) > 0f;
+            Vector3 inputDir = hasMoveInput ? GetMoveFacingDirection(moveInput) : Vector3.zero;
+
+            // 3. 이동 속도 계산 (핵심 수정!)
+            bool shouldApplySprint = ShouldApplySprint(sprintHeld && canUseNormalInputMovement, hasMoveInput, dt);
+            float targetSpeed = shouldApplySprint ? sprintSpeed : walkSpeed;
+
+            if (hasMoveInput)
+                targetSpeed *= GetExternalMoveSpeedMultiplier();
+
+            // 전진/후진 입력이 없으면 목표 속도는 0
+            if (!hasMoveInput) targetSpeed = 0;
+
+            Vector3 desiredVelocity = inputDir * targetSpeed;
+
+            // [핵심] 입력이 있으면 '가속도', 입력이 없으면(멈출 때) '감속도' 적용
+            float currentAccel = hasMoveInput ? acceleration : deceleration;
+
+            // 부드러운 속도 변화 (Lerp)
+            _planarVelocity = Vector3.Lerp(_planarVelocity, desiredVelocity, 1f - Mathf.Exp(-currentAccel * dt));
+
+            // 속도가 아주 미세하게 남았을 때 완벽하게 0으로 만들기 (떨림 방지)
+            if (targetSpeed == 0 && _planarVelocity.sqrMagnitude < 0.01f)
+            {
+                _planarVelocity = Vector3.zero;
+            }
         }
 
         // 4. 최종 이동 적용
@@ -222,9 +352,250 @@ public class PlayerLocomotionModule : MonoBehaviour
     }
     public void ResetMotionServer()
     {
+        FinishSpinDashServer(false);
         _planarVelocity = Vector3.zero;
         _verticalVelocity = 0f;
     }
+
+    private bool IsSpinDashActive()
+    {
+        return _isSpinDashing;
+    }
+
+    private bool TryGetSpinDashDirection(out Vector3 direction)
+    {
+        direction = Vector3.zero;
+        if (_cc == null)
+            return false;
+
+        direction = _cc.transform.forward;
+        direction.y = 0f;
+
+        if (direction.sqrMagnitude <= 0.0001f)
+            return false;
+
+        direction.Normalize();
+        return IsFiniteVector(direction);
+    }
+
+    private void BeginSpinDashServer(Vector3 direction)
+    {
+        float now = Time.time;
+        float duration = GetFiniteNonNegative(spinDashDuration);
+        float cooldown = GetFiniteNonNegative(spinDashCooldown);
+
+        _isSpinDashing = true;
+        _spinDashDirection = direction;
+        _spinDashEndTime = now + duration;
+        _spinDashCooldownUntil = now + cooldown;
+        _planarVelocity = _spinDashDirection * GetFiniteNonNegative(spinDashSpeed);
+        _isSprintingWithStamina = false;
+
+        PrepareSpinDashVisualRotation();
+        LogSpinDash($"started. duration:{duration:0.###}, cooldown:{cooldown:0.###}, direction:{_spinDashDirection}");
+    }
+
+    private void TickSpinDashServer()
+    {
+        if (!_isSpinDashing)
+            return;
+
+        _planarVelocity = _spinDashDirection * GetFiniteNonNegative(spinDashSpeed);
+    }
+
+    private void FinishSpinDashServer(bool applyStun)
+    {
+        if (!_isSpinDashing)
+        {
+            RestoreSpinDashVisualRotation();
+            return;
+        }
+
+        _isSpinDashing = false;
+        _spinDashDirection = Vector3.zero;
+        _spinDashEndTime = 0f;
+        _planarVelocity = Vector3.zero;
+        _isSprintingWithStamina = false;
+
+        RestoreSpinDashVisualRotation();
+
+        if (applyStun)
+        {
+            PlayerStatusModule statusModule = ResolveStatusModule();
+            if (statusModule != null)
+                statusModule.ServerApplyTemporaryControlLock(GetFiniteNonNegative(spinDashStunDuration), true, true, true);
+        }
+
+        LogSpinDash($"finished. applyStun:{applyStun}");
+    }
+
+    private void RotateSpinDashVisual(float deltaTime)
+    {
+        if (!spinDashRotateVisual || !_hasSpinDashVisualOriginalRotation || _resolvedSpinDashVisualRoot == null)
+            return;
+
+        float rotationStep = GetFiniteNonNegative(spinDashVisualRotationDegreesPerSecond) * Mathf.Max(0f, deltaTime);
+        if (rotationStep <= 0f)
+            return;
+
+        _resolvedSpinDashVisualRoot.Rotate(0f, rotationStep, 0f, Space.Self);
+    }
+
+    private void PrepareSpinDashVisualRotation()
+    {
+        RestoreSpinDashVisualRotation();
+
+        if (!spinDashRotateVisual)
+            return;
+
+        if (!TryResolveSpinDashVisualRoot(out Transform visualRoot))
+            return;
+
+        _resolvedSpinDashVisualRoot = visualRoot;
+        _spinDashVisualOriginalLocalRotation = visualRoot.localRotation;
+        _hasSpinDashVisualOriginalRotation = true;
+    }
+
+    private void RestoreSpinDashVisualRotation()
+    {
+        if (_hasSpinDashVisualOriginalRotation && _resolvedSpinDashVisualRoot != null)
+            _resolvedSpinDashVisualRoot.localRotation = _spinDashVisualOriginalLocalRotation;
+
+        _hasSpinDashVisualOriginalRotation = false;
+    }
+
+    private bool TryResolveSpinDashVisualRoot(out Transform visualRoot)
+    {
+        visualRoot = null;
+
+        if (IsSafeSpinDashVisualRoot(spinDashVisualRoot))
+        {
+            visualRoot = spinDashVisualRoot;
+            return true;
+        }
+
+        if (IsSafeSpinDashVisualRoot(_resolvedSpinDashVisualRoot))
+        {
+            visualRoot = _resolvedSpinDashVisualRoot;
+            return true;
+        }
+
+        if (_cc == null)
+            return false;
+
+        Transform[] candidates = _cc.GetComponentsInChildren<Transform>(true);
+        for (int i = 0; i < candidates.Length; i++)
+        {
+            Transform candidate = candidates[i];
+            if (!IsSafeSpinDashVisualRoot(candidate) || !IsLikelySpinDashVisualRoot(candidate))
+                continue;
+
+            _resolvedSpinDashVisualRoot = candidate;
+            visualRoot = candidate;
+            return true;
+        }
+
+        return false;
+    }
+
+    private bool IsSafeSpinDashVisualRoot(Transform candidate)
+    {
+        if (candidate == null || _cc == null)
+            return false;
+
+        Transform ccTransform = _cc.transform;
+        if (candidate == ccTransform || candidate == transform || candidate == ccTransform.root)
+            return false;
+
+        if (!candidate.IsChildOf(ccTransform))
+            return false;
+
+        if (candidate.GetComponent<CharacterController>() != null ||
+            candidate.GetComponent<Rigidbody>() != null ||
+            candidate.GetComponent<NetworkObject>() != null)
+            return false;
+
+        return true;
+    }
+
+    private static bool IsLikelySpinDashVisualRoot(Transform candidate)
+    {
+        if (candidate == null || string.IsNullOrEmpty(candidate.name))
+            return false;
+
+        string candidateName = candidate.name;
+        return candidateName.IndexOf("visual", System.StringComparison.OrdinalIgnoreCase) >= 0 ||
+               candidateName.IndexOf("body", System.StringComparison.OrdinalIgnoreCase) >= 0 ||
+               candidateName.IndexOf("model", System.StringComparison.OrdinalIgnoreCase) >= 0 ||
+               candidateName.IndexOf("mesh", System.StringComparison.OrdinalIgnoreCase) >= 0;
+    }
+
+    private bool TrySpendSpinDashStaminaServer()
+    {
+        float staminaCost = GetFiniteNonNegative(spinDashStaminaCost);
+        if (staminaCost <= 0f)
+            return true;
+
+        PlayerStaminaModule staminaModule = ResolveStaminaModule();
+        if (staminaModule == null)
+            return true;
+
+        if (!staminaModule.ServerCanSpendStamina(staminaCost))
+            return false;
+
+        return staminaModule.ServerTrySpendStamina(staminaCost);
+    }
+
+    private bool CanSpinDashByStatusServer()
+    {
+        PlayerStatusModule statusModule = ResolveStatusModule();
+        if (statusModule == null)
+            return false;
+
+        if (statusModule.IsEliminated)
+            return false;
+
+        return statusModule.CanMove;
+    }
+
+    private bool CanContinueSpinDashByStatusServer()
+    {
+        PlayerStatusModule statusModule = ResolveStatusModule();
+        if (statusModule == null)
+            return false;
+
+        if (statusModule.IsEliminated)
+            return false;
+
+        return statusModule.CanMove;
+    }
+
+    private bool CanUseNormalMovementByStatusServer()
+    {
+        PlayerStatusModule statusModule = ResolveStatusModule();
+        return statusModule == null || statusModule.CanMove;
+    }
+
+    private PlayerStatusModule ResolveStatusModule()
+    {
+        if (_statusModule != null)
+            return _statusModule;
+
+        if (_playerHub == null)
+            _playerHub = GetComponentInParent<PlayerHub>();
+
+        if (_playerHub != null)
+            _statusModule = _playerHub.GetComponentInChildren<PlayerStatusModule>(true);
+
+        if (_statusModule == null)
+            _statusModule = GetComponentInParent<PlayerStatusModule>();
+
+        if (_statusModule == null)
+            _statusModule = GetComponentInChildren<PlayerStatusModule>(true);
+
+        return _statusModule;
+    }
+
     private void ResolveBodyOverlapServer()
     {
         if (_cc == null) return;
@@ -521,6 +892,30 @@ public class PlayerLocomotionModule : MonoBehaviour
         return IsFiniteFloat(value) && value > 0f;
     }
 
+    private static bool IsFiniteVector(Vector3 value)
+    {
+        return IsFiniteFloat(value.x) && IsFiniteFloat(value.y) && IsFiniteFloat(value.z);
+    }
+
+    private static float GetFiniteNonNegative(float value)
+    {
+        return IsFiniteFloat(value) ? Mathf.Max(0f, value) : 0f;
+    }
+
+    private static bool IsServerActive()
+    {
+        NetworkManager networkManager = NetworkManager.Singleton;
+        return networkManager != null && networkManager.IsServer;
+    }
+
+    private void LogSpinDash(string message)
+    {
+        if (!enableSpinDashDebugLogs)
+            return;
+
+        Debug.Log($"[SpinDash] {message}", this);
+    }
+
     private void OnValidate()
     {
         sprintStaminaCostPerSecond = Mathf.Max(0f, sprintStaminaCostPerSecond);
@@ -528,6 +923,12 @@ public class PlayerLocomotionModule : MonoBehaviour
         sprintMinimumStaminaToContinue = Mathf.Max(0f, sprintMinimumStaminaToContinue);
         jumpStaminaCost = Mathf.Max(0f, jumpStaminaCost);
         jumpMinimumStaminaToStart = Mathf.Max(0f, jumpMinimumStaminaToStart);
+        spinDashStaminaCost = GetFiniteNonNegative(spinDashStaminaCost);
+        spinDashDuration = GetFiniteNonNegative(spinDashDuration);
+        spinDashSpeed = GetFiniteNonNegative(spinDashSpeed);
+        spinDashCooldown = GetFiniteNonNegative(spinDashCooldown);
+        spinDashStunDuration = GetFiniteNonNegative(spinDashStunDuration);
+        spinDashVisualRotationDegreesPerSecond = GetFiniteNonNegative(spinDashVisualRotationDegreesPerSecond);
     }
 
 }
