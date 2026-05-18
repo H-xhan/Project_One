@@ -99,6 +99,12 @@ public class PlayerLocomotionModule : NetworkBehaviour
     [SerializeField, Tooltip("SpinDash 중 visual child가 회전하는 속도입니다.")]
     private float spinDashVisualRotationDegreesPerSecond = 1080f;
 
+    [SerializeField, Tooltip("SpinDash 중 현재 들고 있는 무기 자세 오버라이드를 사용할지 여부입니다.")]
+    private bool enableSpinDashHeldItemPose = true;
+
+    [SerializeField, Tooltip("SpinDash 중 현재 들고 있는 무기에 추가로 적용할 로컬 오일러 회전 오프셋입니다.")]
+    private Vector3 spinDashHeldItemEulerOffset = new Vector3(0f, 0f, 90f);
+
     [SerializeField, Tooltip("SpinDash visual feedback이 사용할 회전축입니다. 모델 local 축이 어긋나면 WorldUp 또는 ParentUp을 사용합니다.")]
     private SpinDashVisualRotationAxis spinDashVisualRotationAxis = SpinDashVisualRotationAxis.WorldUp;
 
@@ -161,6 +167,7 @@ public class PlayerLocomotionModule : NetworkBehaviour
     private bool _movementReferenceYawCaptured;
     private PlayerHub _playerHub;
     private PlayerStatusModule _statusModule;
+    private PlayerInteractModule _interactModule;
     private bool _isSprintingWithStamina;
     private bool _isSpinDashing;
     private Vector3 _spinDashDirection;
@@ -478,7 +485,7 @@ public class PlayerLocomotionModule : NetworkBehaviour
 
     private void TriggerSpinDashVisualFeedback(float duration)
     {
-        if (!enableSpinDashVisualFeedback)
+        if (!enableSpinDashVisualFeedback && !enableSpinDashHeldItemPose)
             return;
 
         float validDuration = GetFiniteNonNegative(duration);
@@ -493,7 +500,7 @@ public class PlayerLocomotionModule : NetworkBehaviour
 
     private void TriggerSpinDashDizzyFeedback(float duration)
     {
-        if (!enableSpinDashVisualFeedback)
+        if (!enableSpinDashVisualFeedback && !enableSpinDashHeldItemPose)
             return;
 
         float validDuration = GetFiniteNonNegative(duration);
@@ -527,34 +534,67 @@ public class PlayerLocomotionModule : NetworkBehaviour
 
     private void BeginSpinDashVisualFeedbackLocal(float duration)
     {
-        if (!enableSpinDashVisualFeedback || !spinDashRotateVisual)
+        bool shouldStartVisualRotation = enableSpinDashVisualFeedback && spinDashRotateVisual;
+        bool shouldApplyHeldItemPose = enableSpinDashHeldItemPose;
+        if (!shouldStartVisualRotation && !shouldApplyHeldItemPose)
             return;
 
-        if (!TryPrepareSpinDashFeedbackVisualRoot(out Transform visualRoot))
-            return;
+        bool hasPreparedVisualRoots = false;
+        if (shouldStartVisualRotation)
+        {
+            if (!TryPrepareSpinDashFeedbackVisualRoot(out _))
+            {
+                if (!shouldApplyHeldItemPose)
+                    return;
+            }
+            else
+            {
+                hasPreparedVisualRoots = true;
+            }
+        }
 
         _isSpinDashDizzyFeedbackActive = false;
-        _isSpinDashVisualFeedbackActive = true;
+        _isSpinDashVisualFeedbackActive = hasPreparedVisualRoots;
         _spinDashVisualFeedbackElapsed = 0f;
         _spinDashVisualFeedbackEndTime = Time.time + GetFiniteNonNegative(duration);
-        RestoreSpinDashFeedbackVisualLocal();
-        LogSpinDashVisual($"RotationAxis={spinDashVisualRotationAxis}");
-        LogSpinDashVisual($"Start roots={GetSpinDashFeedbackRootsLabel()} duration={duration:0.###}");
+
+        if (hasPreparedVisualRoots)
+        {
+            RestoreSpinDashFeedbackVisualLocal();
+            LogSpinDashVisual($"RotationAxis={spinDashVisualRotationAxis}");
+            LogSpinDashVisual($"Start roots={GetSpinDashFeedbackRootsLabel()} duration={duration:0.###}");
+        }
+
+        ApplySpinDashHeldItemPoseLocal();
     }
 
     private void BeginSpinDashDizzyFeedbackLocal(float duration)
     {
-        if (!enableSpinDashVisualFeedback)
+        if (!enableSpinDashVisualFeedback && !enableSpinDashHeldItemPose)
             return;
 
-        if (!TryPrepareSpinDashFeedbackVisualRoot(out Transform visualRoot))
-            return;
+        bool hasPreparedVisualRoots = false;
+        if (enableSpinDashVisualFeedback)
+        {
+            if (!TryPrepareSpinDashFeedbackVisualRoot(out _))
+            {
+                if (!enableSpinDashHeldItemPose)
+                    return;
+            }
+            else
+            {
+                hasPreparedVisualRoots = true;
+            }
+        }
 
         _isSpinDashVisualFeedbackActive = false;
-        _isSpinDashDizzyFeedbackActive = true;
+        _isSpinDashDizzyFeedbackActive = hasPreparedVisualRoots;
         _spinDashDizzyFeedbackEndTime = Time.time + GetFiniteNonNegative(duration);
         RestoreSpinDashFeedbackVisualLocal();
-        LogSpinDashVisual($"Dizzy roots={GetSpinDashFeedbackRootsLabel()} duration={duration:0.###}");
+        RestoreSpinDashHeldItemPoseLocal();
+
+        if (hasPreparedVisualRoots)
+            LogSpinDashVisual($"Dizzy roots={GetSpinDashFeedbackRootsLabel()} duration={duration:0.###}");
     }
 
     private void TickSpinDashFeedbackLocal(float deltaTime)
@@ -627,6 +667,7 @@ public class PlayerLocomotionModule : NetworkBehaviour
         _spinDashVisualFeedbackElapsed = 0f;
         _spinDashVisualFeedbackEndTime = 0f;
         _spinDashDizzyFeedbackEndTime = 0f;
+        RestoreSpinDashHeldItemPoseLocal();
     }
 
     private void StopSpinDashVisualFeedback()
@@ -738,6 +779,35 @@ public class PlayerLocomotionModule : NetworkBehaviour
         }
 
         return false;
+    }
+
+    private void ApplySpinDashHeldItemPoseLocal()
+    {
+        if (!enableSpinDashHeldItemPose)
+            return;
+
+        PlayerInteractModule interactModule = ResolveInteractModule();
+        if (interactModule == null)
+            return;
+
+        if (interactModule.GetHeldItemVisualTransform() == null)
+            return;
+
+        interactModule.SetExternalHeldItemPoseOverride(spinDashHeldItemEulerOffset, "SpinDash");
+        LogSpinDashVisual("Held item pose override set source=SpinDash");
+    }
+
+    private void RestoreSpinDashHeldItemPoseLocal()
+    {
+        PlayerInteractModule interactModule = ResolveInteractModule();
+        if (interactModule == null)
+            return;
+
+        if (!interactModule.HasExternalHeldItemPoseOverride)
+            return;
+
+        interactModule.ClearExternalHeldItemPoseOverride("SpinDash");
+        LogSpinDashVisual("Held item pose override cleared source=SpinDash");
     }
 
     private bool TryAddSpinDashFeedbackRoot(Transform candidate, List<Transform> roots, HashSet<int> seenRootIds, bool isExplicit)
@@ -934,6 +1004,26 @@ public class PlayerLocomotionModule : NetworkBehaviour
             _statusModule = GetComponentInChildren<PlayerStatusModule>(true);
 
         return _statusModule;
+    }
+
+    private PlayerInteractModule ResolveInteractModule()
+    {
+        if (_interactModule != null)
+            return _interactModule;
+
+        if (_playerHub == null)
+            _playerHub = GetComponentInParent<PlayerHub>();
+
+        if (_playerHub != null)
+            _interactModule = _playerHub.GetComponentInChildren<PlayerInteractModule>(true);
+
+        if (_interactModule == null)
+            _interactModule = GetComponentInParent<PlayerInteractModule>();
+
+        if (_interactModule == null)
+            _interactModule = GetComponentInChildren<PlayerInteractModule>(true);
+
+        return _interactModule;
     }
 
     private void ResolveBodyOverlapServer()

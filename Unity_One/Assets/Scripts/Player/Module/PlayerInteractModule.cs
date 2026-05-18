@@ -91,6 +91,12 @@ public class PlayerInteractModule : NetworkBehaviour
     private bool _attached;
     private bool _dropInProgress;
     private float _pendingStartTime;
+    private bool _hasExternalHeldItemPoseOverride;
+    private Vector3 _externalHeldItemPoseEulerOffset;
+    private string _externalHeldItemPoseSource;
+    private bool _isRefreshingExternalHeldItemPose;
+    private bool _isClearingHeldRuntimeCache;
+    private bool _isClearingExternalHeldItemPose;
 
     private NetworkObject _heldCache;
     private ItemPickupNetwork _heldPickup;
@@ -144,8 +150,19 @@ public class PlayerInteractModule : NetworkBehaviour
     public override void OnNetworkDespawn()
     {
         _heldItem.OnValueChanged -= OnHeldItemChanged;
+        ClearExternalHeldItemPoseOverrideInternal("NetworkDespawn", false);
         DestroyLocalHeldVisual();
         base.OnNetworkDespawn();
+    }
+
+    private void OnDisable()
+    {
+        ClearExternalHeldItemPoseOverrideInternal("OnDisable", false);
+    }
+
+    private void OnDestroy()
+    {
+        ClearExternalHeldItemPoseOverrideInternal("OnDestroy", false);
     }
 
     private void AutoFindRefs()
@@ -178,7 +195,7 @@ public class PlayerInteractModule : NetworkBehaviour
 
     private void OnHeldItemChanged(NetworkObjectReference previousValue, NetworkObjectReference newValue)
     {
-        bool hadHeldItem = previousValue.TryGet(out NetworkObject previousItem) && previousItem != null;
+        bool hadHeldItem = TryGetNetworkObjectSafe(previousValue, out NetworkObject previousItem) && previousItem != null;
 
         RestorePreviousWorldItemVisual(previousValue);
 
@@ -212,6 +229,9 @@ public class PlayerInteractModule : NetworkBehaviour
 
     private void LateUpdate()
     {
+        if (_hasExternalHeldItemPoseOverride)
+            ForceRefreshHeldItemPoseForExternalOverride();
+
         if (!_attached || !ShouldMaintainWorldAttachFallback()) return;
         TryApplyHeldWorldPose(false);
     }
@@ -272,6 +292,32 @@ public class PlayerInteractModule : NetworkBehaviour
             CacheHeldMeta();
 
         return _heldWeaponData;
+    }
+
+    public void SetExternalHeldItemPoseOverride(Vector3 eulerOffset, string source = null)
+    {
+        _hasExternalHeldItemPoseOverride = true;
+        _externalHeldItemPoseEulerOffset = eulerOffset;
+        _externalHeldItemPoseSource = source;
+        if (HasActiveHeldItemTargetForExternalPose())
+            ForceRefreshHeldItemPoseForExternalOverride();
+
+        Log($"[PlayerInteract] External held item pose override set source={source ?? "<null>"} offset={eulerOffset}");
+    }
+
+    public void ClearExternalHeldItemPoseOverride(string source = null)
+    {
+        ClearExternalHeldItemPoseOverrideInternal(source, true);
+    }
+
+    public bool HasExternalHeldItemPoseOverride => _hasExternalHeldItemPoseOverride;
+
+    public Transform GetHeldItemVisualTransform()
+    {
+        if (_localHeldVisualInstance != null)
+            return _localHeldVisualInstance.transform;
+
+        return _heldCache != null && _heldCache.IsSpawned ? _heldCache.transform : null;
     }
 
     public bool TryFindPickupTarget(out NetworkObjectReference target)
@@ -366,6 +412,7 @@ public class PlayerInteractModule : NetworkBehaviour
         NetworkObject netObj = _heldCache;
         bool usedLocalVisual = _useLocalHeldVisual;
         _dropInProgress = true;
+        ClearExternalHeldItemPoseOverrideInternal("ServerTryDrop", true);
 
         _attached = false;
         _pendingAttach = false;
@@ -501,7 +548,18 @@ public class PlayerInteractModule : NetworkBehaviour
         if (_heldCache != null && _heldCache.IsSpawned)
             return true;
 
-        if (_heldItem.Value.TryGet(out NetworkObject netObj))
+        if (_isClearingHeldRuntimeCache || _isClearingExternalHeldItemPose)
+            return false;
+
+        NetworkManager networkManager = NetworkManager.Singleton;
+        if (networkManager == null || networkManager.SpawnManager == null)
+        {
+            ClearHeldRuntimeCache();
+            _hasLastRequestedHeldPose = false;
+            return false;
+        }
+
+        if (TryGetNetworkObjectSafe(_heldItem.Value, out NetworkObject netObj))
         {
             _heldCache = netObj;
             _heldPickup = _heldCache != null ? _heldCache.GetComponent<ItemPickupNetwork>() : null;
@@ -525,9 +583,12 @@ public class PlayerInteractModule : NetworkBehaviour
 
         Vector3 localPos = _hasCachedMeta ? _cachedLocalPos : defaultHeldLocalPosition;
         Vector3 localEuler = _hasCachedMeta ? _cachedLocalEuler : defaultHeldLocalEulerAngles;
+        Quaternion localRotation = Quaternion.Euler(localEuler);
+        if (_hasExternalHeldItemPoseOverride)
+            localRotation *= Quaternion.Euler(_externalHeldItemPoseEulerOffset);
 
         pos = handSocket.TransformPoint(localPos);
-        rot = handSocket.rotation * Quaternion.Euler(localEuler);
+        rot = handSocket.rotation * localRotation;
         return true;
     }
 
@@ -588,7 +649,7 @@ public class PlayerInteractModule : NetworkBehaviour
             return false;
 
         Vector3 expectedWorldPos = handSocket.TransformPoint(_cachedLocalPos);
-        Quaternion expectedWorldRot = handSocket.rotation * Quaternion.Euler(_cachedLocalEuler);
+        Quaternion expectedWorldRot = handSocket.rotation * GetHeldItemLocalRotation();
 
         float positionDelta = Vector3.Distance(visualRoot.position, expectedWorldPos);
         float rotationDelta = Quaternion.Angle(visualRoot.rotation, expectedWorldRot);
@@ -755,7 +816,7 @@ public class PlayerInteractModule : NetworkBehaviour
 
     private void RestorePreviousWorldItemVisual(NetworkObjectReference previousValue)
     {
-        if (!previousValue.TryGet(out NetworkObject prevNetObj))
+        if (!TryGetNetworkObjectSafe(previousValue, out NetworkObject prevNetObj))
             return;
 
         if (prevNetObj == null || !prevNetObj.IsSpawned)
@@ -786,11 +847,20 @@ public class PlayerInteractModule : NetworkBehaviour
 
     private void ClearHeldRuntimeCache()
     {
-        _heldCache = null;
-        _heldPickup = null;
-        _heldItemData = null;
-        _heldWeaponData = null;
-        _hasLastRequestedHeldPose = false;
+        _isClearingHeldRuntimeCache = true;
+        try
+        {
+            ClearExternalHeldItemPoseOverrideInternal("ClearHeldRuntimeCache", false);
+            _heldCache = null;
+            _heldPickup = null;
+            _heldItemData = null;
+            _heldWeaponData = null;
+            _hasLastRequestedHeldPose = false;
+        }
+        finally
+        {
+            _isClearingHeldRuntimeCache = false;
+        }
     }
 
     private void ResetHeldMetaCache()
@@ -911,7 +981,7 @@ public class PlayerInteractModule : NetworkBehaviour
             _localHeldVisualInstance.transform.SetParent(handSocket, false);
 
         _localHeldVisualInstance.transform.localPosition = _cachedLocalPos;
-        _localHeldVisualInstance.transform.localRotation = Quaternion.Euler(_cachedLocalEuler);
+        _localHeldVisualInstance.transform.localRotation = GetHeldItemLocalRotation();
         _localHeldVisualInstance.transform.localScale = SanitizeVisualScale(_cachedLocalScale);
         _localHeldVisualReady = true;
     }
@@ -1147,6 +1217,116 @@ public class PlayerInteractModule : NetworkBehaviour
         return SanitizeVisualScale(_hasCachedMeta ? _cachedLocalScale : defaultHeldLocalScale);
     }
 
+    private Quaternion GetHeldItemLocalRotation()
+    {
+        Quaternion baseRotation = Quaternion.Euler(_cachedLocalEuler);
+        if (!_hasExternalHeldItemPoseOverride)
+            return baseRotation;
+
+        return baseRotation * Quaternion.Euler(_externalHeldItemPoseEulerOffset);
+    }
+
+    private void ForceRefreshHeldItemPoseForExternalOverride()
+    {
+        if (_isRefreshingExternalHeldItemPose || _isClearingHeldRuntimeCache || _isClearingExternalHeldItemPose)
+            return;
+
+        _isRefreshingExternalHeldItemPose = true;
+        try
+        {
+            if (TryForceApplyExternalPoseToLocalHeldVisual(true))
+                return;
+
+            if (TryForceApplyExternalPoseToWorldHeldItem(true))
+                return;
+
+            if ((_hasExternalHeldItemPoseOverride || _localHeldVisualInstance != null || (_heldCache != null && _heldCache.IsSpawned)) && enableDebugLogs)
+                Debug.LogWarning("[PlayerInteract] External held item pose target is null.", this);
+        }
+        finally
+        {
+            _isRefreshingExternalHeldItemPose = false;
+        }
+    }
+
+    private bool TryForceApplyExternalPoseToLocalHeldVisual(bool logOnce)
+    {
+        if (_localHeldVisualInstance == null)
+            return false;
+
+        Transform visualTransform = _localHeldVisualInstance.transform;
+        if (visualTransform == null)
+            return false;
+
+        Vector3 beforeEuler = visualTransform.localEulerAngles;
+        visualTransform.localPosition = _cachedLocalPos;
+        visualTransform.localRotation = GetHeldItemLocalRotation();
+        visualTransform.localScale = SanitizeVisualScale(_cachedLocalScale);
+        _localHeldVisualReady = true;
+
+        if (logOnce && enableDebugLogs)
+        {
+            Vector3 afterEuler = visualTransform.localEulerAngles;
+            if (_hasExternalHeldItemPoseOverride)
+            {
+                Debug.Log($"[PlayerInteract] External held item pose apply target={visualTransform.name} before={FormatEuler(beforeEuler)} after={FormatEuler(afterEuler)} offset={FormatEuler(_externalHeldItemPoseEulerOffset)} source={_externalHeldItemPoseSource ?? "<null>"}", this);
+            }
+            else
+            {
+                Debug.Log($"[PlayerInteract] External held item pose restore target={visualTransform.name} before={FormatEuler(beforeEuler)} after={FormatEuler(afterEuler)} source={_externalHeldItemPoseSource ?? "<null>"}", this);
+            }
+        }
+
+        return true;
+    }
+
+    private bool TryForceApplyExternalPoseToWorldHeldItem(bool logOnce)
+    {
+        if (_heldCache == null || !_heldCache.IsSpawned)
+            return false;
+
+        if (!ShouldMaintainWorldAttachFallback())
+            return false;
+
+        Transform worldTransform = _heldCache != null ? _heldCache.transform : null;
+        if (worldTransform == null)
+            return false;
+
+        Vector3 beforeEuler = worldTransform.eulerAngles;
+        if (!TryApplyHeldWorldPose(true))
+        {
+            if (!TryGetHandWorldPose(out Vector3 handPos, out Quaternion handRot))
+                return false;
+
+            Vector3 heldWorldScale = GetHeldWorldScale();
+            ApplyWorldItemPose(_heldCache, handPos, handRot, heldWorldScale, true);
+            _lastRequestedHeldWorldPosition = handPos;
+            _lastRequestedHeldWorldRotation = handRot;
+            _lastRequestedHeldWorldScale = heldWorldScale;
+            _hasLastRequestedHeldPose = true;
+        }
+
+        if (logOnce && enableDebugLogs)
+        {
+            Vector3 afterEuler = worldTransform.eulerAngles;
+            if (_hasExternalHeldItemPoseOverride)
+            {
+                Debug.Log($"[PlayerInteract] External held item pose apply target={worldTransform.name} before={FormatEuler(beforeEuler)} after={FormatEuler(afterEuler)} offset={FormatEuler(_externalHeldItemPoseEulerOffset)} source={_externalHeldItemPoseSource ?? "<null>"}", this);
+            }
+            else
+            {
+                Debug.Log($"[PlayerInteract] External held item pose restore target={worldTransform.name} before={FormatEuler(beforeEuler)} after={FormatEuler(afterEuler)} source={_externalHeldItemPoseSource ?? "<null>"}", this);
+            }
+        }
+
+        return true;
+    }
+
+    private static string FormatEuler(Vector3 euler)
+    {
+        return $"({euler.x:0.00}, {euler.y:0.00}, {euler.z:0.00})";
+    }
+
     private Vector3 GetDefaultWorldItemScale()
     {
         if (_heldPickup != null)
@@ -1165,6 +1345,7 @@ public class PlayerInteractModule : NetworkBehaviour
 
     private void DestroyLocalHeldVisual()
     {
+        ClearExternalHeldItemPoseOverrideInternal("DestroyLocalHeldVisual", false);
         _localHeldVisualReady = false;
 
         if (_localHeldVisualInstance == null)
@@ -1177,6 +1358,55 @@ public class PlayerInteractModule : NetworkBehaviour
 
         _localHeldVisualInstance = null;
         _localHeldVisualSourcePrefab = null;
+    }
+
+    private void ClearExternalHeldItemPoseOverrideInternal(string source, bool refreshExistingTarget)
+    {
+        if (_isClearingExternalHeldItemPose)
+            return;
+
+        bool hadOverride = _hasExternalHeldItemPoseOverride;
+        bool shouldRefreshExistingTarget = hadOverride && refreshExistingTarget && HasActiveHeldItemTargetForExternalPose();
+        string sourceForLog = source ?? _externalHeldItemPoseSource;
+
+        _isClearingExternalHeldItemPose = true;
+        try
+        {
+            _externalHeldItemPoseSource = sourceForLog;
+            _hasExternalHeldItemPoseOverride = false;
+            _externalHeldItemPoseEulerOffset = Vector3.zero;
+        }
+        finally
+        {
+            _isClearingExternalHeldItemPose = false;
+        }
+
+        if (shouldRefreshExistingTarget)
+            ForceRefreshHeldItemPoseForExternalOverride();
+
+        _externalHeldItemPoseSource = null;
+
+        if (hadOverride)
+            Log($"[PlayerInteract] External held item pose override cleared source={sourceForLog ?? "<null>"}");
+    }
+
+    private bool HasActiveHeldItemTargetForExternalPose()
+    {
+        if (_localHeldVisualInstance != null)
+            return true;
+
+        return _heldCache != null && _heldCache.IsSpawned && ShouldMaintainWorldAttachFallback();
+    }
+
+    private static bool TryGetNetworkObjectSafe(NetworkObjectReference reference, out NetworkObject networkObject)
+    {
+        networkObject = null;
+
+        NetworkManager networkManager = NetworkManager.Singleton;
+        if (networkManager == null || networkManager.SpawnManager == null)
+            return false;
+
+        return reference.TryGet(out networkObject) && networkObject != null;
     }
 
     private void Log(string message)

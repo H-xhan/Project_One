@@ -796,7 +796,7 @@ MonoBehaviour:
   throwUpForce: 2
   dropHandForwardOffset: 0.15
   dropHandUpOffset: 0.05
-  enableDebugLogs: 0
+  enableDebugLogs: 1
 --- !u!114 &8954747350643904218
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -830,12 +830,15 @@ MonoBehaviour:
   enableSpinDash: 1
   enableSpinDashVisualFeedback: 1
   spinDashStaminaCost: 40
-  spinDashDuration: 0.6
-  spinDashSpeed: 9
+  spinDashDuration: 1.2
+  spinDashSpeed: 5
   spinDashCooldown: 1.2
   spinDashStunDuration: 0.7
   spinDashRotateVisual: 1
   spinDashVisualRotationDegreesPerSecond: 1080
+  enableSpinDashHeldItemPose: 1
+  spinDashHeldItemEulerOffset: {x: 90, y: 0, z: 0}
+  spinDashVisualRotationAxis: 0
   spinDashVisualRoot: {fileID: 0}
   spinDashVisualRoots:
   - {fileID: 8179533393818453010}
