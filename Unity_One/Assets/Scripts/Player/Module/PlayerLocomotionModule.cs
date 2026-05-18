@@ -267,12 +267,17 @@ public class PlayerLocomotionModule : NetworkBehaviour
         _cc = GetComponentInParent<CharacterController>();
     }
 
-    private void Update()
+    private void LateUpdate()
     {
         TickSpinDashFeedbackLocal(Time.deltaTime);
     }
 
     private void OnDisable()
+    {
+        StopSpinDashVisualFeedback();
+    }
+
+    private void OnDestroy()
     {
         StopSpinDashFeedbackLocal();
         RestoreSpinDashFeedbackVisualLocal();
@@ -467,12 +472,9 @@ public class PlayerLocomotionModule : NetworkBehaviour
             return;
 
         if (IsSpawned)
-        {
             PlaySpinDashVisualFeedbackClientRpc(validDuration);
-            return;
-        }
-
-        BeginSpinDashVisualFeedbackLocal(validDuration);
+        else
+            BeginSpinDashVisualFeedbackLocal(validDuration);
     }
 
     private void TriggerSpinDashDizzyFeedback(float duration)
@@ -485,12 +487,9 @@ public class PlayerLocomotionModule : NetworkBehaviour
             return;
 
         if (IsSpawned)
-        {
             PlaySpinDashDizzyFeedbackClientRpc(validDuration);
-            return;
-        }
-
-        BeginSpinDashDizzyFeedbackLocal(validDuration);
+        else
+            BeginSpinDashDizzyFeedbackLocal(validDuration);
     }
 
     [ClientRpc]
@@ -526,6 +525,7 @@ public class PlayerLocomotionModule : NetworkBehaviour
         _spinDashVisualFeedbackElapsed = 0f;
         _spinDashVisualFeedbackEndTime = Time.time + GetFiniteNonNegative(duration);
         _spinDashFeedbackVisualRoot.localRotation = _spinDashFeedbackOriginalLocalRotation;
+        LogSpinDashVisual($"Start root={_spinDashFeedbackVisualRoot.name} duration={duration:0.###}");
     }
 
     private void BeginSpinDashDizzyFeedbackLocal(float duration)
@@ -541,6 +541,7 @@ public class PlayerLocomotionModule : NetworkBehaviour
         _isSpinDashDizzyFeedbackActive = true;
         _spinDashDizzyFeedbackEndTime = Time.time + GetFiniteNonNegative(duration);
         _spinDashFeedbackVisualRoot.localRotation = _spinDashFeedbackOriginalLocalRotation;
+        LogSpinDashVisual($"Dizzy root={_spinDashFeedbackVisualRoot.name} duration={duration:0.###}");
     }
 
     private void TickSpinDashFeedbackLocal(float deltaTime)
@@ -634,7 +635,10 @@ public class PlayerLocomotionModule : NetworkBehaviour
         visualRoot = null;
 
         if (!TryResolveSpinDashFeedbackVisualRoot(out visualRoot))
+        {
+            LogSpinDashVisualWarning("No safe visual root found");
             return false;
+        }
 
         bool visualRootChanged = _spinDashFeedbackVisualRoot != visualRoot;
         _spinDashFeedbackVisualRoot = visualRoot;
@@ -658,14 +662,17 @@ public class PlayerLocomotionModule : NetworkBehaviour
     private void RestoreSpinDashFeedbackVisualLocal()
     {
         if (_hasSpinDashFeedbackOriginalLocalRotation && _spinDashFeedbackVisualRoot != null)
+        {
             _spinDashFeedbackVisualRoot.localRotation = _spinDashFeedbackOriginalLocalRotation;
+            LogSpinDashVisual($"Restore root={_spinDashFeedbackVisualRoot.name}");
+        }
     }
 
     private bool TryResolveSpinDashFeedbackVisualRoot(out Transform visualRoot)
     {
         visualRoot = null;
 
-        if (!IsUnsafeSpinDashVisualRoot(spinDashVisualRoot))
+        if (!IsUnsafeExplicitVisualRoot(spinDashVisualRoot))
         {
             visualRoot = spinDashVisualRoot;
             return true;
@@ -691,6 +698,27 @@ public class PlayerLocomotionModule : NetworkBehaviour
             visualRoot = candidate;
             return true;
         }
+
+        return false;
+    }
+
+    private bool IsUnsafeExplicitVisualRoot(Transform candidate)
+    {
+        if (candidate == null)
+            return true;
+
+        if (_cc == null)
+            return false;
+
+        Transform ccTransform = _cc.transform;
+        Transform playerRoot = transform.root;
+        if (candidate == ccTransform || candidate == transform || candidate == ccTransform.root || candidate == playerRoot)
+            return true;
+
+        if (candidate.GetComponent<CharacterController>() != null ||
+            candidate.GetComponent<Rigidbody>() != null ||
+            candidate.GetComponent<NetworkObject>() != null)
+            return true;
 
         return false;
     }
@@ -1113,6 +1141,22 @@ public class PlayerLocomotionModule : NetworkBehaviour
     {
         NetworkManager networkManager = NetworkManager.Singleton;
         return networkManager != null && networkManager.IsServer;
+    }
+
+    private void LogSpinDashVisual(string message)
+    {
+        if (!enableSpinDashDebugLogs)
+            return;
+
+        Debug.Log($"[SpinDashVisual] {message}", this);
+    }
+
+    private void LogSpinDashVisualWarning(string message)
+    {
+        if (!enableSpinDashDebugLogs)
+            return;
+
+        Debug.LogWarning($"[SpinDashVisual] {message}", this);
     }
 
     private void LogSpinDash(string message)
