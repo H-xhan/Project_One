@@ -422,7 +422,15 @@ public class PlayerHub : NetworkBehaviour
         bool consumedInteractForSpinDash = false;
         if (interactPressed && sprintHeld && CanMoveNow() && locomotionModule != null)
         {
-            locomotionModule.ServerTryStartSpinDash();
+            if (IsServer)
+            {
+                locomotionModule.ServerTryStartSpinDash();
+            }
+            else
+            {
+                RequestSpinDashServerRpc();
+            }
+
             consumedInteractForSpinDash = true;
         }
 
@@ -441,6 +449,21 @@ public class PlayerHub : NetworkBehaviour
     {
         if (!CanInteractNow()) return;
         if (interactModule != null) interactModule.ServerTryDrop();
+    }
+
+    [ServerRpc]
+    private void RequestSpinDashServerRpc(ServerRpcParams rpcParams = default)
+    {
+        if (rpcParams.Receive.SenderClientId != OwnerClientId)
+            return;
+
+        if (locomotionModule == null)
+            return;
+
+        if (!CanMoveNow())
+            return;
+
+        locomotionModule.ServerTryStartSpinDash();
     }
 
     private void HandleCameraRotation(float pitchDelta)
