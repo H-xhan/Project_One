@@ -809,6 +809,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 2205832935e2a9d4ba5e7c277c3c0e14, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
+  ShowTopMostFoldoutHeaderGroup: 1
   walkSpeed: 5
   sprintSpeed: 7
   acceleration: 8
@@ -826,6 +827,20 @@ MonoBehaviour:
   jumpStaminaCost: 12
   jumpMinimumStaminaToStart: 12
   allowJumpWhenStaminaModuleMissing: 1
+  enableSpinDash: 1
+  enableSpinDashVisualFeedback: 1
+  spinDashStaminaCost: 40
+  spinDashDuration: 0.6
+  spinDashSpeed: 9
+  spinDashCooldown: 1.2
+  spinDashStunDuration: 0.7
+  spinDashRotateVisual: 1
+  spinDashVisualRotationDegreesPerSecond: 1080
+  spinDashVisualRoot: {fileID: 4314798554561781341}
+  spinDashDizzyFeedbackDuration: 0.7
+  spinDashDizzyWobbleAngle: 8
+  spinDashDizzyWobbleSpeed: 18
+  enableSpinDashDebugLogs: 1
   yawScale: 1
   moveFacingTurnSpeed: 140
   moveFacingInputDeadzone: 0.01
@@ -908,6 +923,7 @@ MonoBehaviour:
   countCoinRespawnFallAsKnockOff: 1
   enableCombatFallContributionDebugLogs: 1
   enableDebugLogs: 0
+  enableTemporaryControlLockDebugLogs: 0
 --- !u!114 &3577343894024067653
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -2382,7 +2398,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: d5a57f767e5e46a458fc5d3c628d0cbb, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  GlobalObjectIdHash: 1404182244
+  GlobalObjectIdHash: 599638277
   InScenePlacedSourceGlobalObjectIdHash: 0
   DeferredDespawnTick: 0
   Ownership: 1
