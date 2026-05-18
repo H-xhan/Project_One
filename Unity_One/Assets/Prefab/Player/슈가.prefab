@@ -836,7 +836,10 @@ MonoBehaviour:
   spinDashStunDuration: 0.7
   spinDashRotateVisual: 1
   spinDashVisualRotationDegreesPerSecond: 1080
-  spinDashVisualRoot: {fileID: 4314798554561781341}
+  spinDashVisualRoot: {fileID: 0}
+  spinDashVisualRoots:
+  - {fileID: 8179533393818453010}
+  - {fileID: 8182183214771084347}
   spinDashDizzyFeedbackDuration: 0.7
   spinDashDizzyWobbleAngle: 8
   spinDashDizzyWobbleSpeed: 18
@@ -3870,5 +3873,15 @@ SkinnedMeshRenderer:
 --- !u!95 &7854579807524996135 stripped
 Animator:
   m_CorrespondingSourceObject: {fileID: 5866666021909216657, guid: 83fbe5706b3039349abb894620751b26, type: 3}
+  m_PrefabInstance: {fileID: 4353721975302748598}
+  m_PrefabAsset: {fileID: 0}
+--- !u!4 &8179533393818453010 stripped
+Transform:
+  m_CorrespondingSourceObject: {fileID: -3609620425127625308, guid: 83fbe5706b3039349abb894620751b26, type: 3}
+  m_PrefabInstance: {fileID: 4353721975302748598}
+  m_PrefabAsset: {fileID: 0}
+--- !u!4 &8182183214771084347 stripped
+Transform:
+  m_CorrespondingSourceObject: {fileID: 5613582289568228749, guid: 83fbe5706b3039349abb894620751b26, type: 3}
   m_PrefabInstance: {fileID: 4353721975302748598}
   m_PrefabAsset: {fileID: 0}

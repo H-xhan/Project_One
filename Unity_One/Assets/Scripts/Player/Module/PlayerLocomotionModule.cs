@@ -4,6 +4,15 @@ using UnityEngine;
 
 public class PlayerLocomotionModule : NetworkBehaviour
 {
+    private enum SpinDashVisualRotationAxis
+    {
+        WorldUp,
+        ParentUp,
+        LocalUp,
+        LocalForward,
+        LocalRight
+    }
+
     private const float MinExternalMoveSpeedMultiplier = 0.1f;
     private const float MaxExternalMoveSpeedMultiplier = 3f;
 
@@ -90,8 +99,14 @@ public class PlayerLocomotionModule : NetworkBehaviour
     [SerializeField, Tooltip("SpinDash 중 visual child가 회전하는 속도입니다.")]
     private float spinDashVisualRotationDegreesPerSecond = 1080f;
 
+    [SerializeField, Tooltip("SpinDash visual feedback이 사용할 회전축입니다. 모델 local 축이 어긋나면 WorldUp 또는 ParentUp을 사용합니다.")]
+    private SpinDashVisualRotationAxis spinDashVisualRotationAxis = SpinDashVisualRotationAxis.WorldUp;
+
     [SerializeField, Tooltip("SpinDash 중 회전시킬 비주얼 루트입니다. 비워두면 안전한 child를 자동 탐색하거나 회전을 생략합니다.")]
     private Transform spinDashVisualRoot;
+
+    [SerializeField, Tooltip("SpinDash 중 함께 회전시킬 외형 파츠 목록입니다. 단일 부모가 없을 때 날개/몸통/본/평면 같은 여러 child를 지정합니다.")]
+    private Transform[] spinDashVisualRoots;
 
     [SerializeField, Tooltip("SpinDash 종료 후 어지러움 흔들림 피드백이 지속되는 시간입니다.")]
     private float spinDashDizzyFeedbackDuration = 0.7f;
@@ -157,9 +172,8 @@ public class PlayerLocomotionModule : NetworkBehaviour
     private float _spinDashVisualFeedbackElapsed;
     private bool _isSpinDashDizzyFeedbackActive;
     private float _spinDashDizzyFeedbackEndTime;
-    private Transform _spinDashFeedbackVisualRoot;
-    private Quaternion _spinDashFeedbackOriginalLocalRotation;
-    private bool _hasSpinDashFeedbackOriginalLocalRotation;
+    private readonly List<Transform> _spinDashFeedbackVisualRoots = new List<Transform>();
+    private readonly List<Quaternion> _spinDashFeedbackOriginalLocalRotations = new List<Quaternion>();
 
     public bool IsGrounded => _cc != null && _cc.isGrounded;
     public float PlanarSpeed => new Vector2(_planarVelocity.x, _planarVelocity.z).magnitude;
@@ -519,13 +533,13 @@ public class PlayerLocomotionModule : NetworkBehaviour
         if (!TryPrepareSpinDashFeedbackVisualRoot(out Transform visualRoot))
             return;
 
-        _spinDashFeedbackVisualRoot = visualRoot;
         _isSpinDashDizzyFeedbackActive = false;
         _isSpinDashVisualFeedbackActive = true;
         _spinDashVisualFeedbackElapsed = 0f;
         _spinDashVisualFeedbackEndTime = Time.time + GetFiniteNonNegative(duration);
-        _spinDashFeedbackVisualRoot.localRotation = _spinDashFeedbackOriginalLocalRotation;
-        LogSpinDashVisual($"Start root={_spinDashFeedbackVisualRoot.name} duration={duration:0.###}");
+        RestoreSpinDashFeedbackVisualLocal();
+        LogSpinDashVisual($"RotationAxis={spinDashVisualRotationAxis}");
+        LogSpinDashVisual($"Start roots={GetSpinDashFeedbackRootsLabel()} duration={duration:0.###}");
     }
 
     private void BeginSpinDashDizzyFeedbackLocal(float duration)
@@ -536,12 +550,11 @@ public class PlayerLocomotionModule : NetworkBehaviour
         if (!TryPrepareSpinDashFeedbackVisualRoot(out Transform visualRoot))
             return;
 
-        _spinDashFeedbackVisualRoot = visualRoot;
         _isSpinDashVisualFeedbackActive = false;
         _isSpinDashDizzyFeedbackActive = true;
         _spinDashDizzyFeedbackEndTime = Time.time + GetFiniteNonNegative(duration);
-        _spinDashFeedbackVisualRoot.localRotation = _spinDashFeedbackOriginalLocalRotation;
-        LogSpinDashVisual($"Dizzy root={_spinDashFeedbackVisualRoot.name} duration={duration:0.###}");
+        RestoreSpinDashFeedbackVisualLocal();
+        LogSpinDashVisual($"Dizzy roots={GetSpinDashFeedbackRootsLabel()} duration={duration:0.###}");
     }
 
     private void TickSpinDashFeedbackLocal(float deltaTime)
@@ -577,8 +590,7 @@ public class PlayerLocomotionModule : NetworkBehaviour
 
         _spinDashVisualFeedbackElapsed += Mathf.Max(0f, deltaTime);
         float rotationAngle = _spinDashVisualFeedbackElapsed * rotationSpeed;
-        _spinDashFeedbackVisualRoot.localRotation =
-            _spinDashFeedbackOriginalLocalRotation * Quaternion.Euler(0f, rotationAngle, 0f);
+        ApplySpinDashFeedbackRotation(rotationAngle);
     }
 
     private void TickSpinDashDizzyFeedbackLocal(float deltaTime)
@@ -605,8 +617,7 @@ public class PlayerLocomotionModule : NetworkBehaviour
             return;
 
         float wobble = Mathf.Sin(Time.time * wobbleSpeed) * wobbleAngle;
-        _spinDashFeedbackVisualRoot.localRotation =
-            _spinDashFeedbackOriginalLocalRotation * Quaternion.Euler(0f, 0f, wobble);
+        ApplySpinDashDizzyWobble(wobble);
     }
 
     private void StopSpinDashFeedbackLocal()
@@ -634,53 +645,76 @@ public class PlayerLocomotionModule : NetworkBehaviour
     {
         visualRoot = null;
 
-        if (!TryResolveSpinDashFeedbackVisualRoot(out visualRoot))
+        if (!TryResolveSpinDashFeedbackRoots(_spinDashFeedbackVisualRoots))
         {
             LogSpinDashVisualWarning("No safe visual root found");
             return false;
         }
 
-        bool visualRootChanged = _spinDashFeedbackVisualRoot != visualRoot;
-        _spinDashFeedbackVisualRoot = visualRoot;
-        if (visualRootChanged || !_hasSpinDashFeedbackOriginalLocalRotation)
-        {
-            _spinDashFeedbackOriginalLocalRotation = visualRoot.localRotation;
-            _hasSpinDashFeedbackOriginalLocalRotation = true;
-        }
-
+        visualRoot = _spinDashFeedbackVisualRoots[0];
+        StoreSpinDashFeedbackOriginalRotations();
         return true;
     }
 
     private bool EnsureSpinDashFeedbackVisualRoot()
     {
-        if (_spinDashFeedbackVisualRoot != null)
+        if (AreSpinDashFeedbackRootsReady())
             return true;
 
-        return TryPrepareSpinDashFeedbackVisualRoot(out _spinDashFeedbackVisualRoot);
+        return TryPrepareSpinDashFeedbackVisualRoot(out _);
     }
 
     private void RestoreSpinDashFeedbackVisualLocal()
     {
-        if (_hasSpinDashFeedbackOriginalLocalRotation && _spinDashFeedbackVisualRoot != null)
+        if (_spinDashFeedbackVisualRoots.Count <= 0 || _spinDashFeedbackVisualRoots.Count != _spinDashFeedbackOriginalLocalRotations.Count)
+            return;
+
+        for (int i = 0; i < _spinDashFeedbackVisualRoots.Count; i++)
         {
-            _spinDashFeedbackVisualRoot.localRotation = _spinDashFeedbackOriginalLocalRotation;
-            LogSpinDashVisual($"Restore root={_spinDashFeedbackVisualRoot.name}");
+            Transform root = _spinDashFeedbackVisualRoots[i];
+            if (root == null)
+                continue;
+
+            root.localRotation = _spinDashFeedbackOriginalLocalRotations[i];
         }
+
+        LogSpinDashVisual($"Restore roots={GetSpinDashFeedbackRootsLabel()}");
     }
 
-    private bool TryResolveSpinDashFeedbackVisualRoot(out Transform visualRoot)
+    private bool TryResolveSpinDashFeedbackRoots(List<Transform> roots)
     {
-        visualRoot = null;
+        roots.Clear();
 
-        if (!IsUnsafeExplicitVisualRoot(spinDashVisualRoot))
+        if (spinDashVisualRoots != null && spinDashVisualRoots.Length > 0)
         {
-            visualRoot = spinDashVisualRoot;
+            LogSpinDashVisual($"Explicit roots count={spinDashVisualRoots.Length}");
+
+            HashSet<int> seenRootIds = new HashSet<int>();
+            for (int i = 0; i < spinDashVisualRoots.Length; i++)
+            {
+                Transform candidate = spinDashVisualRoots[i];
+                if (!TryAddSpinDashFeedbackRoot(candidate, roots, seenRootIds, true))
+                    continue;
+            }
+
+            if (roots.Count > 0)
+            {
+                LogSpinDashVisual($"Selected roots={GetSpinDashFeedbackRootsLabel(roots)}");
+                return true;
+            }
+        }
+
+        HashSet<int> seenIds = new HashSet<int>();
+
+        if (TryAddSpinDashFeedbackRoot(spinDashVisualRoot, roots, seenIds, true))
+        {
+            LogSpinDashVisual($"Selected roots={GetSpinDashFeedbackRootsLabel(roots)}");
             return true;
         }
 
-        if (!IsUnsafeSpinDashVisualRoot(_resolvedSpinDashVisualRoot))
+        if (TryAddSpinDashFeedbackRoot(_resolvedSpinDashVisualRoot, roots, seenIds, false))
         {
-            visualRoot = _resolvedSpinDashVisualRoot;
+            LogSpinDashVisual($"Selected roots={GetSpinDashFeedbackRootsLabel(roots)}");
             return true;
         }
 
@@ -694,53 +728,124 @@ public class PlayerLocomotionModule : NetworkBehaviour
             if (IsUnsafeSpinDashVisualRoot(candidate) || !IsLikelySpinDashVisualRoot(candidate))
                 continue;
 
+            if (candidate.name.IndexOf("Boing_Visual", System.StringComparison.OrdinalIgnoreCase) >= 0)
+                continue;
+
             _resolvedSpinDashVisualRoot = candidate;
-            visualRoot = candidate;
+            roots.Add(candidate);
+            LogSpinDashVisual($"Selected roots={GetSpinDashFeedbackRootsLabel(roots)}");
             return true;
         }
 
         return false;
     }
 
-    private bool IsUnsafeExplicitVisualRoot(Transform candidate)
+    private bool TryAddSpinDashFeedbackRoot(Transform candidate, List<Transform> roots, HashSet<int> seenRootIds, bool isExplicit)
     {
         if (candidate == null)
+        {
+            if (isExplicit)
+                LogSpinDashVisualWarning("Rejected root=<null> reason=null");
+
+            return false;
+        }
+
+        string rejectionReason;
+        bool isUnsafe = isExplicit
+            ? IsUnsafeExplicitVisualRoot(candidate, out rejectionReason)
+            : IsUnsafeSpinDashVisualRoot(candidate, out rejectionReason);
+
+        if (isUnsafe)
+        {
+            if (isExplicit)
+                LogSpinDashVisualWarning($"Rejected root={candidate.name} reason={rejectionReason}");
+
+            return false;
+        }
+
+        int instanceId = candidate.GetInstanceID();
+        if (!seenRootIds.Add(instanceId))
+            return false;
+
+        roots.Add(candidate);
+        return true;
+    }
+
+    private bool IsUnsafeExplicitVisualRoot(Transform candidate)
+    {
+        return IsUnsafeExplicitVisualRoot(candidate, out _);
+    }
+
+    private bool IsUnsafeExplicitVisualRoot(Transform candidate, out string rejectionReason)
+    {
+        if (candidate == null)
+        {
+            rejectionReason = "null";
             return true;
+        }
 
         if (_cc == null)
+        {
+            rejectionReason = string.Empty;
             return false;
+        }
 
         Transform ccTransform = _cc.transform;
         Transform playerRoot = transform.root;
         if (candidate == ccTransform || candidate == transform || candidate == ccTransform.root || candidate == playerRoot)
+        {
+            rejectionReason = "unsafe-root";
             return true;
+        }
 
         if (candidate.GetComponent<CharacterController>() != null ||
             candidate.GetComponent<Rigidbody>() != null ||
             candidate.GetComponent<NetworkObject>() != null)
+        {
+            rejectionReason = "unsafe-component";
             return true;
+        }
 
+        rejectionReason = string.Empty;
         return false;
     }
 
     private bool IsUnsafeSpinDashVisualRoot(Transform candidate)
     {
+        return IsUnsafeSpinDashVisualRoot(candidate, out _);
+    }
+
+    private bool IsUnsafeSpinDashVisualRoot(Transform candidate, out string rejectionReason)
+    {
         if (candidate == null || _cc == null)
+        {
+            rejectionReason = candidate == null ? "null" : "missing-character-controller";
             return true;
+        }
 
         Transform ccTransform = _cc.transform;
         Transform playerRoot = transform.root;
         if (candidate == ccTransform || candidate == transform || candidate == ccTransform.root || candidate == playerRoot)
+        {
+            rejectionReason = "unsafe-root";
             return true;
+        }
 
         if (!candidate.IsChildOf(ccTransform))
+        {
+            rejectionReason = "not-character-controller-child";
             return true;
+        }
 
         if (candidate.GetComponent<CharacterController>() != null ||
             candidate.GetComponent<Rigidbody>() != null ||
             candidate.GetComponent<NetworkObject>() != null)
+        {
+            rejectionReason = "unsafe-component";
             return true;
+        }
 
+        rejectionReason = string.Empty;
         return false;
     }
 
@@ -1157,6 +1262,123 @@ public class PlayerLocomotionModule : NetworkBehaviour
             return;
 
         Debug.LogWarning($"[SpinDashVisual] {message}", this);
+    }
+
+    private void StoreSpinDashFeedbackOriginalRotations()
+    {
+        _spinDashFeedbackOriginalLocalRotations.Clear();
+
+        for (int i = 0; i < _spinDashFeedbackVisualRoots.Count; i++)
+        {
+            Transform root = _spinDashFeedbackVisualRoots[i];
+            _spinDashFeedbackOriginalLocalRotations.Add(root != null ? root.localRotation : Quaternion.identity);
+        }
+    }
+
+    private void ApplySpinDashFeedbackRotation(float angle)
+    {
+        if (_spinDashFeedbackVisualRoots.Count != _spinDashFeedbackOriginalLocalRotations.Count)
+            return;
+
+        for (int i = 0; i < _spinDashFeedbackVisualRoots.Count; i++)
+        {
+            Transform root = _spinDashFeedbackVisualRoots[i];
+            if (root == null)
+                continue;
+
+            Quaternion offset = GetSpinDashVisualRotationOffset(root, angle);
+            root.localRotation = offset * _spinDashFeedbackOriginalLocalRotations[i];
+        }
+    }
+
+    private void ApplySpinDashDizzyWobble(float wobbleAngle)
+    {
+        if (_spinDashFeedbackVisualRoots.Count != _spinDashFeedbackOriginalLocalRotations.Count)
+            return;
+
+        Quaternion offset = Quaternion.Euler(0f, 0f, wobbleAngle);
+        for (int i = 0; i < _spinDashFeedbackVisualRoots.Count; i++)
+        {
+            Transform root = _spinDashFeedbackVisualRoots[i];
+            if (root == null)
+                continue;
+
+            root.localRotation = _spinDashFeedbackOriginalLocalRotations[i] * offset;
+        }
+    }
+
+    private bool AreSpinDashFeedbackRootsReady()
+    {
+        return _spinDashFeedbackVisualRoots.Count > 0 &&
+               _spinDashFeedbackVisualRoots.Count == _spinDashFeedbackOriginalLocalRotations.Count;
+    }
+
+    private string GetSpinDashFeedbackRootsLabel()
+    {
+        return GetSpinDashFeedbackRootsLabel(_spinDashFeedbackVisualRoots);
+    }
+
+    private static string GetSpinDashFeedbackRootsLabel(List<Transform> roots)
+    {
+        if (roots == null || roots.Count <= 0)
+            return "<none>";
+
+        List<string> names = new List<string>(roots.Count);
+        for (int i = 0; i < roots.Count; i++)
+        {
+            Transform root = roots[i];
+            if (root != null)
+                names.Add(root.name);
+        }
+
+        return names.Count > 0 ? string.Join(",", names) : "<none>";
+    }
+
+    private Quaternion GetSpinDashVisualRotationOffset(Transform root, float angle)
+    {
+        Vector3 axisInParentSpace = GetSpinDashVisualAxisInParentSpace(root);
+        if (axisInParentSpace.sqrMagnitude <= 0.0001f)
+            axisInParentSpace = Vector3.up;
+
+        return Quaternion.AngleAxis(angle, axisInParentSpace.normalized);
+    }
+
+    private Vector3 GetSpinDashVisualAxisInParentSpace(Transform root)
+    {
+        switch (spinDashVisualRotationAxis)
+        {
+            case SpinDashVisualRotationAxis.ParentUp:
+                return Vector3.up;
+
+            case SpinDashVisualRotationAxis.LocalUp:
+                return Vector3.up;
+
+            case SpinDashVisualRotationAxis.LocalForward:
+                return Vector3.forward;
+
+            case SpinDashVisualRotationAxis.LocalRight:
+                return Vector3.right;
+
+            case SpinDashVisualRotationAxis.WorldUp:
+            default:
+                return GetWorldAxisInParentSpace(root, Vector3.up);
+        }
+    }
+
+    private static Vector3 GetWorldAxisInParentSpace(Transform root, Vector3 worldAxis)
+    {
+        if (root == null)
+            return worldAxis;
+
+        Transform parent = root.parent;
+        if (parent == null)
+            return worldAxis;
+
+        Vector3 axisInParentSpace = parent.InverseTransformDirection(worldAxis);
+        if (axisInParentSpace.sqrMagnitude <= 0.0001f)
+            return worldAxis;
+
+        return axisInParentSpace.normalized;
     }
 
     private void LogSpinDash(string message)
