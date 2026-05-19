@@ -10569,6 +10569,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: c8eccd6aae9bf37459cd4df3a1f5e160, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
+  ShowTopMostFoldoutHeaderGroup: 1
   sweepOrigin: {fileID: 1405868427}
   sweepDirection: {x: 1, y: 0, z: 0}
   sweepDistance: 17
@@ -12520,7 +12521,7 @@ MonoBehaviour:
   inGameMatchManager: {fileID: 1995524424}
   roundMissionManager: {fileID: 143687884}
   countdownSeconds: 3
-  playSeconds: 30
+  playSeconds: 300
   resultsSeconds: 6
   autoReturnToLobby: 1
   teleportPlayersOnEnterLobby: 1

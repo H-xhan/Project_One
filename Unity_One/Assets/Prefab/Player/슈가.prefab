@@ -824,12 +824,12 @@ MonoBehaviour:
   gravity: -18
   stickToGroundForce: -5
   useStaminaForJump: 1
-  jumpStaminaCost: 12
-  jumpMinimumStaminaToStart: 12
+  jumpStaminaCost: 5
+  jumpMinimumStaminaToStart: 10
   allowJumpWhenStaminaModuleMissing: 1
   enableSpinDash: 1
   enableSpinDashVisualFeedback: 1
-  spinDashStaminaCost: 40
+  spinDashStaminaCost: 20
   spinDashDuration: 1.2
   spinDashSpeed: 5
   spinDashCooldown: 1.2
@@ -895,6 +895,11 @@ MonoBehaviour:
   standUpWaitForAnimatorExit: 1
   standUpAnimatorExitMaxLockSeconds: 1.2
   snapUprightOnStandUp: 1
+  reduceStandUpRootSnap: 1
+  deferUprightSnapOnUnsafeStandUpPose: 1
+  unsafeStandUpPoseUpDotThreshold: 0.35
+  unsafeStandUpPoseForwardDotThreshold: 0.25
+  standUpPoseSnapDebugLogs: 0
   snapToGroundOnStandUpFinish: 1
   snapToGroundDuringStandUp: 1
   standUpSnapStartNormalized: 0.1

@@ -78,6 +78,21 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
     [Tooltip("기상 시작 시 루트 회전을 지면 기준으로 바로 세웁니다.")]
     [SerializeField] private bool snapUprightOnStandUp = true;
 
+    [Tooltip("Stand-up 시작 시 root pitch/roll을 즉시 세우며 생기는 순간 뒤집힘을 줄이기 위해 root snap을 조건부로 완화합니다.")]
+    [SerializeField] private bool reduceStandUpRootSnap = true;
+
+    [Tooltip("엎드림/측면처럼 불안정한 ragdoll pose에서는 stand-up 시작 시 즉시 upright snap을 하지 않고 종료 시점으로 미룹니다.")]
+    [SerializeField] private bool deferUprightSnapOnUnsafeStandUpPose = true;
+
+    [Tooltip("root up 벡터와 world up의 dot 값이 이 값보다 낮으면 stand-up 시작 pose가 불안정한 것으로 간주합니다.")]
+    [SerializeField] private float unsafeStandUpPoseUpDotThreshold = 0.35f;
+
+    [Tooltip("root forward/up 방향을 이용한 prone/side pose 감지 보조 임계값입니다.")]
+    [SerializeField] private float unsafeStandUpPoseForwardDotThreshold = 0.25f;
+
+    [Tooltip("Stand-up pose 샘플링과 root snap 결정 로그를 출력할지 여부입니다.")]
+    [SerializeField] private bool standUpPoseSnapDebugLogs = false;
+
     [Header("Ground Snap")]
     [Tooltip("기상 완료 시 루트를 바닥에 맞춰 한 번 내려붙일지")]
     [SerializeField] private bool snapToGroundOnStandUpFinish = true;
@@ -229,6 +244,8 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
     private bool _waitingForStandUpAnimatorExit;
     private float _standUpAnimatorExitLockStartedAt;
     private bool _standUpAnimatorStillActiveLogged;
+    private bool _deferredUprightSnapForCurrentStandUp;
+    private string _lastStandUpPoseReason = string.Empty;
     private bool _hasTemporaryControlLock;
     private float _temporaryControlLockUntil;
     private bool _temporaryControlLockMove;
@@ -1010,6 +1027,7 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
         _standUpMinimumDelayLogged = false;
         ClearStandUpControlLock("CoinFallRespawn");
         ClearStandUpAnimatorExitLock("CoinFallRespawn");
+        ClearDeferredStandUpUprightSnap("CoinFallRespawn");
         ClearTemporaryControlLockLocal();
         _didSyncRootFromRagdollForCurrentKnockback = false;
         _hasLastRagdollFocusForRootSync = false;
@@ -1161,6 +1179,7 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
         _standUpMinimumDelayLogged = false;
         ClearStandUpControlLock("BeginKnockback");
         ClearStandUpAnimatorExitLock("BeginKnockback");
+        ClearDeferredStandUpUprightSnap("BeginKnockback");
         _didSyncRootFromRagdollForCurrentKnockback = false;
 
         if (locomotionModule != null)
@@ -1227,6 +1246,7 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
         _standUpStartedAt = Time.time;
         _standUpFinishEventReceived = false;
         _standUpMinimumDelayLogged = false;
+        ClearDeferredStandUpUprightSnap("BeginStandUpBack");
         ExtendStandUpControlLock(standUpMinimumControlLockSeconds, "Minimum");
         LogStandUpControlLock("StandUp started");
 
@@ -1243,8 +1263,7 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
             rootRigidbody.Sleep();
         }
 
-        if (snapUprightOnStandUp)
-            SnapRootUpright();
+        ApplyStandUpStartRootPreparation();
 
         if (snapToGroundDuringStandUp)
             SnapRootToGround();
@@ -1283,6 +1302,128 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
             rootRigidbody.MoveRotation(upright);
 
         rootTransform.rotation = upright;
+    }
+
+    private void ApplyStandUpStartRootPreparation()
+    {
+        _deferredUprightSnapForCurrentStandUp = false;
+        _lastStandUpPoseReason = string.Empty;
+
+        if (!snapUprightOnStandUp)
+            return;
+
+        if (ShouldApplyImmediateUprightSnapForStandUp(out string reason))
+        {
+            _lastStandUpPoseReason = reason;
+            SnapRootUpright();
+            LogStandUpPoseSnap($"StandUp pose safe: immediate upright snap reason={reason}");
+            return;
+        }
+
+        _deferredUprightSnapForCurrentStandUp = true;
+        _lastStandUpPoseReason = reason;
+        LogStandUpPoseSnap($"StandUp pose unsafe: defer upright snap reason={reason}");
+    }
+
+    private bool ShouldApplyImmediateUprightSnapForStandUp(out string reason)
+    {
+        if (!reduceStandUpRootSnap)
+        {
+            reason = "RootSnapReductionDisabled";
+            return true;
+        }
+
+        if (!deferUprightSnapOnUnsafeStandUpPose)
+        {
+            reason = "UnsafePoseDeferralDisabled";
+            return true;
+        }
+
+        return !IsUnsafeStandUpStartPose(out reason);
+    }
+
+    private bool IsUnsafeStandUpStartPose(out string reason)
+    {
+        reason = "PoseSampleUnavailable";
+        if (!TryGetStandUpStartPoseSample(out Vector3 up, out Vector3 forward))
+            return false;
+
+        up.Normalize();
+        forward.Normalize();
+
+        float upDot = Vector3.Dot(up, Vector3.up);
+        float forwardUpDot = Mathf.Abs(Vector3.Dot(forward, Vector3.up));
+        float upThreshold = Mathf.Clamp(GetFiniteOrZero(unsafeStandUpPoseUpDotThreshold), -1f, 1f);
+        float forwardThreshold = Mathf.Clamp01(GetFiniteOrZero(unsafeStandUpPoseForwardDotThreshold));
+
+        if (upDot < upThreshold)
+        {
+            reason = $"RootUpDot={upDot:0.###}<threshold={upThreshold:0.###}, RootForwardUpDot={forwardUpDot:0.###}";
+            return true;
+        }
+
+        if (forwardThreshold > 0f && forwardUpDot > forwardThreshold)
+        {
+            reason = $"RootForwardUpDot={forwardUpDot:0.###}>threshold={forwardThreshold:0.###}, RootUpDot={upDot:0.###}";
+            return true;
+        }
+
+        reason = $"RootUpDot={upDot:0.###}, RootForwardUpDot={forwardUpDot:0.###}";
+        return false;
+    }
+
+    private bool TryGetStandUpStartPoseSample(out Vector3 up, out Vector3 forward)
+    {
+        Quaternion rotation;
+        if (rootRigidbody != null)
+        {
+            rotation = rootRigidbody.rotation;
+        }
+        else
+        {
+            if (rootTransform == null)
+                rootTransform = rootNetObj != null ? rootNetObj.transform : transform.root;
+            if (rootTransform == null)
+            {
+                up = Vector3.up;
+                forward = Vector3.forward;
+                return false;
+            }
+
+            rotation = rootTransform.rotation;
+        }
+
+        up = rotation * Vector3.up;
+        forward = rotation * Vector3.forward;
+        return IsFiniteVector(up) && up.sqrMagnitude > 0.0001f
+            && IsFiniteVector(forward) && forward.sqrMagnitude > 0.0001f;
+    }
+
+    private bool ApplyDeferredStandUpUprightSnapIfNeeded()
+    {
+        if (!_deferredUprightSnapForCurrentStandUp)
+            return false;
+
+        _deferredUprightSnapForCurrentStandUp = false;
+        string reason = _lastStandUpPoseReason;
+        _lastStandUpPoseReason = string.Empty;
+
+        if (!snapUprightOnStandUp)
+            return false;
+
+        SnapRootUpright();
+        LogStandUpPoseSnap($"StandUp deferred upright snap applied reason={reason}");
+        return true;
+    }
+
+    private void ClearDeferredStandUpUprightSnap(string reason)
+    {
+        bool hadDeferredSnapState = _deferredUprightSnapForCurrentStandUp || !string.IsNullOrEmpty(_lastStandUpPoseReason);
+        _deferredUprightSnapForCurrentStandUp = false;
+        _lastStandUpPoseReason = string.Empty;
+
+        if (hadDeferredSnapState)
+            LogStandUpPoseSnap($"StandUp pose snap state cleared reason={reason}");
     }
 
     private void SnapRootToGround()
@@ -1709,8 +1850,10 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
     {
         TrySyncRootToRagdollFocusBeforeStandUp("FinishStandUpImmediate");
 
-        if (snapUprightOnStandUp)
+        bool appliedDeferredUprightSnap = ApplyDeferredStandUpUprightSnapIfNeeded();
+        if (snapUprightOnStandUp && !appliedDeferredUprightSnap)
             SnapRootUpright();
+        ClearDeferredStandUpUprightSnap("FinishStandUpImmediate");
 
         if (snapToGroundOnStandUpFinish)
             SnapRootToGround();
@@ -1766,6 +1909,7 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
         _standUpMinimumDelayLogged = false;
         ClearStandUpControlLock("Elimination");
         ClearStandUpAnimatorExitLock("Elimination");
+        ClearDeferredStandUpUprightSnap("Elimination");
         ClearTemporaryControlLockLocal();
         ClearRecentCombatContributorServer();
 
@@ -1846,6 +1990,14 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
         Debug.Log($"[PlayerStatus] {message}", this);
     }
 
+    private void LogStandUpPoseSnap(string message)
+    {
+        if (!standUpPoseSnapDebugLogs && !enableStandUpControlLockDebugLogs)
+            return;
+
+        Debug.Log($"[PlayerStatus] {message}", this);
+    }
+
     private void LogDropHeldItemOnKnockback(string message)
     {
         if (!enableDropHeldItemOnKnockbackDebugLogs)
@@ -1879,6 +2031,8 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
         standUpFallbackFinishSeconds = Mathf.Max(0f, standUpFallbackFinishSeconds);
         standUpPostFinishControlLockSeconds = Mathf.Max(0f, standUpPostFinishControlLockSeconds);
         standUpAnimatorExitMaxLockSeconds = Mathf.Max(0f, standUpAnimatorExitMaxLockSeconds);
+        unsafeStandUpPoseUpDotThreshold = Mathf.Clamp(unsafeStandUpPoseUpDotThreshold, -1f, 1f);
+        unsafeStandUpPoseForwardDotThreshold = Mathf.Clamp01(unsafeStandUpPoseForwardDotThreshold);
 
         ResolveRefs();
         backStandUpStateHash = Animator.StringToHash("Back Stand Up");
