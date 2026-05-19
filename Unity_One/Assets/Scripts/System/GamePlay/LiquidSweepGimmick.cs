@@ -1,8 +1,9 @@
 using System.Collections;
 using System.Collections.Generic;
+using Unity.Netcode;
 using UnityEngine;
 
-public class LiquidSweepGimmick : MonoBehaviour
+public class LiquidSweepGimmick : NetworkBehaviour
 {
     private const string LogPrefix = "[LiquidSweepGimmick]";
     private const float MinPositiveValue = 0.01f;
@@ -225,8 +226,11 @@ public class LiquidSweepGimmick : MonoBehaviour
     private readonly HashSet<PlayerStatusModule> _sweepTickPlayers = new HashSet<PlayerStatusModule>();
     private readonly HashSet<PlayerStatusModule> _residueTickPlayers = new HashSet<PlayerStatusModule>();
     private readonly List<GameObject> _activeCircularIcePatchVisuals = new List<GameObject>();
+    private readonly List<GameObject> _clientCircularIcePatchVisuals = new List<GameObject>();
     private readonly Dictionary<PlayerStatusModule, float> _circularIcePatchNextSlipTimes = new Dictionary<PlayerStatusModule, float>();
     private Coroutine _runningRoutine;
+    private Coroutine _clientSweepVisualRoutine;
+    private Coroutine _clientResidueVisualRoutine;
     private SweepPhase _phase = SweepPhase.Idle;
     private bool _loggedEmptyPlayerMaskWarning;
     private int _sweepDebugLogCount;
@@ -260,6 +264,7 @@ public class LiquidSweepGimmick : MonoBehaviour
         _loggedEmptyPlayerMaskWarning = false;
         SelectActiveSweepLane();
         SetPresentationActive(false, false, false);
+        SendStopVisualClientRpcs();
         _runningRoutine = StartCoroutine(RunLiquidSweepRoutine());
     }
 
@@ -273,8 +278,10 @@ public class LiquidSweepGimmick : MonoBehaviour
         SetPhase(SweepPhase.Sweep);
         UpdateSweepVisual(0f);
         SetPresentationActive(false, true, false);
+        SendPlaySweepVisualClientRpc();
         PlayAudio(sweepAudio);
         yield return RunSweepRoutine();
+        SendStopSweepVisualClientRpc();
 
         SetPhase(SweepPhase.Residue);
         bool shouldUseRandomCircularIcePatches = ShouldUseRandomCircularIcePatches();
@@ -294,6 +301,7 @@ public class LiquidSweepGimmick : MonoBehaviour
 
         SetPhase(SweepPhase.Cooldown);
         SetPresentationActive(false, false, false);
+        SendStopVisualClientRpcs();
         yield return WaitForSecondsSafe(cooldownDuration);
 
         SetPhase(SweepPhase.Idle);
@@ -340,8 +348,10 @@ public class LiquidSweepGimmick : MonoBehaviour
     {
         if (!enableResidueSlip)
         {
-            UpdateResidueVisual();
+            GetResidueBox(out Vector3 noSlipCenter, out Vector3 noSlipHalfExtents, out Quaternion noSlipRotation);
+            UpdateResidueVisual(noSlipCenter, noSlipHalfExtents, noSlipRotation);
             SetPresentationActive(false, false, true);
+            SendPlayResidueVisualClientRpc(noSlipCenter, noSlipHalfExtents, noSlipRotation, residueDuration);
             yield return WaitForSecondsSafe(residueDuration);
             yield break;
         }
@@ -353,6 +363,7 @@ public class LiquidSweepGimmick : MonoBehaviour
         GetResidueBox(out Vector3 center, out Vector3 halfExtents, out Quaternion rotation);
         UpdateResidueVisual(center, halfExtents, rotation);
         SetPresentationActive(false, false, true);
+        SendPlayResidueVisualClientRpc(center, halfExtents, rotation, duration);
 
         while (elapsed < duration)
         {
@@ -414,6 +425,7 @@ public class LiquidSweepGimmick : MonoBehaviour
         {
             CleanupCircularIcePatches(patches);
             ClearCircularIcePatchSlipCooldowns();
+            SendCleanupCircularIcePatchVisualsClientRpc();
         }
     }
 
@@ -695,6 +707,7 @@ public class LiquidSweepGimmick : MonoBehaviour
         float diameter = Mathf.Max(0f, radius) * 2f;
         Log($"{LogPrefix} Circular ice patch visual instantiated. success={visualInstance != null}, prefabNull=False, center={center}, visualPosition={visualPosition}, patchCenterY={center.y:0.###}, circularIcePatchHeightOffset={GetFiniteFloatOrZero(circularIcePatchHeightOffset):0.###}, circularIcePatchVisualYOffset={GetFiniteFloatOrZero(circularIcePatchVisualYOffset):0.###}, finalVisualY={visualInstance.transform.position.y:0.###}, radius={radius:0.###}, diameter={diameter:0.###}");
         StartCoroutine(ReapplyCircularIcePatchVisualPositionNextFrame(visualInstance, visualPosition, rotation));
+        SendSpawnCircularIcePatchVisualClientRpc(visualPosition, rotation, radius);
         return visualInstance;
     }
 
@@ -1346,6 +1359,235 @@ public class LiquidSweepGimmick : MonoBehaviour
             residueVisual.transform.localScale = scale;
     }
 
+    private void SendPlaySweepVisualClientRpc()
+    {
+        if (!CanSendVisualClientRpc())
+            return;
+
+        GetSweepBox(0f, out Vector3 startCenter, out Vector3 halfExtents, out Quaternion rotation);
+        Vector3 endCenter = GetSweepCenter(1f);
+        PlaySweepVisualClientRpc(startCenter, endCenter, halfExtents, rotation, sweepDuration);
+    }
+
+    private void SendStopSweepVisualClientRpc()
+    {
+        if (CanSendVisualClientRpc())
+            StopSweepVisualClientRpc();
+    }
+
+    private void SendPlayResidueVisualClientRpc(Vector3 center, Vector3 halfExtents, Quaternion rotation, float duration)
+    {
+        if (CanSendVisualClientRpc())
+            PlayResidueVisualClientRpc(center, halfExtents, rotation, duration);
+    }
+
+    private void SendSpawnCircularIcePatchVisualClientRpc(Vector3 visualPosition, Quaternion rotation, float radius)
+    {
+        if (CanSendVisualClientRpc())
+            SpawnCircularIcePatchVisualClientRpc(visualPosition, rotation, radius, circularIcePatchDuration);
+    }
+
+    private void SendCleanupCircularIcePatchVisualsClientRpc()
+    {
+        if (CanSendVisualClientRpc())
+            CleanupCircularIcePatchVisualsClientRpc();
+    }
+
+    private void SendStopVisualClientRpcs()
+    {
+        if (!CanSendVisualClientRpc())
+            return;
+
+        StopSweepVisualClientRpc();
+        StopResidueVisualClientRpc();
+        CleanupCircularIcePatchVisualsClientRpc();
+    }
+
+    private bool CanSendVisualClientRpc()
+    {
+        return IsServer && IsSpawned;
+    }
+
+    private bool ShouldSkipClientVisualRpcOnThisPeer()
+    {
+        return IsServer;
+    }
+
+    [ClientRpc]
+    private void PlaySweepVisualClientRpc(
+        Vector3 startCenter,
+        Vector3 endCenter,
+        Vector3 halfExtents,
+        Quaternion rotation,
+        float duration)
+    {
+        if (ShouldSkipClientVisualRpcOnThisPeer())
+            return;
+
+        if (_clientSweepVisualRoutine != null)
+            StopCoroutine(_clientSweepVisualRoutine);
+
+        _clientSweepVisualRoutine = StartCoroutine(RunSweepVisualOnlyRoutine(startCenter, endCenter, halfExtents, rotation, duration));
+    }
+
+    [ClientRpc]
+    private void StopSweepVisualClientRpc()
+    {
+        if (ShouldSkipClientVisualRpcOnThisPeer())
+            return;
+
+        StopClientSweepVisualRoutine();
+        SetSweepVisualLocalActive(false);
+    }
+
+    [ClientRpc]
+    private void PlayResidueVisualClientRpc(Vector3 center, Vector3 halfExtents, Quaternion rotation, float duration)
+    {
+        if (ShouldSkipClientVisualRpcOnThisPeer())
+            return;
+
+        if (_clientResidueVisualRoutine != null)
+            StopCoroutine(_clientResidueVisualRoutine);
+
+        _clientResidueVisualRoutine = StartCoroutine(RunResidueVisualOnlyRoutine(center, halfExtents, rotation, duration));
+    }
+
+    [ClientRpc]
+    private void StopResidueVisualClientRpc()
+    {
+        if (ShouldSkipClientVisualRpcOnThisPeer())
+            return;
+
+        StopClientResidueVisualRoutine();
+        SetResidueVisualLocalActive(false);
+    }
+
+    [ClientRpc]
+    private void SpawnCircularIcePatchVisualClientRpc(Vector3 visualPosition, Quaternion rotation, float radius, float duration)
+    {
+        if (ShouldSkipClientVisualRpcOnThisPeer())
+            return;
+
+        GameObject visualInstance = CreateCircularIcePatchVisualLocal(visualPosition, rotation, radius);
+        if (visualInstance != null)
+            StartCoroutine(DestroyClientCircularIcePatchVisualAfterDelay(visualInstance, duration));
+    }
+
+    [ClientRpc]
+    private void CleanupCircularIcePatchVisualsClientRpc()
+    {
+        if (ShouldSkipClientVisualRpcOnThisPeer())
+            return;
+
+        CleanupClientCircularIcePatchVisuals();
+    }
+
+    private IEnumerator RunSweepVisualOnlyRoutine(
+        Vector3 startCenter,
+        Vector3 endCenter,
+        Vector3 halfExtents,
+        Quaternion rotation,
+        float duration)
+    {
+        float safeDuration = Mathf.Max(MinPositiveValue, GetFiniteFloatOrZero(duration));
+        float elapsed = 0f;
+        SetSweepVisualLocalActive(true);
+
+        while (elapsed < safeDuration)
+        {
+            float progress = Mathf.Clamp01(elapsed / safeDuration);
+            Vector3 center = Vector3.Lerp(startCenter, endCenter, progress);
+            UpdateSweepVisual(center, halfExtents, rotation);
+
+            elapsed += Time.deltaTime;
+            yield return null;
+        }
+
+        UpdateSweepVisual(endCenter, halfExtents, rotation);
+        SetSweepVisualLocalActive(false);
+        _clientSweepVisualRoutine = null;
+    }
+
+    private IEnumerator RunResidueVisualOnlyRoutine(Vector3 center, Vector3 halfExtents, Quaternion rotation, float duration)
+    {
+        UpdateResidueVisual(center, halfExtents, rotation);
+        SetResidueVisualLocalActive(true);
+        yield return WaitForSecondsSafe(Mathf.Max(0f, GetFiniteFloatOrZero(duration)));
+        SetResidueVisualLocalActive(false);
+        _clientResidueVisualRoutine = null;
+    }
+
+    private GameObject CreateCircularIcePatchVisualLocal(Vector3 visualPosition, Quaternion rotation, float radius)
+    {
+        if (circularIcePatchVisualPrefab == null)
+            return null;
+
+        GameObject visualInstance = Instantiate(circularIcePatchVisualPrefab, visualPosition, rotation);
+        ApplyCircularIcePatchVisualTransform(visualInstance, visualPosition, rotation, radius);
+        _clientCircularIcePatchVisuals.Add(visualInstance);
+        StartCoroutine(ReapplyCircularIcePatchVisualPositionNextFrame(visualInstance, visualPosition, rotation));
+        return visualInstance;
+    }
+
+    private IEnumerator DestroyClientCircularIcePatchVisualAfterDelay(GameObject visualInstance, float duration)
+    {
+        yield return WaitForSecondsSafe(Mathf.Max(0f, GetFiniteFloatOrZero(duration)));
+
+        if (visualInstance == null)
+            yield break;
+
+        _clientCircularIcePatchVisuals.Remove(visualInstance);
+        Destroy(visualInstance);
+    }
+
+    private void StopClientVisualRoutines()
+    {
+        StopClientSweepVisualRoutine();
+        StopClientResidueVisualRoutine();
+    }
+
+    private void StopClientSweepVisualRoutine()
+    {
+        if (_clientSweepVisualRoutine == null)
+            return;
+
+        StopCoroutine(_clientSweepVisualRoutine);
+        _clientSweepVisualRoutine = null;
+    }
+
+    private void StopClientResidueVisualRoutine()
+    {
+        if (_clientResidueVisualRoutine == null)
+            return;
+
+        StopCoroutine(_clientResidueVisualRoutine);
+        _clientResidueVisualRoutine = null;
+    }
+
+    private void SetSweepVisualLocalActive(bool active)
+    {
+        if (sweepVisual != null)
+            sweepVisual.SetActive(active);
+    }
+
+    private void SetResidueVisualLocalActive(bool active)
+    {
+        if (residueVisual != null)
+            residueVisual.SetActive(active);
+    }
+
+    private void CleanupClientCircularIcePatchVisuals()
+    {
+        for (int i = _clientCircularIcePatchVisuals.Count - 1; i >= 0; i--)
+        {
+            GameObject visualInstance = _clientCircularIcePatchVisuals[i];
+            if (visualInstance != null)
+                Destroy(visualInstance);
+        }
+
+        _clientCircularIcePatchVisuals.Clear();
+    }
+
     private static void PlayAudio(AudioSource audioSource)
     {
         if (audioSource != null)
@@ -1369,10 +1611,12 @@ public class LiquidSweepGimmick : MonoBehaviour
         }
 
         SetPresentationActive(false, false, false);
+        StopClientVisualRoutines();
         _sweepHitPlayers.Clear();
         _sweepTickPlayers.Clear();
         _residueTickPlayers.Clear();
         CleanupActiveCircularIcePatchVisuals();
+        CleanupClientCircularIcePatchVisuals();
         ClearCircularIcePatchSlipCooldowns();
         ClearActiveSweepLane();
         _phase = SweepPhase.Idle;
