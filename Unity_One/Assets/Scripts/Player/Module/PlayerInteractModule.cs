@@ -423,7 +423,8 @@ public class PlayerInteractModule : NetworkBehaviour
 
         RefreshDropAnchorPoseImmediately();
         Log($"[PlayerInteract][DropDebug] refreshedDropPoseBeforeSample=true localVisualReady={_localHeldVisualReady}");
-        GetDropAnchorWorldPose(out Vector3 dropPos, out Quaternion dropRot);
+        TryGetBestDropWorldPose(out Vector3 dropPos, out Quaternion dropRot, out string dropPoseSource);
+        Log($"[PlayerInteract] Drop pose source={dropPoseSource} pos={FormatVector(dropPos)} rot={FormatVector(dropRot.eulerAngles)}");
         DestroyLocalHeldVisual();
         Vector3 heldCurrentPos = netObj.transform.position;
         Quaternion heldCurrentRot = netObj.transform.rotation;
@@ -670,30 +671,50 @@ public class PlayerInteractModule : NetworkBehaviour
         if (!_localHeldVisualReady || visualRoot == null || !visualRoot.gameObject.activeInHierarchy)
             return false;
 
+        Transform handSocket = GetRightWeaponSocket();
+        if (handSocket == null || !visualRoot.IsChildOf(handSocket))
+            return false;
+
         if (!IsLocalHeldVisualSettledAgainstSocket(visualRoot))
             return false;
 
-        Transform anchor = TryGetLocalHeldVisualAnchor(visualRoot);
-        if (anchor != null)
-        {
-            pos = anchor.position;
-            rot = anchor.rotation;
-            _lastDropAnchorSourceDetail = "(Anchor)";
-            return true;
-        }
-
-        Renderer renderer = _localHeldVisualInstance.GetComponentInChildren<Renderer>(true);
-        if (renderer != null)
-        {
-            pos = renderer.bounds.center;
-            rot = visualRoot.rotation;
-            _lastDropAnchorSourceDetail = "(RendererBounds)";
-            return true;
-        }
-
         pos = visualRoot.position;
         rot = visualRoot.rotation;
-        _lastDropAnchorSourceDetail = "(RootFallback)";
+        _lastDropAnchorSourceDetail = "(Root)";
+        return true;
+    }
+
+    private bool TryGetBestDropWorldPose(out Vector3 dropPos, out Quaternion dropRot, out string source)
+    {
+        _lastDropAnchorSourceDetail = string.Empty;
+
+        if (TryGetLocalHeldVisualWorldPose(out dropPos, out dropRot))
+        {
+            _lastDropAnchorSource = "LocalHeldVisual";
+            _lastAppliedDropForwardOffset = 0f;
+            _lastAppliedDropUpOffset = 0f;
+            source = _lastDropAnchorSource + _lastDropAnchorSourceDetail;
+            return true;
+        }
+
+        if (TryGetHandWorldPose(out dropPos, out dropRot))
+        {
+            _lastDropAnchorSource = "HandWorldPose";
+            _lastDropAnchorSourceDetail = string.Empty;
+            _lastAppliedDropForwardOffset = 0f;
+            _lastAppliedDropUpOffset = 0f;
+            source = _lastDropAnchorSource;
+            return true;
+        }
+
+        GetDropAnchorWorldPose(out dropPos, out dropRot);
+        source = _lastDropAnchorSource == "RootFallback"
+            ? _lastDropAnchorSource
+            : "DropAnchorFallback";
+
+        if (!string.IsNullOrEmpty(_lastDropAnchorSourceDetail))
+            source += _lastDropAnchorSourceDetail;
+
         return true;
     }
 
@@ -1325,6 +1346,11 @@ public class PlayerInteractModule : NetworkBehaviour
     private static string FormatEuler(Vector3 euler)
     {
         return $"({euler.x:0.00}, {euler.y:0.00}, {euler.z:0.00})";
+    }
+
+    private static string FormatVector(Vector3 value)
+    {
+        return $"({value.x:0.00}, {value.y:0.00}, {value.z:0.00})";
     }
 
     private Vector3 GetDefaultWorldItemScale()
