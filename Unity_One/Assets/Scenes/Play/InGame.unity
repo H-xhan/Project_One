@@ -12521,7 +12521,7 @@ MonoBehaviour:
   inGameMatchManager: {fileID: 1995524424}
   roundMissionManager: {fileID: 143687884}
   countdownSeconds: 3
-  playSeconds: 300
+  playSeconds: 60
   resultsSeconds: 6
   autoReturnToLobby: 1
   teleportPlayersOnEnterLobby: 1

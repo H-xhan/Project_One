@@ -106,6 +106,24 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
     [Tooltip("기상 완료 직후 CharacterController를 켠 다음 아래로 살짝 눌러 바닥에 붙입니다.")]
     [SerializeField] private float postStandUpDownNudge = 0.02f;
 
+    [Tooltip("Stand-up 중 캐릭터 root가 바닥 아래로 파고들지 않도록 최소 지면 여유 높이를 유지합니다.")]
+    [SerializeField] private bool maintainGroundClearanceDuringStandUp = true;
+
+    [Tooltip("Stand-up 중 root가 ground 기준으로 유지해야 하는 최소 높이입니다.")]
+    [SerializeField] private float standUpGroundClearance = 0.18f;
+
+    [Tooltip("Stand-up 중 ground를 찾기 위해 아래 방향으로 검사하는 거리입니다.")]
+    [SerializeField] private float standUpGroundProbeDistance = 1.5f;
+
+    [Tooltip("한 틱에 stand-up ground clearance 보정으로 root를 위로 올릴 수 있는 최대 거리입니다.")]
+    [SerializeField] private float standUpMaxGroundCorrectionPerTick = 0.08f;
+
+    [Tooltip("한 번의 stand-up 동안 ground clearance 보정으로 root를 올릴 수 있는 최대 총 거리입니다.")]
+    [SerializeField] private float standUpMaxTotalGroundLift = 0.35f;
+
+    [Tooltip("Stand-up ground clearance 보정 로그를 출력할지 여부입니다.")]
+    [SerializeField] private bool standUpGroundClearanceDebugLogs = false;
+
     [Tooltip("바닥 검사 시작 높이")]
     [SerializeField] private float groundProbeHeight = 1.2f;
 
@@ -246,6 +264,8 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
     private bool _standUpAnimatorStillActiveLogged;
     private bool _deferredUprightSnapForCurrentStandUp;
     private string _lastStandUpPoseReason = string.Empty;
+    private float _standUpTotalGroundLiftApplied;
+    private float _nextStandUpGroundClearanceLogAt;
     private bool _hasTemporaryControlLock;
     private float _temporaryControlLockUntil;
     private bool _temporaryControlLockMove;
@@ -756,6 +776,8 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
             }
         }
 
+        MaintainStandUpGroundClearance("UpdateStandUp");
+
         standUpTimer -= Time.deltaTime;
         if (standUpTimer > 0f && !HasStandUpFallbackExpired())
             return;
@@ -1028,6 +1050,7 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
         ClearStandUpControlLock("CoinFallRespawn");
         ClearStandUpAnimatorExitLock("CoinFallRespawn");
         ClearDeferredStandUpUprightSnap("CoinFallRespawn");
+        ResetStandUpGroundClearanceState();
         ClearTemporaryControlLockLocal();
         _didSyncRootFromRagdollForCurrentKnockback = false;
         _hasLastRagdollFocusForRootSync = false;
@@ -1180,6 +1203,7 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
         ClearStandUpControlLock("BeginKnockback");
         ClearStandUpAnimatorExitLock("BeginKnockback");
         ClearDeferredStandUpUprightSnap("BeginKnockback");
+        ResetStandUpGroundClearanceState();
         _didSyncRootFromRagdollForCurrentKnockback = false;
 
         if (locomotionModule != null)
@@ -1247,6 +1271,7 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
         _standUpFinishEventReceived = false;
         _standUpMinimumDelayLogged = false;
         ClearDeferredStandUpUprightSnap("BeginStandUpBack");
+        ResetStandUpGroundClearanceState();
         ExtendStandUpControlLock(standUpMinimumControlLockSeconds, "Minimum");
         LogStandUpControlLock("StandUp started");
 
@@ -1267,6 +1292,8 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
 
         if (snapToGroundDuringStandUp)
             SnapRootToGround();
+
+        MaintainStandUpGroundClearance("BeginStandUp");
 
         if (disableControllerDuringStandUp && charController != null && charController.enabled)
             charController.enabled = false;
@@ -1470,6 +1497,130 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
             Physics.SyncTransforms();
             return;
         }
+    }
+
+    private void ResetStandUpGroundClearanceState()
+    {
+        _standUpTotalGroundLiftApplied = 0f;
+        _nextStandUpGroundClearanceLogAt = 0f;
+    }
+
+    private void MaintainStandUpGroundClearance(string reason)
+    {
+        if (!maintainGroundClearanceDuringStandUp)
+            return;
+
+        if (!IsServer || !isStandingUp)
+            return;
+
+        if (rootTransform == null)
+            rootTransform = rootRigidbody != null ? rootRigidbody.transform : rootNetObj != null ? rootNetObj.transform : transform.root;
+        if (rootTransform == null)
+            return;
+
+        if (!TryGetStandUpGroundPoint(out Vector3 groundPoint, out _))
+        {
+            LogStandUpGroundClearance("StandUp ground clearance skipped: no ground", true);
+            return;
+        }
+
+        float clearance = Mathf.Max(0f, GetFiniteOrZero(standUpGroundClearance));
+        float targetY = groundPoint.y + clearance;
+        float currentY = rootTransform.position.y;
+        float neededLift = targetY - currentY;
+        if (neededLift <= 0f)
+            return;
+
+        float maxTotalLift = Mathf.Max(0f, GetFiniteOrZero(standUpMaxTotalGroundLift));
+        float remainingTotalLift = maxTotalLift - _standUpTotalGroundLiftApplied;
+        if (remainingTotalLift <= 0f)
+        {
+            LogStandUpGroundClearance("StandUp ground clearance max lift reached", true);
+            return;
+        }
+
+        float maxPerTick = Mathf.Max(0f, GetFiniteOrZero(standUpMaxGroundCorrectionPerTick));
+        if (maxPerTick <= 0f)
+            return;
+
+        float deltaY = Mathf.Min(neededLift, maxPerTick, remainingTotalLift);
+        if (deltaY <= 0f)
+            return;
+
+        ApplyRootVerticalOffsetForStandUp(deltaY, reason);
+        _standUpTotalGroundLiftApplied += deltaY;
+        LogStandUpGroundClearance($"StandUp ground clearance lift delta={deltaY:0.###} total={_standUpTotalGroundLiftApplied:0.###} reason={reason}", reason == "UpdateStandUp");
+    }
+
+    private bool TryGetStandUpGroundPoint(out Vector3 point, out Vector3 normal)
+    {
+        point = Vector3.zero;
+        normal = Vector3.up;
+
+        if (rootTransform == null)
+            rootTransform = rootRigidbody != null ? rootRigidbody.transform : rootNetObj != null ? rootNetObj.transform : transform.root;
+        if (rootTransform == null)
+            return false;
+
+        float clearance = Mathf.Max(0f, GetFiniteOrZero(standUpGroundClearance));
+        float probeDistance = Mathf.Max(0.1f, GetFiniteOrZero(standUpGroundProbeDistance));
+        float originLift = Mathf.Max(0.2f, clearance + 0.5f);
+        Vector3 origin = rootTransform.position + Vector3.up * originLift;
+        float distance = originLift + probeDistance;
+        int mask = groundMask.value == 0 ? Physics.DefaultRaycastLayers : groundMask.value;
+
+        RaycastHit[] hits = Physics.RaycastAll(origin, Vector3.down, distance, mask, QueryTriggerInteraction.Ignore);
+        if (hits == null || hits.Length == 0)
+            return false;
+
+        System.Array.Sort(hits, (a, b) => a.distance.CompareTo(b.distance));
+        for (int i = 0; i < hits.Length; i++)
+        {
+            RaycastHit hit = hits[i];
+            if (hit.collider == null)
+                continue;
+
+            if (ignoreOwnCollidersOnGroundSnap && hit.collider.transform.root == rootTransform)
+                continue;
+
+            point = hit.point;
+            normal = hit.normal.sqrMagnitude > 0.0001f ? hit.normal.normalized : Vector3.up;
+            return IsFiniteVector(point) && IsFiniteVector(normal);
+        }
+
+        return false;
+    }
+
+    private void ApplyRootVerticalOffsetForStandUp(float deltaY, string reason)
+    {
+        if (deltaY <= 0f)
+            return;
+
+        if (rootTransform == null)
+            rootTransform = rootRigidbody != null ? rootRigidbody.transform : rootNetObj != null ? rootNetObj.transform : transform.root;
+        if (rootTransform == null)
+            return;
+
+        bool wasControllerEnabled = charController != null && charController.enabled;
+        if (wasControllerEnabled)
+            charController.enabled = false;
+
+        Vector3 targetPosition = rootTransform.position + Vector3.up * deltaY;
+        if (!IsFiniteVector(targetPosition))
+        {
+            if (wasControllerEnabled)
+                charController.enabled = true;
+            return;
+        }
+
+        if (rootRigidbody != null)
+            rootRigidbody.position = targetPosition;
+
+        rootTransform.position = targetPosition;
+        Physics.SyncTransforms();
+
+        if (wasControllerEnabled)
+            charController.enabled = true;
     }
 
     private void CacheRagdollFocusForRootSync()
@@ -1866,6 +2017,7 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
         _standUpStartedAt = 0f;
         _standUpFinishEventReceived = false;
         _standUpMinimumDelayLogged = false;
+        ResetStandUpGroundClearanceState();
         ApplyStandingPhysicsState();
         ClearRecentCombatContributorServer();
         ResetFallContributionReportGuard();
@@ -1910,6 +2062,7 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
         ClearStandUpControlLock("Elimination");
         ClearStandUpAnimatorExitLock("Elimination");
         ClearDeferredStandUpUprightSnap("Elimination");
+        ResetStandUpGroundClearanceState();
         ClearTemporaryControlLockLocal();
         ClearRecentCombatContributorServer();
 
@@ -1998,6 +2151,22 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
         Debug.Log($"[PlayerStatus] {message}", this);
     }
 
+    private void LogStandUpGroundClearance(string message, bool throttle = false)
+    {
+        if (!standUpGroundClearanceDebugLogs && !enableDebugLogs)
+            return;
+
+        if (throttle)
+        {
+            if (Time.time < _nextStandUpGroundClearanceLogAt)
+                return;
+
+            _nextStandUpGroundClearanceLogAt = Time.time + 0.25f;
+        }
+
+        Debug.Log($"[PlayerStatus] {message}", this);
+    }
+
     private void LogDropHeldItemOnKnockback(string message)
     {
         if (!enableDropHeldItemOnKnockbackDebugLogs)
@@ -2033,6 +2202,10 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
         standUpAnimatorExitMaxLockSeconds = Mathf.Max(0f, standUpAnimatorExitMaxLockSeconds);
         unsafeStandUpPoseUpDotThreshold = Mathf.Clamp(unsafeStandUpPoseUpDotThreshold, -1f, 1f);
         unsafeStandUpPoseForwardDotThreshold = Mathf.Clamp01(unsafeStandUpPoseForwardDotThreshold);
+        standUpGroundClearance = Mathf.Max(0f, standUpGroundClearance);
+        standUpGroundProbeDistance = Mathf.Max(0.1f, standUpGroundProbeDistance);
+        standUpMaxGroundCorrectionPerTick = Mathf.Max(0f, standUpMaxGroundCorrectionPerTick);
+        standUpMaxTotalGroundLift = Mathf.Max(0f, standUpMaxTotalGroundLift);
 
         ResolveRefs();
         backStandUpStateHash = Animator.StringToHash("Back Stand Up");
