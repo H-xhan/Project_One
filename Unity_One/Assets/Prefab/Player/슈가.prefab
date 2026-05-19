@@ -888,6 +888,12 @@ MonoBehaviour:
   useBackStandUp: 1
   disableControllerDuringStandUp: 1
   standUpFallbackTime: 1
+  standUpFinishNormalizedTime: 0.98
+  standUpMinimumControlLockSeconds: 0.8
+  standUpFallbackFinishSeconds: 1.25
+  standUpPostFinishControlLockSeconds: 1.25
+  standUpWaitForAnimatorExit: 1
+  standUpAnimatorExitMaxLockSeconds: 1.2
   snapUprightOnStandUp: 1
   snapToGroundOnStandUpFinish: 1
   snapToGroundDuringStandUp: 1
@@ -912,6 +918,9 @@ MonoBehaviour:
   triggerHitWhileKnocked: 0
   enableActiveRagdollHitReaction: 1
   activeRagdollHitImpulseScale: 0
+  dropHeldItemOnKnockback: 1
+  dropHeldItemOnKnockbackCooldown: 0.35
+  enableDropHeldItemOnKnockbackDebugLogs: 0
   eliminationY: 3
   useRagdollFocusForElimination: 1
   ragdollFocusEliminationYOffset: 3
@@ -930,6 +939,7 @@ MonoBehaviour:
   enableCombatFallContributionDebugLogs: 1
   enableDebugLogs: 0
   enableTemporaryControlLockDebugLogs: 0
+  enableStandUpControlLockDebugLogs: 0
 --- !u!114 &3577343894024067653
 MonoBehaviour:
   m_ObjectHideFlags: 0

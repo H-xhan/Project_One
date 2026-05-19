@@ -57,6 +57,24 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
     [Tooltip("애니메이션 이벤트가 누락됐을 때 강제로 standing으로 복귀시키는 최대 대기 시간(초)")]
     [SerializeField] private float standUpFallbackTime = 3.6f;
 
+    [Tooltip("Stand-up 애니메이션이 이 normalized time 이상 진행된 뒤에만 조작 잠금을 풀 수 있습니다.")]
+    [SerializeField] private float standUpFinishNormalizedTime = 0.98f;
+
+    [Tooltip("Stand-up 시작 후 최소한 이 시간 동안 이동/공격/상호작용을 막습니다.")]
+    [SerializeField] private float standUpMinimumControlLockSeconds = 0.8f;
+
+    [Tooltip("애니메이션 이벤트가 오지 않아도 stand-up을 안전하게 끝낼 fallback 시간입니다.")]
+    [SerializeField] private float standUpFallbackFinishSeconds = 1.25f;
+
+    [Tooltip("Stand-up physics recovery 이후 애니메이션/transition이 마무리될 때까지 추가로 이동/공격/상호작용을 막는 시간입니다.")]
+    [SerializeField] private float standUpPostFinishControlLockSeconds = 0.45f;
+
+    [Tooltip("Stand-up physics recovery 이후에도 Animator가 stand-up 상태/transition에서 빠질 때까지 조작을 계속 막을지 여부입니다.")]
+    [SerializeField] private bool standUpWaitForAnimatorExit = true;
+
+    [Tooltip("Animator stand-up 종료를 기다리는 최대 시간입니다. 이 시간이 지나면 안전하게 조작 잠금을 해제합니다.")]
+    [SerializeField] private float standUpAnimatorExitMaxLockSeconds = 1.2f;
+
     [Tooltip("기상 시작 시 루트 회전을 지면 기준으로 바로 세웁니다.")]
     [SerializeField] private bool snapUprightOnStandUp = true;
 
@@ -195,12 +213,22 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
     [Tooltip("임시 조작 잠금 상태의 시작/종료 디버그 로그를 출력할지 여부입니다.")]
     [SerializeField] private bool enableTemporaryControlLockDebugLogs = false;
 
+    [Tooltip("Stand-up 조작 잠금/해제 디버그 로그를 출력할지 여부입니다.")]
+    [SerializeField] private bool enableStandUpControlLockDebugLogs = false;
+
     private bool isKnocked;
     private bool isStandingUp;
     private bool isEliminated;
     private float knockTimer;
     private float nextHitReactionAt;
     private float standUpTimer;
+    private float _standUpStartedAt;
+    private bool _standUpFinishEventReceived;
+    private bool _standUpMinimumDelayLogged;
+    private float _standUpControlLockedUntil;
+    private bool _waitingForStandUpAnimatorExit;
+    private float _standUpAnimatorExitLockStartedAt;
+    private bool _standUpAnimatorStillActiveLogged;
     private bool _hasTemporaryControlLock;
     private float _temporaryControlLockUntil;
     private bool _temporaryControlLockMove;
@@ -248,9 +276,9 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
             return Mathf.Max(0f, _temporaryControlLockUntil - Time.time);
         }
     }
-    public bool CanMove => !isKnocked && !isStandingUp && !isEliminated && !ShouldBlockMoveByTemporaryLock();
-    public bool CanAttack => !isKnocked && !isStandingUp && !isEliminated && !ShouldBlockAttackByTemporaryLock();
-    public bool CanInteract => !isKnocked && !isStandingUp && !isEliminated && !ShouldBlockInteractByTemporaryLock();
+    public bool CanMove => !isKnocked && !isStandingUp && !IsStandUpVisualControlLocked && !isEliminated && !ShouldBlockMoveByTemporaryLock();
+    public bool CanAttack => !isKnocked && !isStandingUp && !IsStandUpVisualControlLocked && !isEliminated && !ShouldBlockAttackByTemporaryLock();
+    public bool CanInteract => !isKnocked && !isStandingUp && !IsStandUpVisualControlLocked && !isEliminated && !ShouldBlockInteractByTemporaryLock();
     public bool HasRecentCombatFallContributor => IsServer && IsRecentCombatContributorValid();
 
     public bool ServerApplyTemporaryControlLock(float duration)
@@ -323,6 +351,7 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
 
         UpdateKnockState();
         UpdateStandUpState();
+        UpdateStandUpAnimatorExitLock();
         CheckElimination();
     }
 
@@ -686,6 +715,12 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
     {
         if (!isStandingUp) return;
 
+        if (_standUpFinishEventReceived)
+        {
+            TryFinishStandUp("AnimationEvent");
+            if (!isStandingUp) return;
+        }
+
         if (rootAnimator != null)
         {
             AnimatorStateInfo state = rootAnimator.GetCurrentAnimatorStateInfo(0);
@@ -696,20 +731,19 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
                 if (snapToGroundDuringStandUp && state.normalizedTime >= standUpSnapStartNormalized && state.normalizedTime < 0.98f)
                     SnapRootToGround();
 
-                if (state.normalizedTime >= 0.92f)
+                if (state.normalizedTime >= Mathf.Clamp01(standUpFinishNormalizedTime))
                 {
-                    FinishStandUpImmediate();
+                    TryFinishStandUp("NormalizedTime");
                     return;
                 }
             }
         }
 
         standUpTimer -= Time.deltaTime;
-        if (standUpTimer > 0f)
+        if (standUpTimer > 0f && !HasStandUpFallbackExpired())
             return;
 
-        Debug.LogWarning("[PlayerStatus] Stand up fallback fired.");
-        FinishStandUpImmediate();
+        TryFinishStandUp("Fallback");
     }
 
     private void CheckElimination()
@@ -971,6 +1005,11 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
         isStandingUp = false;
         knockTimer = 0f;
         standUpTimer = 0f;
+        _standUpStartedAt = 0f;
+        _standUpFinishEventReceived = false;
+        _standUpMinimumDelayLogged = false;
+        ClearStandUpControlLock("CoinFallRespawn");
+        ClearStandUpAnimatorExitLock("CoinFallRespawn");
         ClearTemporaryControlLockLocal();
         _didSyncRootFromRagdollForCurrentKnockback = false;
         _hasLastRagdollFocusForRootSync = false;
@@ -1117,6 +1156,11 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
         isStandingUp = false;
         knockTimer = Mathf.Max(0.01f, knockbackDuration);
         standUpTimer = 0f;
+        _standUpStartedAt = 0f;
+        _standUpFinishEventReceived = false;
+        _standUpMinimumDelayLogged = false;
+        ClearStandUpControlLock("BeginKnockback");
+        ClearStandUpAnimatorExitLock("BeginKnockback");
         _didSyncRootFromRagdollForCurrentKnockback = false;
 
         if (locomotionModule != null)
@@ -1179,7 +1223,12 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
 
         isKnocked = false;
         isStandingUp = true;
-        standUpTimer = Mathf.Max(0.2f, standUpFallbackTime);
+        standUpTimer = Mathf.Max(0.2f, Mathf.Max(0f, standUpFallbackFinishSeconds));
+        _standUpStartedAt = Time.time;
+        _standUpFinishEventReceived = false;
+        _standUpMinimumDelayLogged = false;
+        ExtendStandUpControlLock(standUpMinimumControlLockSeconds, "Minimum");
+        LogStandUpControlLock("StandUp started");
 
         if (rootRigidbody != null)
         {
@@ -1212,7 +1261,7 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
             return;
         }
 
-        FinishStandUpImmediate();
+        TryFinishStandUp("NoStandUpAnimation");
     }
 
     private void SnapRootUpright()
@@ -1484,12 +1533,171 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
         return float.IsNaN(value) || float.IsInfinity(value) ? 0f : value;
     }
 
+    private bool IsStandUpControlLocked => Time.time < _standUpControlLockedUntil;
+
+    private bool IsStandUpVisualControlLocked => IsStandUpControlLocked || (_waitingForStandUpAnimatorExit && !HasStandUpAnimatorExitLockExpired());
+
+    private void ExtendStandUpControlLock(float seconds, string reason)
+    {
+        float finiteSeconds = Mathf.Max(0f, GetFiniteOrZero(seconds));
+        if (finiteSeconds <= 0f)
+            return;
+
+        _standUpControlLockedUntil = Mathf.Max(_standUpControlLockedUntil, Time.time + finiteSeconds);
+        LogStandUpControlLock($"StandUp post control lock extended seconds={finiteSeconds:0.###} reason={reason}");
+        LogStandUpControlLock("StandUp control lock active");
+    }
+
+    private void ClearStandUpControlLock(string reason)
+    {
+        bool hadStandUpControlLock = _standUpControlLockedUntil > 0f;
+        _standUpControlLockedUntil = 0f;
+
+        if (hadStandUpControlLock)
+            LogStandUpControlLock($"StandUp control lock cleared reason={reason}");
+    }
+
+    private bool IsStandUpAnimatorStillActive()
+    {
+        if (rootAnimator == null)
+            return false;
+
+        AnimatorStateInfo currentState = rootAnimator.GetCurrentAnimatorStateInfo(0);
+        if (IsStandUpAnimatorState(currentState))
+            return true;
+
+        if (!rootAnimator.IsInTransition(0))
+            return false;
+
+        AnimatorStateInfo nextState = rootAnimator.GetNextAnimatorStateInfo(0);
+        return IsStandUpAnimatorState(nextState);
+    }
+
+    private bool IsStandUpAnimatorState(AnimatorStateInfo state)
+    {
+        return state.shortNameHash == backStandUpStateHash || state.IsName("Base Layer.Back Stand Up") || state.IsName("Back Stand Up");
+    }
+
+    private void BeginStandUpAnimatorExitLock(string reason)
+    {
+        if (!standUpWaitForAnimatorExit)
+            return;
+
+        if (rootAnimator == null)
+            return;
+
+        if (!IsStandUpAnimatorStillActive())
+            return;
+
+        _waitingForStandUpAnimatorExit = true;
+        _standUpAnimatorExitLockStartedAt = Time.time;
+        _standUpAnimatorStillActiveLogged = false;
+        LogStandUpControlLock($"StandUp animator exit lock started reason={reason}");
+    }
+
+    private void UpdateStandUpAnimatorExitLock()
+    {
+        if (!_waitingForStandUpAnimatorExit)
+            return;
+
+        if (HasStandUpAnimatorExitLockExpired())
+        {
+            LogStandUpControlLock("StandUp animator exit lock timeout");
+            ClearStandUpAnimatorExitLock("Timeout");
+            return;
+        }
+
+        if (IsStandUpAnimatorStillActive())
+        {
+            if (!_standUpAnimatorStillActiveLogged)
+            {
+                LogStandUpControlLock("StandUp animator still active");
+                _standUpAnimatorStillActiveLogged = true;
+            }
+
+            return;
+        }
+
+        ClearStandUpAnimatorExitLock("AnimatorExit");
+    }
+
+    private void ClearStandUpAnimatorExitLock(string reason)
+    {
+        bool hadAnimatorExitLock =
+            _waitingForStandUpAnimatorExit ||
+            _standUpAnimatorExitLockStartedAt > 0f ||
+            _standUpAnimatorStillActiveLogged;
+
+        _waitingForStandUpAnimatorExit = false;
+        _standUpAnimatorExitLockStartedAt = 0f;
+        _standUpAnimatorStillActiveLogged = false;
+
+        if (hadAnimatorExitLock)
+            LogStandUpControlLock($"StandUp animator exit lock cleared reason={reason}");
+    }
+
+    private bool HasStandUpAnimatorExitLockExpired()
+    {
+        if (!_waitingForStandUpAnimatorExit)
+            return false;
+
+        return Time.time - _standUpAnimatorExitLockStartedAt >= Mathf.Max(0f, standUpAnimatorExitMaxLockSeconds);
+    }
+
+    private bool CanFinishStandUpNow(string reason)
+    {
+        if (!isStandingUp)
+            return false;
+
+        if (!HasStandUpMinimumControlLockElapsed())
+        {
+            if (!_standUpMinimumDelayLogged)
+            {
+                LogStandUpControlLock($"StandUp finish delayed: minimum lock reason={reason}, elapsed:{GetStandUpElapsedSeconds():0.###}");
+                _standUpMinimumDelayLogged = true;
+            }
+
+            return false;
+        }
+
+        if (HasStandUpFallbackExpired())
+            return true;
+
+        return _standUpFinishEventReceived || reason == "NormalizedTime";
+    }
+
+    private void TryFinishStandUp(string reason)
+    {
+        if (!CanFinishStandUpNow(reason))
+            return;
+
+        LogStandUpControlLock($"StandUp finished by {reason}");
+        FinishStandUpImmediate();
+    }
+
+    private float GetStandUpElapsedSeconds()
+    {
+        return isStandingUp ? Mathf.Max(0f, Time.time - _standUpStartedAt) : 0f;
+    }
+
+    private bool HasStandUpMinimumControlLockElapsed()
+    {
+        return GetStandUpElapsedSeconds() >= Mathf.Max(0f, standUpMinimumControlLockSeconds);
+    }
+
+    private bool HasStandUpFallbackExpired()
+    {
+        return GetStandUpElapsedSeconds() >= Mathf.Max(0f, standUpFallbackFinishSeconds);
+    }
+
     public void AnimEvent_StandUpFinished()
     {
         if (!IsServer) return;
         if (!isStandingUp) return;
 
-        FinishStandUpImmediate();
+        _standUpFinishEventReceived = true;
+        LogStandUpControlLock("StandUp finish event received");
+        TryFinishStandUp("AnimationEvent");
     }
 
     public void AnimEvent_StandUpBackFinished()
@@ -1508,8 +1716,13 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
             SnapRootToGround();
 
         isKnocked = false;
+        ExtendStandUpControlLock(standUpPostFinishControlLockSeconds, "PostFinish");
+        BeginStandUpAnimatorExitLock("PostFinish");
         isStandingUp = false;
         standUpTimer = 0f;
+        _standUpStartedAt = 0f;
+        _standUpFinishEventReceived = false;
+        _standUpMinimumDelayLogged = false;
         ApplyStandingPhysicsState();
         ClearRecentCombatContributorServer();
         ResetFallContributionReportGuard();
@@ -1548,6 +1761,11 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
         isKnocked = false;
         isStandingUp = false;
         standUpTimer = 0f;
+        _standUpStartedAt = 0f;
+        _standUpFinishEventReceived = false;
+        _standUpMinimumDelayLogged = false;
+        ClearStandUpControlLock("Elimination");
+        ClearStandUpAnimatorExitLock("Elimination");
         ClearTemporaryControlLockLocal();
         ClearRecentCombatContributorServer();
 
@@ -1620,6 +1838,14 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
         Debug.Log($"[TemporaryControlLock] {message}", this);
     }
 
+    private void LogStandUpControlLock(string message)
+    {
+        if (!enableStandUpControlLockDebugLogs)
+            return;
+
+        Debug.Log($"[PlayerStatus] {message}", this);
+    }
+
     private void LogDropHeldItemOnKnockback(string message)
     {
         if (!enableDropHeldItemOnKnockbackDebugLogs)
@@ -1648,6 +1874,11 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
         maxCoinDropSpawnAttempts = Mathf.Max(1, maxCoinDropSpawnAttempts);
         recentCombatContributorValidSeconds = Mathf.Max(0f, recentCombatContributorValidSeconds);
         dropHeldItemOnKnockbackCooldown = Mathf.Max(0f, dropHeldItemOnKnockbackCooldown);
+        standUpFinishNormalizedTime = Mathf.Clamp01(standUpFinishNormalizedTime);
+        standUpMinimumControlLockSeconds = Mathf.Max(0f, standUpMinimumControlLockSeconds);
+        standUpFallbackFinishSeconds = Mathf.Max(0f, standUpFallbackFinishSeconds);
+        standUpPostFinishControlLockSeconds = Mathf.Max(0f, standUpPostFinishControlLockSeconds);
+        standUpAnimatorExitMaxLockSeconds = Mathf.Max(0f, standUpAnimatorExitMaxLockSeconds);
 
         ResolveRefs();
         backStandUpStateHash = Animator.StringToHash("Back Stand Up");
