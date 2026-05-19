@@ -27,7 +27,7 @@ public class LoadingOverlayUI : MonoBehaviour
     [SerializeField, Tooltip("로딩 제목을 표시할 텍스트입니다.")]
     private TMP_Text loadingTitleText;
 
-    [SerializeField, Tooltip("로딩 진행바 Fill 이미지입니다. 실제 진행률이 없으면 반복 애니메이션으로 사용합니다.")]
+    [SerializeField, Tooltip("로딩 진행바 Fill 이미지입니다.")]
     private Image progressFillImage;
 
     [SerializeField, Tooltip("시작 시 LobbyManager가 이미 작업 중이면 오버레이를 표시할지 여부입니다.")]
@@ -39,11 +39,17 @@ public class LoadingOverlayUI : MonoBehaviour
     [SerializeField, Tooltip("실패 메시지를 보여준 뒤 오버레이를 숨기기까지의 대기 시간입니다.")]
     private float hideDelayAfterFailure = 2.0f;
 
-    [SerializeField, Tooltip("실제 진행률 대신 진행바 반복 애니메이션을 사용할지 여부입니다.")]
+    [SerializeField, Tooltip("진행률이 목표값까지 부드럽게 움직이도록 애니메이션할지 여부입니다.")]
     private bool animateProgress = true;
 
-    [SerializeField, Tooltip("진행바 반복 애니메이션 속도입니다.")]
+    [SerializeField, Tooltip("이전 진행바 반복 애니메이션 속도입니다. 단계형 진행률에서는 하위 호환을 위해 보존됩니다.")]
     private float progressAnimationSpeed = 0.75f;
+
+    [SerializeField, Tooltip("로딩 진행률 표시가 목표값까지 부드럽게 따라가는 속도입니다.")]
+    private float loadingProgressLerpSpeed = 6f;
+
+    [SerializeField, Tooltip("별도 퍼센트 텍스트가 없을 때 로딩 메시지 뒤에 진행률 퍼센트를 함께 표시할지 여부입니다.")]
+    private bool appendProgressPercentToMessage = false;
 
     [SerializeField, Tooltip("로딩 중 표시할 기본 제목입니다.")]
     private string defaultLoadingTitle = "LOADING";
@@ -63,7 +69,10 @@ public class LoadingOverlayUI : MonoBehaviour
     private LobbyManager subscribedLobbyManager;
     private Coroutine hideCoroutine;
     private Coroutine hideWaitCoroutine;
-    private Coroutine progressCoroutine;
+    private Coroutine _progressRoutine;
+    private float _currentProgress;
+    private float _targetProgress;
+    private string _baseLoadingMessage = string.Empty;
     private bool isSubscribedToLobbyManager;
     private bool isVisible;
     private bool isDuplicateInstance;
@@ -103,7 +112,7 @@ public class LoadingOverlayUI : MonoBehaviour
         UnsubscribeFromLobbyManager();
         StopHideCoroutine();
         StopHideWaitCoroutine();
-        StopProgressAnimation();
+        StopProgressRoutine();
     }
 
     private void OnDestroy()
@@ -111,7 +120,7 @@ public class LoadingOverlayUI : MonoBehaviour
         UnsubscribeFromLobbyManager();
         StopHideCoroutine();
         StopHideWaitCoroutine();
-        StopProgressAnimation();
+        StopProgressRoutine();
 
         if (_instance == this)
             _instance = null;
@@ -119,15 +128,32 @@ public class LoadingOverlayUI : MonoBehaviour
 
     public void Show(string message)
     {
+        ShowInternal(message, true, 0.05f);
+    }
+
+    private void ShowInternal(string message, bool resetProgress, float initialProgress)
+    {
         StopHideCoroutine();
         StopHideWaitCoroutine();
         ResolveOverlayReferences();
 
         SetLoadingTitle(defaultLoadingTitle);
-        SetLoadingMessage(message);
+        SetBaseLoadingMessage(message);
         SetErrorMessage(string.Empty);
         ApplyVisibility(true);
-        StartProgressAnimationIfNeeded();
+
+        if (resetProgress)
+        {
+            ResetProgress(initialProgress);
+        }
+        else
+        {
+            InitializeProgressVisual();
+            ApplyProgressVisual(_currentProgress);
+        }
+
+        StartProgressRoutineIfNeeded();
+        SetProgressTarget(initialProgress, "Show");
     }
 
     public void Hide()
@@ -135,7 +161,7 @@ public class LoadingOverlayUI : MonoBehaviour
         StopHideCoroutine();
         StopHideWaitCoroutine();
         ApplyVisibility(false);
-        StopProgressAnimation();
+        StopProgressRoutine();
     }
 
     public void ShowError(string message)
@@ -145,10 +171,11 @@ public class LoadingOverlayUI : MonoBehaviour
         ResolveOverlayReferences();
 
         SetLoadingTitle(defaultLoadingTitle);
-        SetLoadingMessage(errorMessageText == null ? message : string.Empty);
+        SetBaseLoadingMessage(errorMessageText == null ? message : string.Empty);
         SetErrorMessage(message);
         ApplyVisibility(true);
-        StartProgressAnimationIfNeeded();
+        ResetProgress(0f);
+        StartProgressRoutineIfNeeded();
     }
 
     public void ForceRefreshFromLobbyManager()
@@ -173,11 +200,13 @@ public class LoadingOverlayUI : MonoBehaviour
     private void HandleLobbyOperationStarted(string message)
     {
         Show(message);
+        SetProgressTarget(0.1f, "OperationStarted");
     }
 
     private void HandleLobbyOperationSucceeded(string message)
     {
-        Show(string.IsNullOrEmpty(message) ? successMessage : message);
+        ShowInternal(string.IsNullOrEmpty(message) ? successMessage : message, false, 0.05f);
+        SetProgressTarget(0.25f, "LobbyRelaySuccess");
 
         if (ShouldWaitForInGameReadyOnSuccess())
         {
@@ -185,6 +214,7 @@ public class LoadingOverlayUI : MonoBehaviour
             return;
         }
 
+        SetProgressTarget(1f, "SuccessHide");
         ScheduleHide(hideDelayAfterSuccess);
     }
 
@@ -284,8 +314,11 @@ public class LoadingOverlayUI : MonoBehaviour
 
         while (timeout <= 0f || Time.realtimeSinceStartup - startedAt < timeout)
         {
+            UpdateInGameReadinessProgress();
+
             if (IsInGameReadyToHide())
             {
+                SetProgressTarget(1f, "InGameReady");
                 hideWaitCoroutine = null;
                 ScheduleHide(hideDelayAfterSuccess);
                 yield break;
@@ -295,6 +328,7 @@ public class LoadingOverlayUI : MonoBehaviour
         }
 
         Debug.LogWarning("[LoadingOverlayUI] InGame ready wait timed out. Hiding loading overlay.", this);
+        CompleteProgressImmediately();
         hideWaitCoroutine = null;
         Hide();
     }
@@ -405,6 +439,16 @@ public class LoadingOverlayUI : MonoBehaviour
 
     private bool IsLocalPlayerReadyForGameplay(NetworkObject playerObject)
     {
+        if (!TryGetLocalPlayerHub(playerObject, out PlayerHub _))
+            return false;
+
+        return IsOwnerCameraReady(playerObject.gameObject);
+    }
+
+    private bool TryGetLocalPlayerHub(NetworkObject playerObject, out PlayerHub playerHub)
+    {
+        playerHub = null;
+
         if (playerObject == null || !playerObject.IsSpawned)
             return false;
 
@@ -412,11 +456,11 @@ public class LoadingOverlayUI : MonoBehaviour
         if (networkManager != null && playerObject.OwnerClientId != networkManager.LocalClientId)
             return false;
 
-        PlayerHub playerHub = playerObject.GetComponentInChildren<PlayerHub>(true);
+        playerHub = playerObject.GetComponentInChildren<PlayerHub>(true);
         if (playerHub == null)
             return false;
 
-        return IsOwnerCameraReady(playerObject.gameObject);
+        return true;
     }
 
     private bool IsOwnerCameraReady(GameObject playerObject)
@@ -473,39 +517,162 @@ public class LoadingOverlayUI : MonoBehaviour
         return false;
     }
 
-    private void StartProgressAnimationIfNeeded()
+    private void UpdateInGameReadinessProgress()
     {
-        if (!animateProgress || progressFillImage == null || progressCoroutine != null)
+        if (!IsInGameSceneActive())
+            return;
+
+        SetProgressTarget(0.45f, "InGameSceneActive");
+
+        if (!IsNetworkConnected())
+            return;
+
+        SetProgressTarget(0.55f, "NetworkConnected");
+
+        if (!TryGetLocalPlayerObject(out NetworkObject playerObject))
+            return;
+
+        SetProgressTarget(0.65f, "LocalPlayerObject");
+
+        if (!TryGetLocalPlayerHub(playerObject, out PlayerHub _))
+            return;
+
+        SetProgressTarget(0.75f, "PlayerHub");
+
+        if (!IsOwnerCameraReady(playerObject.gameObject))
+            return;
+
+        SetProgressTarget(0.85f, "OwnerCamera");
+
+        if (!AreInGameManagersReady() || !IsReadyUiLikelyReady())
+            return;
+
+        SetProgressTarget(0.95f, "InGameManagersReady");
+    }
+
+    private void InitializeProgressVisual()
+    {
+        if (!HasProgressVisual())
+            return;
+
+        progressFillImage.type = Image.Type.Filled;
+        progressFillImage.fillMethod = Image.FillMethod.Horizontal;
+        progressFillImage.fillOrigin = (int)Image.OriginHorizontal.Left;
+        progressFillImage.fillAmount = Mathf.Clamp01(_currentProgress);
+    }
+
+    private void ResetProgress(float value = 0f)
+    {
+        StopProgressRoutine();
+
+        _currentProgress = Mathf.Clamp01(value);
+        _targetProgress = _currentProgress;
+        InitializeProgressVisual();
+        ApplyProgressVisual(_currentProgress);
+        RefreshLoadingMessageWithProgress();
+    }
+
+    private void SetProgressTarget(float value, string label = null)
+    {
+        float nextTarget = Mathf.Max(_targetProgress, Mathf.Clamp01(value));
+        if (Mathf.Approximately(nextTarget, _targetProgress))
         {
             return;
         }
 
-        progressCoroutine = StartCoroutine(AnimateProgressFill());
+        _targetProgress = nextTarget;
+
+        if (!animateProgress)
+        {
+            _currentProgress = _targetProgress;
+            ApplyProgressVisual(_currentProgress);
+            RefreshLoadingMessageWithProgress();
+            return;
+        }
+
+        StartProgressRoutineIfNeeded();
     }
 
-    private IEnumerator AnimateProgressFill()
+    private void CompleteProgressImmediately()
     {
-        while (isVisible && animateProgress && progressFillImage != null)
+        _targetProgress = 1f;
+        _currentProgress = 1f;
+        ApplyProgressVisual(_currentProgress);
+        RefreshLoadingMessageWithProgress();
+    }
+
+    private void StartProgressRoutineIfNeeded()
+    {
+        if (!animateProgress || _progressRoutine != null)
+            return;
+
+        _progressRoutine = StartCoroutine(AnimateProgressRoutine());
+    }
+
+    private IEnumerator AnimateProgressRoutine()
+    {
+        while (isVisible)
         {
-            progressFillImage.fillAmount = Mathf.Repeat(Time.unscaledTime * Mathf.Max(0f, progressAnimationSpeed), 1f);
+            float speed = Mathf.Max(0f, loadingProgressLerpSpeed);
+            _currentProgress = speed <= 0f
+                ? _targetProgress
+                : Mathf.MoveTowards(_currentProgress, _targetProgress, speed * Time.unscaledDeltaTime);
+
+            ApplyProgressVisual(_currentProgress);
+            RefreshLoadingMessageWithProgress();
             yield return null;
         }
 
-        progressCoroutine = null;
+        _progressRoutine = null;
     }
 
-    private void StopProgressAnimation()
+    private void ApplyProgressVisual(float value)
     {
-        if (progressCoroutine != null)
+        if (!HasProgressVisual())
+            return;
+
+        InitializeProgressVisual();
+        progressFillImage.fillAmount = Mathf.Clamp01(value);
+    }
+
+    private void StopProgressRoutine()
+    {
+        if (_progressRoutine != null)
         {
-            StopCoroutine(progressCoroutine);
-            progressCoroutine = null;
+            StopCoroutine(_progressRoutine);
+            _progressRoutine = null;
         }
 
-        if (progressFillImage != null)
+        _currentProgress = 0f;
+        _targetProgress = 0f;
+        ApplyProgressVisual(0f);
+        RefreshLoadingMessageWithProgress();
+    }
+
+    private void SetBaseLoadingMessage(string message)
+    {
+        _baseLoadingMessage = message ?? string.Empty;
+        RefreshLoadingMessageWithProgress();
+    }
+
+    private void RefreshLoadingMessageWithProgress()
+    {
+        if (loadingMessageText == null)
+            return;
+
+        if (appendProgressPercentToMessage && !string.IsNullOrEmpty(_baseLoadingMessage))
         {
-            progressFillImage.fillAmount = 0f;
+            int percent = Mathf.RoundToInt(Mathf.Clamp01(_currentProgress) * 100f);
+            loadingMessageText.text = $"{_baseLoadingMessage} ({percent}%)";
+            return;
         }
+
+        loadingMessageText.text = _baseLoadingMessage;
+    }
+
+    private bool HasProgressVisual()
+    {
+        return progressFillImage != null;
     }
 
     private void ApplyVisibility(bool visible)
@@ -536,10 +703,7 @@ public class LoadingOverlayUI : MonoBehaviour
 
     private void SetLoadingMessage(string message)
     {
-        if (loadingMessageText != null)
-        {
-            loadingMessageText.text = message ?? string.Empty;
-        }
+        SetBaseLoadingMessage(message);
     }
 
     private void SetErrorMessage(string message)
@@ -560,6 +724,7 @@ public class LoadingOverlayUI : MonoBehaviour
         hideDelayAfterSuccess = Mathf.Max(0f, hideDelayAfterSuccess);
         hideDelayAfterFailure = Mathf.Max(0f, hideDelayAfterFailure);
         progressAnimationSpeed = Mathf.Max(0f, progressAnimationSpeed);
+        loadingProgressLerpSpeed = Mathf.Max(0f, loadingProgressLerpSpeed);
         ingameReadyHideTimeout = Mathf.Max(0f, ingameReadyHideTimeout);
     }
 }

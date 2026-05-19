@@ -4619,8 +4619,13 @@ MonoBehaviour:
   hideDelayAfterFailure: 2
   animateProgress: 1
   progressAnimationSpeed: 0.75
+  loadingProgressLerpSpeed: 6
+  appendProgressPercentToMessage: 0
   defaultLoadingTitle: LOADING
   successMessage: "\uC5F0\uACB0\uB418\uC5C8\uC2B5\uB2C8\uB2E4."
+  waitForInGameReadyBeforeHide: 1
+  ingameReadyHideTimeout: 12
+  ingameSceneName: InGame
 --- !u!1 &1210876839
 GameObject:
   m_ObjectHideFlags: 0
@@ -6859,7 +6864,7 @@ MonoBehaviour:
   m_OnCullStateChanged:
     m_PersistentCalls:
       m_Calls: []
-  m_Sprite: {fileID: 0}
+  m_Sprite: {fileID: 7482667652216324306, guid: cd1a18be0b894954b8fe5eeffea51fc1, type: 3}
   m_Type: 0
   m_PreserveAspect: 0
   m_FillCenter: 1
