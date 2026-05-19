@@ -264,7 +264,7 @@ public class LiquidSweepGimmick : NetworkBehaviour
         _loggedEmptyPlayerMaskWarning = false;
         SelectActiveSweepLane();
         SetPresentationActive(false, false, false);
-        SendStopVisualClientRpcs();
+        SendStopVisualRpcs();
         _runningRoutine = StartCoroutine(RunLiquidSweepRoutine());
     }
 
@@ -278,10 +278,10 @@ public class LiquidSweepGimmick : NetworkBehaviour
         SetPhase(SweepPhase.Sweep);
         UpdateSweepVisual(0f);
         SetPresentationActive(false, true, false);
-        SendPlaySweepVisualClientRpc();
+        SendPlaySweepVisualRpc();
         PlayAudio(sweepAudio);
         yield return RunSweepRoutine();
-        SendStopSweepVisualClientRpc();
+        SendStopSweepVisualRpc();
 
         SetPhase(SweepPhase.Residue);
         bool shouldUseRandomCircularIcePatches = ShouldUseRandomCircularIcePatches();
@@ -301,7 +301,7 @@ public class LiquidSweepGimmick : NetworkBehaviour
 
         SetPhase(SweepPhase.Cooldown);
         SetPresentationActive(false, false, false);
-        SendStopVisualClientRpcs();
+        SendStopVisualRpcs();
         yield return WaitForSecondsSafe(cooldownDuration);
 
         SetPhase(SweepPhase.Idle);
@@ -351,7 +351,7 @@ public class LiquidSweepGimmick : NetworkBehaviour
             GetResidueBox(out Vector3 noSlipCenter, out Vector3 noSlipHalfExtents, out Quaternion noSlipRotation);
             UpdateResidueVisual(noSlipCenter, noSlipHalfExtents, noSlipRotation);
             SetPresentationActive(false, false, true);
-            SendPlayResidueVisualClientRpc(noSlipCenter, noSlipHalfExtents, noSlipRotation, residueDuration);
+            SendPlayResidueVisualRpc(noSlipCenter, noSlipHalfExtents, noSlipRotation, residueDuration);
             yield return WaitForSecondsSafe(residueDuration);
             yield break;
         }
@@ -363,7 +363,7 @@ public class LiquidSweepGimmick : NetworkBehaviour
         GetResidueBox(out Vector3 center, out Vector3 halfExtents, out Quaternion rotation);
         UpdateResidueVisual(center, halfExtents, rotation);
         SetPresentationActive(false, false, true);
-        SendPlayResidueVisualClientRpc(center, halfExtents, rotation, duration);
+        SendPlayResidueVisualRpc(center, halfExtents, rotation, duration);
 
         while (elapsed < duration)
         {
@@ -425,7 +425,7 @@ public class LiquidSweepGimmick : NetworkBehaviour
         {
             CleanupCircularIcePatches(patches);
             ClearCircularIcePatchSlipCooldowns();
-            SendCleanupCircularIcePatchVisualsClientRpc();
+            SendCleanupCircularIcePatchVisualsRpc();
         }
     }
 
@@ -707,7 +707,7 @@ public class LiquidSweepGimmick : NetworkBehaviour
         float diameter = Mathf.Max(0f, radius) * 2f;
         Log($"{LogPrefix} Circular ice patch visual instantiated. success={visualInstance != null}, prefabNull=False, center={center}, visualPosition={visualPosition}, patchCenterY={center.y:0.###}, circularIcePatchHeightOffset={GetFiniteFloatOrZero(circularIcePatchHeightOffset):0.###}, circularIcePatchVisualYOffset={GetFiniteFloatOrZero(circularIcePatchVisualYOffset):0.###}, finalVisualY={visualInstance.transform.position.y:0.###}, radius={radius:0.###}, diameter={diameter:0.###}");
         StartCoroutine(ReapplyCircularIcePatchVisualPositionNextFrame(visualInstance, visualPosition, rotation));
-        SendSpawnCircularIcePatchVisualClientRpc(visualPosition, rotation, radius);
+        SendSpawnCircularIcePatchVisualRpc(visualPosition, rotation, radius);
         return visualInstance;
     }
 
@@ -1359,9 +1359,9 @@ public class LiquidSweepGimmick : NetworkBehaviour
             residueVisual.transform.localScale = scale;
     }
 
-    private void SendPlaySweepVisualClientRpc()
+    private void SendPlaySweepVisualRpc()
     {
-        if (!CanSendVisualClientRpc())
+        if (!CanSendVisualRpc())
             return;
 
         GetSweepBox(0f, out Vector3 startCenter, out Vector3 halfExtents, out Quaternion rotation);
@@ -1369,33 +1369,33 @@ public class LiquidSweepGimmick : NetworkBehaviour
         PlaySweepVisualClientRpc(startCenter, endCenter, halfExtents, rotation, sweepDuration);
     }
 
-    private void SendStopSweepVisualClientRpc()
+    private void SendStopSweepVisualRpc()
     {
-        if (CanSendVisualClientRpc())
+        if (CanSendVisualRpc())
             StopSweepVisualClientRpc();
     }
 
-    private void SendPlayResidueVisualClientRpc(Vector3 center, Vector3 halfExtents, Quaternion rotation, float duration)
+    private void SendPlayResidueVisualRpc(Vector3 center, Vector3 halfExtents, Quaternion rotation, float duration)
     {
-        if (CanSendVisualClientRpc())
+        if (CanSendVisualRpc())
             PlayResidueVisualClientRpc(center, halfExtents, rotation, duration);
     }
 
-    private void SendSpawnCircularIcePatchVisualClientRpc(Vector3 visualPosition, Quaternion rotation, float radius)
+    private void SendSpawnCircularIcePatchVisualRpc(Vector3 visualPosition, Quaternion rotation, float radius)
     {
-        if (CanSendVisualClientRpc())
+        if (CanSendVisualRpc())
             SpawnCircularIcePatchVisualClientRpc(visualPosition, rotation, radius, circularIcePatchDuration);
     }
 
-    private void SendCleanupCircularIcePatchVisualsClientRpc()
+    private void SendCleanupCircularIcePatchVisualsRpc()
     {
-        if (CanSendVisualClientRpc())
+        if (CanSendVisualRpc())
             CleanupCircularIcePatchVisualsClientRpc();
     }
 
-    private void SendStopVisualClientRpcs()
+    private void SendStopVisualRpcs()
     {
-        if (!CanSendVisualClientRpc())
+        if (!CanSendVisualRpc())
             return;
 
         StopSweepVisualClientRpc();
@@ -1403,7 +1403,7 @@ public class LiquidSweepGimmick : NetworkBehaviour
         CleanupCircularIcePatchVisualsClientRpc();
     }
 
-    private bool CanSendVisualClientRpc()
+    private bool CanSendVisualRpc()
     {
         return IsServer && IsSpawned;
     }
