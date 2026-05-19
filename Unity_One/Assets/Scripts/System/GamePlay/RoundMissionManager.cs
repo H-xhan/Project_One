@@ -172,6 +172,15 @@ public class RoundMissionManager : NetworkBehaviour
     [SerializeField, Tooltip("라운드에서 배정할 수 있는 미션 템플릿 목록입니다.")]
     private MissionTemplate[] missionTemplates = Array.Empty<MissionTemplate>();
 
+    [SerializeField, Tooltip("한 라운드의 모든 플레이어에게 같은 미션을 배정할지 여부입니다.")]
+    private bool useSharedRoundMission = true;
+
+    [SerializeField, Tooltip("공통 라운드 미션에서 여러 플레이어가 성공했을 때 보상을 성공자 수로 나누어 지급할지 여부입니다.")]
+    private bool splitSharedMissionRewardAmongWinners = true;
+
+    [SerializeField, Tooltip("공통 미션 보상 분배 시 성공자 1명에게 지급할 최소 보상입니다. 0이면 순수 나눗셈 결과를 사용합니다.")]
+    private int minimumSharedMissionSplitReward = 0;
+
     [SerializeField, Tooltip("미션 템플릿 보상이 0 이하일 때 사용할 기본 보상 코인입니다.")]
     private int fallbackRewardCoins = 8;
 
@@ -228,6 +237,18 @@ public class RoundMissionManager : NetworkBehaviour
         if (eligibleTemplates.Count == 0)
             return;
 
+        if (useSharedRoundMission)
+            AssignSharedRoundMissionServer(eligibleTemplates);
+        else
+            AssignPerPlayerMissionsServer(eligibleTemplates);
+
+        _isMissionRoundActive = _assignmentsByClientId.Count > 0;
+        if (_isMissionRoundActive)
+            SendAssignmentsToClientsServer();
+    }
+
+    private void AssignPerPlayerMissionsServer(List<MissionTemplate> eligibleTemplates)
+    {
         List<MissionTemplate> coverageTemplates = BuildFamilyCoverageTemplateList(eligibleTemplates);
         for (int i = 0; i < _participantClientIds.Count; i++)
         {
@@ -240,10 +261,36 @@ public class RoundMissionManager : NetworkBehaviour
             _assignmentsByClientId[clientId] = assignment;
             Log($"[RoundMission] Assigned client:{clientId} family:{assignment.family} mission:{assignment.missionId}");
         }
+    }
 
-        _isMissionRoundActive = _assignmentsByClientId.Count > 0;
-        if (_isMissionRoundActive)
-            SendAssignmentsToClientsServer();
+    private void AssignSharedRoundMissionServer(List<MissionTemplate> eligibleTemplates)
+    {
+        List<MissionTemplate> sharedEligibleTemplates = BuildSharedPlayableTemplateList(eligibleTemplates);
+        if (sharedEligibleTemplates.Count == 0)
+        {
+            Log("[RoundMission] Shared mission assignment skipped. no playable shared mission templates.");
+            return;
+        }
+
+        MissionTemplate sharedTemplate = PickMissionTemplate(sharedEligibleTemplates);
+        MissionAssignment sharedPrototype = BuildAssignment(_participantClientIds[0], sharedTemplate);
+
+        Log($"[RoundMission] Shared mission selected family={sharedPrototype.family} mission={sharedPrototype.missionId} itemId={sharedPrototype.requiredItemId} zone={sharedPrototype.requiredZoneId} reward={sharedPrototype.rewardCoins}");
+
+        for (int i = 0; i < _participantClientIds.Count; i++)
+        {
+            ulong clientId = _participantClientIds[i];
+            MissionAssignment assignment = BuildSharedAssignmentForClient(sharedPrototype, clientId);
+            _assignmentsByClientId[clientId] = assignment;
+            Log($"[RoundMission] Assigned shared mission to client={clientId} family={assignment.family} mission={assignment.missionId}");
+        }
+    }
+
+    private MissionAssignment BuildSharedAssignmentForClient(MissionAssignment sharedPrototype, ulong clientId)
+    {
+        MissionAssignment assignment = sharedPrototype;
+        assignment.clientId = clientId;
+        return assignment;
     }
 
     public void ServerClearRoundMissions()
@@ -273,13 +320,20 @@ public class RoundMissionManager : NetworkBehaviour
         _resultsByClientId.Clear();
         _resultsSnapshot.Clear();
 
+        bool splitSharedReward = ShouldSplitSharedMissionReward();
+        if (useSharedRoundMission && !splitSharedReward)
+            Log("[RoundMission] Shared reward split disabled");
+
         for (int i = 0; i < _participantClientIds.Count; i++)
         {
             ulong clientId = _participantClientIds[i];
-            MissionResult result = EvaluateClientMissionServer(clientId);
+            MissionResult result = EvaluateClientMissionServer(clientId, !splitSharedReward);
             _resultsByClientId[clientId] = result;
             _resultsSnapshot.Add(result);
         }
+
+        if (splitSharedReward)
+            ApplySharedMissionRewardSplit();
 
         _hasEvaluatedResults = true;
         _isMissionRoundActive = false;
@@ -628,7 +682,7 @@ public class RoundMissionManager : NetworkBehaviour
         return result.family.ToString();
     }
 
-    private MissionResult EvaluateClientMissionServer(ulong clientId)
+    private MissionResult EvaluateClientMissionServer(ulong clientId, bool applyRewardImmediately = true)
     {
         if (!_assignmentsByClientId.TryGetValue(clientId, out MissionAssignment assignment))
         {
@@ -639,10 +693,18 @@ public class RoundMissionManager : NetworkBehaviour
         int awardedCoins = 0;
         if (succeeded)
         {
-            if (applyMissionRewards)
+            if (!applyRewardImmediately)
+            {
+                awardedCoins = 0;
+            }
+            else if (applyMissionRewards)
+            {
                 AddRewardCoinsServer(clientId, assignment.rewardCoins, out awardedCoins);
+            }
             else
+            {
                 awardedCoins = Mathf.Max(0, assignment.rewardCoins);
+            }
         }
 
         int finalCoins = GetCurrentCoinsServer(clientId);
@@ -660,6 +722,90 @@ public class RoundMissionManager : NetworkBehaviour
 
         Log($"[RoundMission] Evaluated client:{clientId} success:{succeeded} reward:{awardedCoins} finalCoins:{finalCoins} reason:{reason}");
         return result;
+    }
+
+    private bool ShouldSplitSharedMissionReward()
+    {
+        return useSharedRoundMission && splitSharedMissionRewardAmongWinners;
+    }
+
+    private int CountSuccessfulMissionResults(IReadOnlyList<MissionResult> results)
+    {
+        if (results == null)
+            return 0;
+
+        int successCount = 0;
+        for (int i = 0; i < results.Count; i++)
+        {
+            MissionResult result = results[i];
+            if (result.succeeded || result.resultState == MissionResultState.Success)
+                successCount++;
+        }
+
+        return successCount;
+    }
+
+    private int GetSharedMissionBaseReward()
+    {
+        for (int i = 0; i < _participantClientIds.Count; i++)
+        {
+            ulong clientId = _participantClientIds[i];
+            if (_assignmentsByClientId.TryGetValue(clientId, out MissionAssignment assignment))
+                return Mathf.Max(0, assignment.rewardCoins);
+        }
+
+        return 0;
+    }
+
+    private int CalculateSharedMissionRewardPerWinner(int baseReward, int successCount)
+    {
+        if (successCount <= 0)
+            return 0;
+
+        int splitReward = Mathf.Max(0, baseReward) / successCount;
+        int minimumReward = Mathf.Max(0, minimumSharedMissionSplitReward);
+        return minimumReward > 0 ? Mathf.Max(minimumReward, splitReward) : splitReward;
+    }
+
+    private void ApplySharedMissionRewardSplit()
+    {
+        int successCount = CountSuccessfulMissionResults(_resultsSnapshot);
+        if (successCount <= 0)
+        {
+            Log("[RoundMission] Shared reward split skipped reason=no winners");
+            return;
+        }
+
+        int baseReward = GetSharedMissionBaseReward();
+        int rewardPerWinner = CalculateSharedMissionRewardPerWinner(baseReward, successCount);
+        Log($"[RoundMission] Shared reward split base={baseReward} winners={successCount} perWinner={rewardPerWinner}");
+
+        for (int i = 0; i < _resultsSnapshot.Count; i++)
+        {
+            MissionResult result = _resultsSnapshot[i];
+            if (!result.succeeded && result.resultState != MissionResultState.Success)
+            {
+                result.rewardCoins = 0;
+                result.finalCoins = GetCurrentCoinsServer(result.clientId);
+                _resultsSnapshot[i] = result;
+                _resultsByClientId[result.clientId] = result;
+                continue;
+            }
+
+            int awardedCoins = 0;
+            if (rewardPerWinner > 0)
+            {
+                if (applyMissionRewards)
+                    AddRewardCoinsServer(result.clientId, rewardPerWinner, out awardedCoins);
+                else
+                    awardedCoins = rewardPerWinner;
+            }
+
+            result.rewardCoins = awardedCoins;
+            result.finalCoins = GetCurrentCoinsServer(result.clientId);
+            _resultsSnapshot[i] = result;
+            _resultsByClientId[result.clientId] = result;
+        }
     }
 
     private bool EvaluateMissionServer(MissionAssignment assignment, out string reason)
@@ -977,10 +1123,41 @@ public class RoundMissionManager : NetworkBehaviour
         return coverageTemplates;
     }
 
+    private List<MissionTemplate> BuildSharedPlayableTemplateList(List<MissionTemplate> eligibleTemplates)
+    {
+        List<MissionTemplate> playableTemplates = new List<MissionTemplate>();
+        if (eligibleTemplates == null || eligibleTemplates.Count == 0)
+            return playableTemplates;
+
+        for (int i = 0; i < eligibleTemplates.Count; i++)
+        {
+            MissionTemplate template = eligibleTemplates[i];
+            if (!IsMissionPlayableForSharedRound(template))
+            {
+                Log($"[RoundMission] Shared mission candidate skipped family={template.family} mission={template.missionId}");
+                continue;
+            }
+
+            playableTemplates.Add(template);
+        }
+
+        return playableTemplates;
+    }
+
+    private bool IsMissionPlayableForSharedRound(MissionTemplate template)
+    {
+        return template.family != MissionFamily.GuessMission;
+    }
+
     private MissionTemplate PickMissionTemplate()
     {
         List<MissionTemplate> eligibleTemplates = BuildEligibleTemplateList();
-        if (eligibleTemplates.Count == 0)
+        return PickMissionTemplate(eligibleTemplates);
+    }
+
+    private MissionTemplate PickMissionTemplate(List<MissionTemplate> eligibleTemplates)
+    {
+        if (eligibleTemplates == null || eligibleTemplates.Count == 0)
             return default;
 
         int totalWeight = 0;
@@ -1307,6 +1484,7 @@ public class RoundMissionManager : NetworkBehaviour
     private void OnValidate()
     {
         fallbackRewardCoins = Mathf.Max(0, fallbackRewardCoins);
+        minimumSharedMissionSplitReward = Mathf.Max(0, minimumSharedMissionSplitReward);
         EnsureDefaultMissionTemplates();
 
         if (missionTemplates == null)
