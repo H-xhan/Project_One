@@ -71,6 +71,16 @@ public class PlayerLocomotionModule : NetworkBehaviour
     [SerializeField, Tooltip("스테미너 모듈을 찾지 못했을 때 기존처럼 점프를 허용할지 여부입니다.")]
     private bool allowJumpWhenStaminaModuleMissing = true;
 
+    [Header("Character Grab Locomotion")]
+    [SerializeField, Tooltip("캐릭터 grab 상태일 때 SpinDash/Jump 제한을 적용할지 여부입니다.")]
+    private bool enableCharacterGrabLocomotionRules = true;
+
+    [SerializeField, Tooltip("다른 캐릭터를 잡고 있는 동안 점프 높이/속도에 곱할 배율입니다.")]
+    private float characterGrabberJumpMultiplier = 0.4f;
+
+    [SerializeField, Tooltip("다른 캐릭터에게 잡힌 상태에서 실제 jump를 차단할지 여부입니다.")]
+    private bool blockJumpWhileGrabbedByCharacter = true;
+
     [Header("SpinDash")]
     [SerializeField, Tooltip("코드 기반 SpinDash 돌진 기능을 사용할지 여부입니다.")]
     private bool enableSpinDash = true;
@@ -294,6 +304,9 @@ public class PlayerLocomotionModule : NetworkBehaviour
         if (!CanSpinDashByStatusServer())
             return false;
 
+        if (!CanSpinDashByCharacterGrabServer())
+            return false;
+
         if (!ServerHasRequiredHeldItemForSpinDash())
             return false;
 
@@ -403,9 +416,9 @@ public class PlayerLocomotionModule : NetworkBehaviour
             if (_verticalVelocity <= 0f)
                 _verticalVelocity = stickToGroundForce;
 
-            if (canUseNormalInputMovement && jumpPressed && ShouldAllowJumpWithStamina())
+            if (canUseNormalInputMovement && jumpPressed && CanJumpByCharacterGrabServer() && ShouldAllowJumpWithStamina())
             {
-                _verticalVelocity = Mathf.Sqrt(jumpHeight * -2f * gravity);
+                _verticalVelocity = GetCharacterGrabAdjustedJumpVelocity(Mathf.Sqrt(jumpHeight * -2f * gravity));
                 didJump = true;
             }
         }
@@ -1338,6 +1351,75 @@ public class PlayerLocomotionModule : NetworkBehaviour
         return true;
     }
 
+    private bool CanSpinDashByCharacterGrabServer()
+    {
+        if (!TryGetCharacterGrabStateServer(out bool isGrabbing, out bool isGrabbed))
+            return true;
+
+        if (isGrabbing)
+        {
+            LogSpinDash("Start rejected: grabbing character");
+            return false;
+        }
+
+        if (isGrabbed)
+        {
+            LogSpinDash("Start rejected: grabbed by character");
+            return false;
+        }
+
+        return true;
+    }
+
+    private bool CanJumpByCharacterGrabServer()
+    {
+        if (!blockJumpWhileGrabbedByCharacter)
+            return true;
+
+        if (!IsGrabbedByCharacterServer())
+            return true;
+
+        LogLocomotion("Jump blocked: grabbed by character");
+        return false;
+    }
+
+    private float GetCharacterGrabAdjustedJumpVelocity(float baseJumpVelocity)
+    {
+        if (!IsGrabbingCharacterServer())
+            return baseJumpVelocity;
+
+        float multiplier = Mathf.Max(0f, characterGrabberJumpMultiplier);
+        LogLocomotion($"Jump scaled while grabbing multiplier={multiplier:0.###}");
+        return baseJumpVelocity * multiplier;
+    }
+
+    private bool IsGrabbingCharacterServer()
+    {
+        return TryGetCharacterGrabStateServer(out bool isGrabbing, out _) && isGrabbing;
+    }
+
+    private bool IsGrabbedByCharacterServer()
+    {
+        return TryGetCharacterGrabStateServer(out _, out bool isGrabbed) && isGrabbed;
+    }
+
+    private bool TryGetCharacterGrabStateServer(out bool isGrabbing, out bool isGrabbed)
+    {
+        isGrabbing = false;
+        isGrabbed = false;
+
+        if (!enableCharacterGrabLocomotionRules)
+            return false;
+
+        PlayerInteractModule interactModule = ResolveInteractModule();
+        if (interactModule == null)
+            return false;
+
+        isGrabbing = interactModule.IsGrabbingCharacter;
+        isGrabbed = interactModule.IsGrabbedByCharacter;
+        return isGrabbing || isGrabbed;
+    }
+
     private bool CanContinueSpinDashByStatusServer()
     {
         PlayerStatusModule statusModule = ResolveStatusModule();
@@ -1849,6 +1931,14 @@ public class PlayerLocomotionModule : NetworkBehaviour
         Debug.Log($"[SpinDash] {message}", this);
     }
 
+    private void LogLocomotion(string message)
+    {
+        if (!enableSpinDashDebugLogs)
+            return;
+
+        Debug.Log($"[Locomotion] {message}", this);
+    }
+
     private void OnValidate()
     {
         sprintStaminaCostPerSecond = Mathf.Max(0f, sprintStaminaCostPerSecond);
@@ -1856,6 +1946,7 @@ public class PlayerLocomotionModule : NetworkBehaviour
         sprintMinimumStaminaToContinue = Mathf.Max(0f, sprintMinimumStaminaToContinue);
         jumpStaminaCost = Mathf.Max(0f, jumpStaminaCost);
         jumpMinimumStaminaToStart = Mathf.Max(0f, jumpMinimumStaminaToStart);
+        characterGrabberJumpMultiplier = Mathf.Max(0f, characterGrabberJumpMultiplier);
         spinDashStaminaCost = GetFiniteNonNegative(spinDashStaminaCost);
         spinDashDuration = GetFiniteNonNegative(spinDashDuration);
         spinDashSpeed = GetFiniteNonNegative(spinDashSpeed);
