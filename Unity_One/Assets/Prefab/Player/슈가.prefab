@@ -847,6 +847,16 @@ MonoBehaviour:
   spinDashDizzyWobbleAngle: 8
   spinDashDizzyWobbleSpeed: 18
   enableSpinDashDebugLogs: 1
+  enableSpinDashHit: 1
+  spinDashHitRadius: 0.45
+  spinDashHitForwardOffset: 0.45
+  spinDashHitUpOffset: 0.45
+  spinDashHitImpulse: 14
+  spinDashHitUpImpulse: 3
+  spinDashHitLayerMask:
+    serializedVersion: 2
+    m_Bits: 64
+  spinDashHitMaxTargetsPerDash: 8
   yawScale: 1
   moveFacingTurnSpeed: 140
   moveFacingInputDeadzone: 0.01
@@ -904,6 +914,12 @@ MonoBehaviour:
   snapToGroundDuringStandUp: 1
   standUpSnapStartNormalized: 0.1
   postStandUpDownNudge: 0.02
+  maintainGroundClearanceDuringStandUp: 1
+  standUpGroundClearance: 0.18
+  standUpGroundProbeDistance: 1.5
+  standUpMaxGroundCorrectionPerTick: 0.08
+  standUpMaxTotalGroundLift: 0.35
+  standUpGroundClearanceDebugLogs: 0
   groundProbeHeight: 1.2
   groundProbeDistance: 3
   groundContactOffset: 0.01
