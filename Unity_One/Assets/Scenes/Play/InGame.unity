@@ -1621,6 +1621,19 @@ MonoBehaviour:
   fallbackRewardCoins: 8
   guessMissionRequiresDifferentTarget: 1
   enableDebugLogs: 1
+  missionZoneMarkerUseGroundProjection: 1
+  missionZoneMarkerGroundProbeHeight: 3
+  missionZoneMarkerGroundProbeDistance: 8
+  missionZoneMarkerSurfaceOffset: 0.025
+  missionZoneMarkerFillEnabled: 0
+  missionZoneMarkerFillAlpha: 0.08
+  missionZoneMarkerShape: 0
+  missionZoneMarkerOutlineEnabled: 1
+  missionZoneMarkerOutlineWidth: 0.04
+  missionZoneMarkerOutlineAlpha: 0.9
+  missionZoneMarkerRingRadiusScale: 0.9
+  missionZoneMarkerMaxRingRadius: 2
+  enableMissionZoneMarkerDebugLogs: 0
 --- !u!1 &147275601
 GameObject:
   m_ObjectHideFlags: 0
@@ -10470,6 +10483,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 4e6ca975e64f61742916d27716e3f9ff, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
+  ShowTopMostFoldoutHeaderGroup: 1
   keyTransforms:
   - {fileID: 1704648280}
   - {fileID: 413811763}
@@ -10658,6 +10672,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 2bf62e708907e864195cfc4fd4117b85, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
+  ShowTopMostFoldoutHeaderGroup: 1
   bombVisual: {fileID: 879198226}
   bombSpawnPoint: {fileID: 0}
   holderFollowOffset: {x: 0, y: 1.5, z: 0}

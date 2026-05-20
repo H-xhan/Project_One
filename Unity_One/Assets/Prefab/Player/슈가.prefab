@@ -734,7 +734,7 @@ MonoBehaviour:
     m_Bits: 2048
   hitVfxPrefab: {fileID: 5501628190135194678, guid: b7a18035444df4e48a96614773e02086, type: 3}
   hitVfxYOffset: 0.2
-  enableDebugLogs: 1
+  enableDebugLogs: 0
 --- !u!114 &346629790702925664
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -796,7 +796,7 @@ MonoBehaviour:
   throwUpForce: 2
   dropHandForwardOffset: 0.15
   dropHandUpOffset: 0.05
-  enableDebugLogs: 1
+  enableDebugLogs: 0
 --- !u!114 &8954747350643904218
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -846,11 +846,17 @@ MonoBehaviour:
   spinDashDizzyFeedbackDuration: 0.7
   spinDashDizzyWobbleAngle: 8
   spinDashDizzyWobbleSpeed: 18
-  enableSpinDashDebugLogs: 1
+  enableSpinDashDebugLogs: 0
+  spinDashStartVfxPrefab: {fileID: 8657207971880792959, guid: 767dcc38277007e4892edfa90f0dba99, type: 3}
+  spinDashHitVfxPrefab: {fileID: 8429337220320449845, guid: b611afdeb08996443bf53efa6e779990, type: 3}
+  spinDashVfxYOffset: 0.35
+  spinDashStartVfxLifetime: 0
+  spinDashHitVfxLifetime: 0
+  spinDashStartVfxAttachToPlayer: 0
   enableSpinDashHit: 1
-  spinDashHitRadius: 0.45
-  spinDashHitForwardOffset: 0.45
-  spinDashHitUpOffset: 0.45
+  spinDashHitRadius: 0.25
+  spinDashHitForwardOffset: 0.25
+  spinDashHitUpOffset: 0.25
   spinDashHitImpulse: 14
   spinDashHitUpImpulse: 3
   spinDashHitLayerMask:

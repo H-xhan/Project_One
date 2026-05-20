@@ -126,6 +126,25 @@ public class PlayerLocomotionModule : NetworkBehaviour
     [SerializeField, Tooltip("SpinDash 시작/종료 디버그 로그를 출력할지 여부입니다.")]
     private bool enableSpinDashDebugLogs = false;
 
+    [Header("SpinDash VFX")]
+    [SerializeField, Tooltip("SpinDash가 시작될 때 표시할 VFX 프리팹입니다. 비어 있으면 표시하지 않습니다.")]
+    private GameObject spinDashStartVfxPrefab;
+
+    [SerializeField, Tooltip("SpinDash로 대상 타격에 성공했을 때 표시할 VFX 프리팹입니다. 비어 있으면 표시하지 않습니다.")]
+    private GameObject spinDashHitVfxPrefab;
+
+    [SerializeField, Tooltip("SpinDash VFX 생성 위치의 Y 오프셋입니다.")]
+    private float spinDashVfxYOffset = 0.35f;
+
+    [SerializeField, Tooltip("SpinDash 시작 VFX를 강제로 제거할 시간입니다. 0이면 프리팹 자체 수명에 맡깁니다.")]
+    private float spinDashStartVfxLifetime = 0f;
+
+    [SerializeField, Tooltip("SpinDash 타격 VFX를 강제로 제거할 시간입니다. 0이면 프리팹 자체 수명에 맡깁니다.")]
+    private float spinDashHitVfxLifetime = 0f;
+
+    [SerializeField, Tooltip("SpinDash 시작 VFX를 플레이어에 붙여서 표시할지 여부입니다.")]
+    private bool spinDashStartVfxAttachToPlayer = false;
+
     [Header("SpinDash Hit")]
     [SerializeField, Tooltip("SpinDash 중 다른 플레이어에게 서버 기준 타격 판정을 적용할지 여부입니다.")]
     private bool enableSpinDashHit = true;
@@ -207,6 +226,7 @@ public class PlayerLocomotionModule : NetworkBehaviour
     private float _spinDashVisualFeedbackElapsed;
     private bool _isSpinDashDizzyFeedbackActive;
     private float _spinDashDizzyFeedbackEndTime;
+    private GameObject _attachedSpinDashStartVfxInstance;
     private readonly List<Transform> _spinDashFeedbackVisualRoots = new List<Transform>();
     private readonly List<Quaternion> _spinDashFeedbackOriginalLocalRotations = new List<Quaternion>();
 
@@ -556,6 +576,8 @@ public class PlayerLocomotionModule : NetworkBehaviour
                 Vector3.up * GetFiniteNonNegative(spinDashHitUpImpulse);
 
             bool recordedContributor = targetStatus.ServerTryApplyCombatKnockback(impulse, actorClientId);
+            Vector3 hitVfxPosition = GetSpinDashHitVfxPosition(hit, center, targetStatus);
+            TriggerSpinDashHitVfx(hitVfxPosition);
             LogSpinDash($"Hit target client={targetClientId} contributor={recordedContributor} impulse={impulse}");
         }
     }
@@ -664,6 +686,45 @@ public class PlayerLocomotionModule : NetworkBehaviour
         return selfRoot != null && targetRoot != null && selfRoot == targetRoot;
     }
 
+    private Vector3 GetSpinDashHitVfxPosition(Collider hitCollider, Vector3 hitCenter, PlayerStatusModule targetStatus)
+    {
+        float yOffset = GetFiniteNonNegative(spinDashVfxYOffset);
+
+        if (hitCollider != null)
+        {
+            Vector3 closestPoint = hitCollider.ClosestPoint(hitCenter);
+            if (IsFiniteVector(closestPoint) && (closestPoint - hitCenter).sqrMagnitude > 0.0001f)
+                return closestPoint + Vector3.up * yOffset;
+
+            Vector3 boundsCenter = hitCollider.bounds.center;
+            if (IsFiniteVector(boundsCenter))
+                return boundsCenter + Vector3.up * yOffset;
+        }
+
+        if (targetStatus != null)
+            return targetStatus.transform.position + Vector3.up * yOffset;
+
+        return hitCenter + Vector3.up * yOffset;
+    }
+
+    private void TriggerSpinDashHitVfx(Vector3 position)
+    {
+        if (spinDashHitVfxPrefab == null)
+        {
+            LogSpinDashVisual("Hit VFX skipped prefab null");
+            return;
+        }
+
+        if (IsSpawned)
+        {
+            PlaySpinDashHitVfxClientRpc(position);
+            LogSpinDashVisual($"Hit VFX sent position={position}");
+            return;
+        }
+
+        SpawnSpinDashVfxLocal(spinDashHitVfxPrefab, position, GetSpinDashVfxRotation(), GetFiniteNonNegative(spinDashHitVfxLifetime));
+    }
+
     private void FinishSpinDashServer(bool applyStun)
     {
         if (!_isSpinDashing)
@@ -696,7 +757,7 @@ public class PlayerLocomotionModule : NetworkBehaviour
 
     private void TriggerSpinDashVisualFeedback(float duration)
     {
-        if (!enableSpinDashVisualFeedback && !enableSpinDashHeldItemPose)
+        if (!enableSpinDashVisualFeedback && !enableSpinDashHeldItemPose && spinDashStartVfxPrefab == null)
             return;
 
         float validDuration = GetFiniteNonNegative(duration);
@@ -731,6 +792,12 @@ public class PlayerLocomotionModule : NetworkBehaviour
     }
 
     [ClientRpc]
+    private void PlaySpinDashHitVfxClientRpc(Vector3 position)
+    {
+        SpawnSpinDashVfxLocal(spinDashHitVfxPrefab, position, GetSpinDashVfxRotation(), GetFiniteNonNegative(spinDashHitVfxLifetime));
+    }
+
+    [ClientRpc]
     private void PlaySpinDashDizzyFeedbackClientRpc(float duration)
     {
         BeginSpinDashDizzyFeedbackLocal(duration);
@@ -747,7 +814,8 @@ public class PlayerLocomotionModule : NetworkBehaviour
     {
         bool shouldStartVisualRotation = enableSpinDashVisualFeedback && spinDashRotateVisual;
         bool shouldApplyHeldItemPose = enableSpinDashHeldItemPose;
-        if (!shouldStartVisualRotation && !shouldApplyHeldItemPose)
+        bool shouldSpawnStartVfx = spinDashStartVfxPrefab != null;
+        if (!shouldStartVisualRotation && !shouldApplyHeldItemPose && !shouldSpawnStartVfx)
             return;
 
         bool hasPreparedVisualRoots = false;
@@ -755,7 +823,7 @@ public class PlayerLocomotionModule : NetworkBehaviour
         {
             if (!TryPrepareSpinDashFeedbackVisualRoot(out _))
             {
-                if (!shouldApplyHeldItemPose)
+                if (!shouldApplyHeldItemPose && !shouldSpawnStartVfx)
                     return;
             }
             else
@@ -776,7 +844,76 @@ public class PlayerLocomotionModule : NetworkBehaviour
             LogSpinDashVisual($"Start roots={GetSpinDashFeedbackRootsLabel()} duration={duration:0.###}");
         }
 
+        SpawnSpinDashStartVfxLocal();
         ApplySpinDashHeldItemPoseLocal();
+    }
+
+    private void SpawnSpinDashStartVfxLocal()
+    {
+        if (spinDashStartVfxPrefab == null)
+        {
+            LogSpinDashVisual("Start VFX skipped prefab null");
+            return;
+        }
+
+        Transform parent = spinDashStartVfxAttachToPlayer
+            ? (_cc != null ? _cc.transform : transform)
+            : null;
+
+        GameObject instance = SpawnSpinDashVfxLocal(
+            spinDashStartVfxPrefab,
+            GetSpinDashStartVfxPosition(),
+            GetSpinDashVfxRotation(),
+            GetFiniteNonNegative(spinDashStartVfxLifetime),
+            parent
+        );
+
+        if (spinDashStartVfxAttachToPlayer)
+        {
+            ClearAttachedSpinDashStartVfxLocal();
+            _attachedSpinDashStartVfxInstance = instance;
+        }
+
+        LogSpinDashVisual("Start VFX spawned");
+    }
+
+    private GameObject SpawnSpinDashVfxLocal(GameObject prefab, Vector3 position, Quaternion rotation, float lifetime, Transform parent = null)
+    {
+        if (prefab == null)
+            return null;
+
+        GameObject instance = Instantiate(prefab, position, rotation, parent);
+        if (instance != null && lifetime > 0f)
+            Destroy(instance, lifetime);
+
+        return instance;
+    }
+
+    private Vector3 GetSpinDashStartVfxPosition()
+    {
+        float yOffset = GetFiniteNonNegative(spinDashVfxYOffset);
+        if (_cc != null)
+            return _cc.transform.TransformPoint(_cc.center) + Vector3.up * yOffset;
+
+        return transform.position + Vector3.up * yOffset;
+    }
+
+    private Quaternion GetSpinDashVfxRotation()
+    {
+        Vector3 direction = GetSpinDashHitDirection();
+        if (direction.sqrMagnitude > 0.0001f && IsFiniteVector(direction))
+            return Quaternion.LookRotation(direction.normalized, Vector3.up);
+
+        return transform.rotation;
+    }
+
+    private void ClearAttachedSpinDashStartVfxLocal()
+    {
+        if (_attachedSpinDashStartVfxInstance == null)
+            return;
+
+        Destroy(_attachedSpinDashStartVfxInstance);
+        _attachedSpinDashStartVfxInstance = null;
     }
 
     private void BeginSpinDashDizzyFeedbackLocal(float duration)
@@ -878,6 +1015,7 @@ public class PlayerLocomotionModule : NetworkBehaviour
         _spinDashVisualFeedbackElapsed = 0f;
         _spinDashVisualFeedbackEndTime = 0f;
         _spinDashDizzyFeedbackEndTime = 0f;
+        ClearAttachedSpinDashStartVfxLocal();
         RestoreSpinDashHeldItemPoseLocal();
     }
 
@@ -1706,6 +1844,9 @@ public class PlayerLocomotionModule : NetworkBehaviour
         spinDashDizzyWobbleAngle = GetFiniteNonNegative(spinDashDizzyWobbleAngle);
         spinDashDizzyWobbleSpeed = GetFiniteNonNegative(spinDashDizzyWobbleSpeed);
         spinDashVisualRotationDegreesPerSecond = GetFiniteNonNegative(spinDashVisualRotationDegreesPerSecond);
+        spinDashVfxYOffset = GetFiniteNonNegative(spinDashVfxYOffset);
+        spinDashStartVfxLifetime = GetFiniteNonNegative(spinDashStartVfxLifetime);
+        spinDashHitVfxLifetime = GetFiniteNonNegative(spinDashHitVfxLifetime);
         spinDashHitRadius = GetFiniteNonNegative(spinDashHitRadius);
         spinDashHitForwardOffset = GetFiniteNonNegative(spinDashHitForwardOffset);
         spinDashHitUpOffset = GetFiniteNonNegative(spinDashHitUpOffset);
