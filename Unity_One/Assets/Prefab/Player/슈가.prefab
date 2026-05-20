@@ -810,6 +810,16 @@ MonoBehaviour:
   escapeTapMinInterval: 0.1
   escapeRegrabImmunitySeconds: 0.75
   characterGrabDebugLogs: 1
+  enableCharacterCarryFollow: 1
+  characterCarryForwardOffset: 0.75
+  characterCarryUpOffset: 0.5
+  characterCarryRightOffset: 0
+  characterCarryFollowLerp: 18
+  characterCarryMaxDistance: 4
+  characterCarryDisableTargetController: 1
+  characterCarrySetTargetRigidbodyKinematic: 1
+  characterCarryFaceGrabberForward: 1
+  characterCarryGroundReleaseYOffset: 0.05
   enableDebugLogs: 0
 --- !u!114 &8954747350643904218
 MonoBehaviour:
