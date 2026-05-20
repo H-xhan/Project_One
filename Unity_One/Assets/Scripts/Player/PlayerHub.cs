@@ -413,14 +413,24 @@ public class PlayerHub : NetworkBehaviour
 
         SubmitInputServerRpc(_moveInput, _yawDelta, _sprintHeld);
 
-        if (jumpPressed && CanMoveNow())
-            QueueJumpServerRpc();
+        if (jumpPressed)
+        {
+            if (interactModule != null && interactModule.IsGrabbedByCharacter)
+                interactModule.RequestCharacterGrabEscapeTap();
+            else
+                QueueJumpServerRpc();
+        }
 
-        if (attackPressed && CanAttackNow())
+        if (attackPressed && CanAttackNow() && (interactModule == null || !interactModule.IsGrabbingCharacter))
             AttackServerRpc();
 
         bool consumedInteractForSpinDash = false;
-        if (interactPressed && sprintHeld && CanMoveNow() && locomotionModule != null)
+        if (interactPressed &&
+            sprintHeld &&
+            CanMoveNow() &&
+            locomotionModule != null &&
+            interactModule != null &&
+            interactModule.HasHeldItem())
         {
             if (IsServer)
             {
@@ -436,17 +446,44 @@ public class PlayerHub : NetworkBehaviour
 
         if (interactPressed && !consumedInteractForSpinDash && CanInteractNow() && interactModule != null)
         {
-            if (!interactModule.HasHeldItem() && interactModule.TryFindPickupTarget(out NetworkObjectReference target))
-                TryPickupServerRpc(target);
+            if (!interactModule.HasHeldItem() && !interactModule.IsGrabbingCharacter)
+            {
+                if (interactModule.TryFindPickupTarget(out NetworkObjectReference target))
+                {
+                    TryPickupServerRpc(target);
+                }
+                else if (interactModule.TryFindCharacterGrabTarget(out PlayerStatusModule targetStatus))
+                {
+                    RequestCharacterGrab(targetStatus);
+                }
+            }
         }
 
-        if (dropPressed && CanInteractNow())
-            DropItemServerRpc();
+        if (dropPressed)
+        {
+            if (interactModule != null && interactModule.IsGrabbingCharacter)
+            {
+                if (IsServer)
+                    interactModule.ServerReleaseCharacterGrab("DropInput");
+                else
+                    interactModule.RequestReleaseCharacterGrab();
+            }
+            else
+            {
+                DropItemServerRpc();
+            }
+        }
     }
 
     [ServerRpc]
     private void DropItemServerRpc()
     {
+        if (interactModule != null && interactModule.IsGrabbingCharacter)
+        {
+            interactModule.ServerReleaseCharacterGrab("DropInput");
+            return;
+        }
+
         if (!CanInteractNow()) return;
         if (interactModule != null) interactModule.ServerTryDrop();
     }
@@ -460,10 +497,82 @@ public class PlayerHub : NetworkBehaviour
         if (locomotionModule == null)
             return;
 
+        if (interactModule == null || !interactModule.HasHeldItem())
+            return;
+
         if (!CanMoveNow())
             return;
 
         locomotionModule.ServerTryStartSpinDash();
+    }
+
+    private void RequestCharacterGrab(PlayerStatusModule targetStatus)
+    {
+        if (interactModule == null || targetStatus == null)
+            return;
+
+        if (IsServer)
+        {
+            interactModule.ServerTryStartCharacterGrab(targetStatus);
+            return;
+        }
+
+        if (!TryCreateCharacterGrabTargetReference(targetStatus, out NetworkObjectReference targetReference))
+            return;
+
+        RequestCharacterGrabServerRpc(targetReference);
+    }
+
+    [ServerRpc]
+    private void RequestCharacterGrabServerRpc(NetworkObjectReference targetReference, ServerRpcParams rpcParams = default)
+    {
+        if (rpcParams.Receive.SenderClientId != OwnerClientId)
+            return;
+
+        if (interactModule == null)
+            return;
+
+        if (!CanInteractNow())
+            return;
+
+        if (!targetReference.TryGet(out NetworkObject targetObject))
+            return;
+
+        PlayerStatusModule targetStatus = ResolveCharacterGrabTargetStatus(targetObject);
+        if (targetStatus == null)
+            return;
+
+        interactModule.ServerTryStartCharacterGrab(targetStatus);
+    }
+
+    private bool TryCreateCharacterGrabTargetReference(PlayerStatusModule targetStatus, out NetworkObjectReference targetReference)
+    {
+        targetReference = default;
+
+        if (targetStatus == null)
+            return false;
+
+        NetworkObject targetObject = targetStatus.GetComponentInParent<NetworkObject>();
+        if (targetObject == null)
+            targetObject = targetStatus.NetworkObject;
+
+        if (targetObject == null || !targetObject.IsSpawned)
+            return false;
+
+        targetReference = targetObject;
+        return true;
+    }
+
+    private PlayerStatusModule ResolveCharacterGrabTargetStatus(NetworkObject targetObject)
+    {
+        if (targetObject == null)
+            return null;
+
+        PlayerStatusModule targetStatus = targetObject.GetComponentInChildren<PlayerStatusModule>(true);
+        if (targetStatus != null)
+            return targetStatus;
+
+        return targetObject.GetComponentInParent<PlayerStatusModule>();
     }
 
     private void HandleCameraRotation(float pitchDelta)
@@ -999,12 +1108,27 @@ public class PlayerHub : NetworkBehaviour
     [ServerRpc(Delivery = RpcDelivery.Reliable)]
     private void QueueJumpServerRpc()
     {
+        if (interactModule != null && interactModule.IsGrabbedByCharacter)
+        {
+            interactModule.ServerRegisterCharacterGrabEscapeTap(OwnerClientId);
+            return;
+        }
+
+        if (!CanMoveNow())
+            return;
+
         _jumpPressed = true;
     }
 
     [Rpc(SendTo.Server)]
     private void AttackServerRpc()
     {
+        if (interactModule != null && interactModule.IsGrabbingCharacter)
+        {
+            _attackBufferedServer = false;
+            return;
+        }
+
         if (!CanAttackNow())
         {
             _attackBufferedServer = false;
@@ -1026,6 +1150,9 @@ public class PlayerHub : NetworkBehaviour
 
     private void StartAttackServerInternal()
     {
+        if (interactModule != null && interactModule.IsGrabbingCharacter)
+            return;
+
         if (!CanAttackNow())
             return;
 
