@@ -188,6 +188,16 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
     [Tooltip("넉백 자동 드랍 디버그 로그를 출력할지 여부입니다.")]
     [SerializeField] private bool enableDropHeldItemOnKnockbackDebugLogs = false;
 
+    [Header("Character Grab Release")]
+    [Tooltip("넉백이 시작될 때 캐릭터 grab/carry 상태를 자동으로 해제할지 여부입니다.")]
+    [SerializeField] private bool releaseCharacterGrabOnKnockback = true;
+
+    [Tooltip("탈락/리스폰/상태 초기화 시 캐릭터 grab/carry 상태를 정리할지 여부입니다.")]
+    [SerializeField] private bool releaseCharacterGrabOnElimination = true;
+
+    [Tooltip("PlayerStatusModule에서 grab release hook 로그를 출력할지 여부입니다.")]
+    [SerializeField] private bool characterGrabReleaseDebugLogs = false;
+
     [Header("Elimination")]
     [Tooltip("이 높이 아래로 떨어지면 탈락 처리되는 Y값")]
     [SerializeField] private float eliminationY = -15f;
@@ -298,6 +308,7 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
     private RoundMissionManager _roundMissionManager;
     private float _nextDropHeldItemOnKnockbackAllowedAt;
     private PlayerInteractModule _cachedInteractModule;
+    private PlayerInteractModule _cachedInteractModuleForGrabRelease;
 
     public bool IsKnocked => isKnocked;
     public bool IsStandingUp => isStandingUp;
@@ -378,6 +389,23 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
         backStandUpStateHash = Animator.StringToHash("Back Stand Up");
         if (rootRigidbody != null)
             cachedConstraints = rootRigidbody.constraints;
+    }
+
+    public override void OnNetworkDespawn()
+    {
+        ServerReleaseCharacterGrabForStatusEvent("NetworkDespawn", true);
+        base.OnNetworkDespawn();
+    }
+
+    private void OnDisable()
+    {
+        ServerReleaseCharacterGrabForStatusEvent("Disable", true);
+    }
+
+    public override void OnDestroy()
+    {
+        ServerReleaseCharacterGrabForStatusEvent("Destroy", true);
+        base.OnDestroy();
     }
 
     private void Update()
@@ -517,6 +545,7 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
         if (isStandingUp)
             isStandingUp = false;
 
+        ServerReleaseCharacterGrabForStatusEvent("Knockback", false);
         ServerTryDropHeldItemBecauseOfKnockback("Knockback");
         BeginKnockback(impulse);
         TryApplyActiveRagdollHit(impulse);
@@ -926,6 +955,52 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
         return interact != null;
     }
 
+    private bool TryResolveInteractModuleForGrabRelease(out PlayerInteractModule interact)
+    {
+        if (_cachedInteractModuleForGrabRelease != null)
+        {
+            interact = _cachedInteractModuleForGrabRelease;
+            return true;
+        }
+
+        if (TryResolveInteractModule(out interact) && interact != null)
+        {
+            _cachedInteractModuleForGrabRelease = interact;
+            return true;
+        }
+
+        interact = null;
+        return false;
+    }
+
+    private void ServerReleaseCharacterGrabForStatusEvent(string reason, bool isEliminationCleanup)
+    {
+        if (!IsServer)
+            return;
+
+        if (isEliminationCleanup)
+        {
+            if (!releaseCharacterGrabOnElimination)
+                return;
+        }
+        else if (!releaseCharacterGrabOnKnockback)
+        {
+            return;
+        }
+
+        if (!TryResolveInteractModuleForGrabRelease(out PlayerInteractModule interact) || interact == null)
+        {
+            LogCharacterGrabRelease($"Character grab release skipped: no interact module reason={reason}");
+            return;
+        }
+
+        if (!interact.IsCharacterGrabBusy)
+            return;
+
+        interact.ServerReleaseCharacterGrab(reason);
+        LogCharacterGrabRelease($"Released character grab for status event reason={reason}");
+    }
+
     private void ServerTryDropHeldItemBecauseOfKnockback(string reason)
     {
         if (!IsServer)
@@ -1040,6 +1115,8 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
 
     private void ResetStateForCoinFallRespawn()
     {
+        ServerReleaseCharacterGrabForStatusEvent("CoinFallRespawn", true);
+
         isKnocked = false;
         isStandingUp = false;
         knockTimer = 0f;
@@ -2052,6 +2129,9 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
     private void HandleElimination()
     {
         if (isEliminated) return;
+
+        ServerReleaseCharacterGrabForStatusEvent("Elimination", true);
+
         isEliminated = true;
         isKnocked = false;
         isStandingUp = false;
@@ -2170,6 +2250,14 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
     private void LogDropHeldItemOnKnockback(string message)
     {
         if (!enableDropHeldItemOnKnockbackDebugLogs)
+            return;
+
+        Debug.Log($"[PlayerStatus] {message}", this);
+    }
+
+    private void LogCharacterGrabRelease(string message)
+    {
+        if (!characterGrabReleaseDebugLogs)
             return;
 
         Debug.Log($"[PlayerStatus] {message}", this);
