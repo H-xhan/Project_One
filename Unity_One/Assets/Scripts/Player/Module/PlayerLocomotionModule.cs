@@ -126,6 +126,31 @@ public class PlayerLocomotionModule : NetworkBehaviour
     [SerializeField, Tooltip("SpinDash 시작/종료 디버그 로그를 출력할지 여부입니다.")]
     private bool enableSpinDashDebugLogs = false;
 
+    [Header("SpinDash Hit")]
+    [SerializeField, Tooltip("SpinDash 중 다른 플레이어에게 서버 기준 타격 판정을 적용할지 여부입니다.")]
+    private bool enableSpinDashHit = true;
+
+    [SerializeField, Tooltip("SpinDash 타격 판정 반경입니다.")]
+    private float spinDashHitRadius = 0.75f;
+
+    [SerializeField, Tooltip("SpinDash 타격 판정 중심을 진행 방향 앞으로 얼마나 이동할지입니다.")]
+    private float spinDashHitForwardOffset = 0.65f;
+
+    [SerializeField, Tooltip("SpinDash 타격 판정 중심의 위쪽 보정값입니다.")]
+    private float spinDashHitUpOffset = 0.5f;
+
+    [SerializeField, Tooltip("SpinDash에 맞은 대상에게 적용할 전방 넉백 힘입니다.")]
+    private float spinDashHitImpulse = 14f;
+
+    [SerializeField, Tooltip("SpinDash에 맞은 대상에게 적용할 위쪽 넉백 힘입니다.")]
+    private float spinDashHitUpImpulse = 3f;
+
+    [SerializeField, Tooltip("SpinDash 타격 판정에 사용할 레이어입니다. 비어 있으면 Hurtbox/Player/BodyBlocker 레이어 또는 Body Blocker Mask를 사용합니다.")]
+    private LayerMask spinDashHitLayerMask;
+
+    [SerializeField, Tooltip("SpinDash 1회 동안 타격 가능한 최대 대상 수입니다.")]
+    private int spinDashHitMaxTargetsPerDash = 8;
+
     [Header("Rotate")]
     [Tooltip("서버 회전 입력 배율입니다. 값이 높을수록 같은 입력으로 더 빠르게 회전합니다.")]
     [SerializeField] private float yawScale = 1f;
@@ -156,12 +181,15 @@ public class PlayerLocomotionModule : NetworkBehaviour
     [SerializeField] private float maxSeparationMove = 0.08f;
 
     private const int BodyOverlapBufferSize = 16;
+    private const int SpinDashHitBufferSize = 16;
 
     private CharacterController _cc;
     private Vector3 _planarVelocity; // 수평 속도 (X, Z)
     private float _verticalVelocity; // 수직 속도 (Y)
     private readonly Collider[] _bodyOverlapHits = new Collider[BodyOverlapBufferSize];
+    private readonly Collider[] _spinDashHitBuffer = new Collider[SpinDashHitBufferSize];
     private readonly HashSet<int> _processedOverlapRoots = new HashSet<int>(BodyOverlapBufferSize);
+    private readonly HashSet<ulong> _spinDashHitClientIds = new HashSet<ulong>();
     private readonly Dictionary<string, float> _externalMoveSpeedMultipliers = new Dictionary<string, float>();
     private float _movementReferenceYaw;
     private bool _movementReferenceYawCaptured;
@@ -295,11 +323,13 @@ public class PlayerLocomotionModule : NetworkBehaviour
 
     private void OnDisable()
     {
+        ClearSpinDashHitState();
         StopSpinDashVisualFeedback();
     }
 
     private void OnDestroy()
     {
+        ClearSpinDashHitState();
         StopSpinDashFeedbackLocal();
         RestoreSpinDashFeedbackVisualLocal();
     }
@@ -398,6 +428,9 @@ public class PlayerLocomotionModule : NetworkBehaviour
         finalMotion.y = _verticalVelocity;
 
         _cc.Move(finalMotion * dt);
+        if (spinDashActive)
+            ServerProcessSpinDashHit();
+
         ResolveBodyOverlapServer();
 
         return didJump;
@@ -442,6 +475,7 @@ public class PlayerLocomotionModule : NetworkBehaviour
         _spinDashCooldownUntil = now + cooldown;
         _planarVelocity = _spinDashDirection * GetFiniteNonNegative(spinDashSpeed);
         _isSprintingWithStamina = false;
+        ClearSpinDashHitState();
 
         TriggerSpinDashVisualFeedback(duration);
         LogSpinDash($"started. duration:{duration:0.###}, cooldown:{cooldown:0.###}, direction:{_spinDashDirection}");
@@ -455,10 +489,186 @@ public class PlayerLocomotionModule : NetworkBehaviour
         _planarVelocity = _spinDashDirection * GetFiniteNonNegative(spinDashSpeed);
     }
 
+    private void ServerProcessSpinDashHit()
+    {
+        if (!IsServer || !enableSpinDashHit || !_isSpinDashing)
+            return;
+
+        int maxTargets = GetSpinDashHitMaxTargetsPerDash();
+        if (maxTargets <= 0 || _spinDashHitClientIds.Count >= maxTargets)
+            return;
+
+        float radius = GetFiniteNonNegative(spinDashHitRadius);
+        if (radius <= 0f)
+            return;
+
+        if (!TryGetSpinDashActorClientId(out ulong actorClientId))
+            return;
+
+        Vector3 direction = GetSpinDashHitDirection();
+        Transform origin = _cc != null ? _cc.transform : transform;
+        Vector3 center =
+            origin.position +
+            direction * GetFiniteNonNegative(spinDashHitForwardOffset) +
+            Vector3.up * GetFiniteNonNegative(spinDashHitUpOffset);
+
+        int hitCount = Physics.OverlapSphereNonAlloc(
+            center,
+            radius,
+            _spinDashHitBuffer,
+            GetSpinDashHitLayerMask(),
+            QueryTriggerInteraction.Collide
+        );
+
+        if (hitCount <= 0)
+            return;
+
+        PlayerStatusModule selfStatus = ResolveStatusModule();
+
+        for (int i = 0; i < hitCount; i++)
+        {
+            if (_spinDashHitClientIds.Count >= maxTargets)
+                break;
+
+            Collider hit = _spinDashHitBuffer[i];
+            if (hit == null)
+                continue;
+
+            PlayerStatusModule targetStatus = ResolveSpinDashTargetStatus(hit);
+            if (targetStatus == null)
+                continue;
+
+            if (!TryGetStatusOwnerClientId(targetStatus, out ulong targetClientId))
+                continue;
+
+            if (IsSelfSpinDashHitTarget(targetStatus, selfStatus, targetClientId, actorClientId))
+                continue;
+
+            if (_spinDashHitClientIds.Contains(targetClientId))
+                continue;
+
+            if (targetStatus.IsEliminated || targetStatus.IsKnocked || targetStatus.IsStandingUp)
+                continue;
+
+            _spinDashHitClientIds.Add(targetClientId);
+            Vector3 impulse =
+                direction * GetFiniteNonNegative(spinDashHitImpulse) +
+                Vector3.up * GetFiniteNonNegative(spinDashHitUpImpulse);
+
+            bool recordedContributor = targetStatus.ServerTryApplyCombatKnockback(impulse, actorClientId);
+            LogSpinDash($"Hit target client={targetClientId} contributor={recordedContributor} impulse={impulse}");
+        }
+    }
+
+    private void ClearSpinDashHitState()
+    {
+        _spinDashHitClientIds.Clear();
+    }
+
+    private Vector3 GetSpinDashHitDirection()
+    {
+        Vector3 direction = _spinDashDirection;
+        direction.y = 0f;
+
+        if (direction.sqrMagnitude <= 0.0001f)
+        {
+            Transform origin = _cc != null ? _cc.transform : transform;
+            direction = origin.forward;
+            direction.y = 0f;
+        }
+
+        if (direction.sqrMagnitude <= 0.0001f || !IsFiniteVector(direction))
+            return Vector3.forward;
+
+        return direction.normalized;
+    }
+
+    private int GetSpinDashHitLayerMask()
+    {
+        if (spinDashHitLayerMask.value != 0)
+            return spinDashHitLayerMask.value;
+
+        int playerLikeLayerMask = LayerMask.GetMask("Hurtbox", "Player", "BodyBlocker");
+        if (playerLikeLayerMask != 0)
+            return playerLikeLayerMask;
+
+        if (bodyBlockerMask.value != 0)
+            return bodyBlockerMask.value;
+
+        return ~0;
+    }
+
+    private int GetSpinDashHitMaxTargetsPerDash()
+    {
+        return Mathf.Max(0, spinDashHitMaxTargetsPerDash);
+    }
+
+    private PlayerStatusModule ResolveSpinDashTargetStatus(Collider hit)
+    {
+        if (hit == null)
+            return null;
+
+        PlayerStatusModule targetStatus = hit.GetComponentInParent<PlayerStatusModule>();
+        if (targetStatus != null)
+            return targetStatus;
+
+        Transform root = hit.transform.root;
+        return root != null ? root.GetComponentInChildren<PlayerStatusModule>(true) : null;
+    }
+
+    private bool TryGetSpinDashActorClientId(out ulong actorClientId)
+    {
+        actorClientId = ulong.MaxValue;
+
+        NetworkObject ownerObject = NetworkObject;
+        if (ownerObject == null)
+            ownerObject = GetComponentInParent<NetworkObject>();
+
+        if (ownerObject == null)
+            return false;
+
+        actorClientId = ownerObject.OwnerClientId;
+        return actorClientId != ulong.MaxValue;
+    }
+
+    private static bool TryGetStatusOwnerClientId(PlayerStatusModule status, out ulong clientId)
+    {
+        clientId = ulong.MaxValue;
+        if (status == null)
+            return false;
+
+        NetworkObject ownerObject = status.NetworkObject;
+        if (ownerObject == null)
+            ownerObject = status.GetComponentInParent<NetworkObject>();
+
+        if (ownerObject == null)
+            return false;
+
+        clientId = ownerObject.OwnerClientId;
+        return clientId != ulong.MaxValue;
+    }
+
+    private bool IsSelfSpinDashHitTarget(PlayerStatusModule targetStatus, PlayerStatusModule selfStatus, ulong targetClientId, ulong actorClientId)
+    {
+        if (targetStatus == null)
+            return false;
+
+        if (selfStatus != null && targetStatus == selfStatus)
+            return true;
+
+        if (targetClientId == actorClientId)
+            return true;
+
+        Transform selfRoot = selfStatus != null ? selfStatus.transform.root : transform.root;
+        Transform targetRoot = targetStatus.transform.root;
+        return selfRoot != null && targetRoot != null && selfRoot == targetRoot;
+    }
+
     private void FinishSpinDashServer(bool applyStun)
     {
         if (!_isSpinDashing)
         {
+            ClearSpinDashHitState();
             StopSpinDashVisualFeedback();
             return;
         }
@@ -468,6 +678,7 @@ public class PlayerLocomotionModule : NetworkBehaviour
         _spinDashEndTime = 0f;
         _planarVelocity = Vector3.zero;
         _isSprintingWithStamina = false;
+        ClearSpinDashHitState();
 
         StopSpinDashVisualFeedback();
 
@@ -1495,6 +1706,12 @@ public class PlayerLocomotionModule : NetworkBehaviour
         spinDashDizzyWobbleAngle = GetFiniteNonNegative(spinDashDizzyWobbleAngle);
         spinDashDizzyWobbleSpeed = GetFiniteNonNegative(spinDashDizzyWobbleSpeed);
         spinDashVisualRotationDegreesPerSecond = GetFiniteNonNegative(spinDashVisualRotationDegreesPerSecond);
+        spinDashHitRadius = GetFiniteNonNegative(spinDashHitRadius);
+        spinDashHitForwardOffset = GetFiniteNonNegative(spinDashHitForwardOffset);
+        spinDashHitUpOffset = GetFiniteNonNegative(spinDashHitUpOffset);
+        spinDashHitImpulse = GetFiniteNonNegative(spinDashHitImpulse);
+        spinDashHitUpImpulse = GetFiniteNonNegative(spinDashHitUpImpulse);
+        spinDashHitMaxTargetsPerDash = Mathf.Max(0, spinDashHitMaxTargetsPerDash);
     }
 
 }
