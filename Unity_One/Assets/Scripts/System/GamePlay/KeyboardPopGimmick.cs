@@ -133,6 +133,22 @@ public class KeyboardPopGimmick : NetworkBehaviour
     [Tooltip("플레이어 탐색에 사용할 레이어 마스크입니다. 비워두면 모든 PlayerStatusModule을 검사합니다.")]
     [SerializeField] private LayerMask playerMask = ~0;
 
+    [Header("Cast VFX")]
+    [Tooltip("KeyboardPop 기믹이 시작될 때 표시할 시전 VFX 프리팹입니다. 비어 있으면 표시하지 않습니다.")]
+    [SerializeField] private GameObject keyboardPopCastVfxPrefab;
+
+    [Tooltip("KeyboardPop 시전 VFX 생성 위치의 Y 오프셋입니다.")]
+    [SerializeField] private float keyboardPopCastVfxYOffset = 0.35f;
+
+    [Tooltip("KeyboardPop 시전 VFX를 강제로 제거할 시간입니다. 0이면 프리팹 자체 수명에 맡깁니다.")]
+    [SerializeField] private float keyboardPopCastVfxLifetime = 1.5f;
+
+    [Tooltip("선택된 burst key들의 평균 위치를 기준으로 시전 VFX를 표시할지 여부입니다. false이면 전체 keyTransforms 중심을 사용합니다.")]
+    [SerializeField] private bool keyboardPopCastVfxUseSelectedKeysCenter = true;
+
+    [Tooltip("시전 VFX를 KeyboardPopGimmick 오브젝트에 붙여서 표시할지 여부입니다.")]
+    [SerializeField] private bool keyboardPopCastVfxAttachToRoot = false;
+
     [Header("Debug")]
     [Tooltip("키보드 팝 기믹의 일반 디버그 로그를 출력할지 여부입니다.")]
     [SerializeField] private bool enableDebugLogs = false;
@@ -148,6 +164,7 @@ public class KeyboardPopGimmick : NetworkBehaviour
     private readonly HashSet<PlayerStatusModule> _hitPlayers = new HashSet<PlayerStatusModule>();
     private Coroutine _runningRoutine;
     private Coroutine _clientVisualRoutine;
+    private GameObject _activeKeyboardPopCastVfx;
 
     private void Awake()
     {
@@ -168,6 +185,12 @@ public class KeyboardPopGimmick : NetworkBehaviour
     {
         StopRunningAndRestore();
         base.OnDestroy();
+    }
+
+    public override void OnNetworkDespawn()
+    {
+        StopRunningAndRestore();
+        base.OnNetworkDespawn();
     }
 
     private void Update()
@@ -205,7 +228,9 @@ public class KeyboardPopGimmick : NetworkBehaviour
         }
 
         PrepareBurstData();
-        SendPlayKeyboardPopVisual();
+        Vector3 castVfxPosition = GetKeyboardPopCastVfxPosition();
+        SpawnKeyboardPopCastVfxLocal(castVfxPosition);
+        SendPlayKeyboardPopVisual(castVfxPosition);
         _runningRoutine = StartCoroutine(RunRoutine());
     }
 
@@ -237,6 +262,7 @@ public class KeyboardPopGimmick : NetworkBehaviour
 
         _runningRoutine = null;
         SendStopKeyboardPopVisual(!stayScatteredAfterImpact);
+        ClearKeyboardPopCastVfxLocal();
         Log($"{LogPrefix} Ended.");
     }
 
@@ -848,6 +874,7 @@ public class KeyboardPopGimmick : NetworkBehaviour
 
         SendCleanupKeyboardPopVisual();
         StopClientKeyboardPopVisualRoutine();
+        ClearKeyboardPopCastVfxLocal();
         RestoreOriginalTransforms();
         _hitPlayers.Clear();
     }
@@ -875,7 +902,7 @@ public class KeyboardPopGimmick : NetworkBehaviour
         return hideDelays;
     }
 
-    private void SendPlayKeyboardPopVisual()
+    private void SendPlayKeyboardPopVisual(Vector3 castVfxPosition)
     {
         if (!CanSendKeyboardPopVisualMessage())
             return;
@@ -894,7 +921,8 @@ public class KeyboardPopGimmick : NetworkBehaviour
             flyingRotationSpeed,
             stayScatteredAfterImpact,
             hideKeysAfterLanding,
-            resetKeysBeforeStart);
+            resetKeysBeforeStart,
+            castVfxPosition);
         Log($"{LogPrefix} Visual RPC sent keys={CountValidPreparedKeys()}");
     }
 
@@ -935,7 +963,8 @@ public class KeyboardPopGimmick : NetworkBehaviour
         float visualFlyingRotationSpeed,
         bool visualStayScatteredAfterImpact,
         bool visualHideKeysAfterLanding,
-        bool visualResetKeysBeforeStart)
+        bool visualResetKeysBeforeStart,
+        Vector3 castVfxPosition)
     {
         if (ShouldSkipKeyboardPopVisualOnThisPeer())
             return;
@@ -958,6 +987,8 @@ public class KeyboardPopGimmick : NetworkBehaviour
         if (visualResetKeysBeforeStart)
             RestoreOriginalTransforms();
 
+        SpawnKeyboardPopCastVfxLocal(castVfxPosition);
+
         _clientVisualRoutine = StartCoroutine(RunKeyboardPopVisualOnlyRoutine(
             visualTelegraphDuration,
             visualLaunchDuration,
@@ -977,6 +1008,7 @@ public class KeyboardPopGimmick : NetworkBehaviour
             return;
 
         StopClientKeyboardPopVisualRoutine();
+        ClearKeyboardPopCastVfxLocal();
         if (restoreOriginal)
             RestoreOriginalTransforms();
 
@@ -990,6 +1022,7 @@ public class KeyboardPopGimmick : NetworkBehaviour
             return;
 
         StopClientKeyboardPopVisualRoutine();
+        ClearKeyboardPopCastVfxLocal();
         RestoreOriginalTransforms();
         Log($"{LogPrefix} Visual cleanup client");
     }
@@ -1053,6 +1086,115 @@ public class KeyboardPopGimmick : NetworkBehaviour
 
         StopCoroutine(_clientVisualRoutine);
         _clientVisualRoutine = null;
+    }
+
+    private Vector3 GetKeyboardPopCastVfxPosition()
+    {
+        Vector3 center;
+        if (keyboardPopCastVfxUseSelectedKeysCenter && TryGetPreparedKeyCenter(out center))
+            return ApplyKeyboardPopCastVfxYOffset(center);
+
+        if (TryGetAllKeyCenter(out center))
+            return ApplyKeyboardPopCastVfxYOffset(center);
+
+        return ApplyKeyboardPopCastVfxYOffset(transform.position);
+    }
+
+    private bool TryGetPreparedKeyCenter(out Vector3 center)
+    {
+        center = Vector3.zero;
+        int count = GetPreparedKeyCount();
+        int validCount = 0;
+
+        for (int i = 0; i < count; i++)
+        {
+            Transform key = GetKeyAt(i);
+            if (key == null)
+                continue;
+
+            Vector3 position = GetOriginalWorldPosition(i, key);
+            if (!IsFiniteVector(position))
+                position = key.position;
+            if (!IsFiniteVector(position))
+                continue;
+
+            center += position;
+            validCount++;
+        }
+
+        if (validCount <= 0)
+            return false;
+
+        center /= validCount;
+        return true;
+    }
+
+    private bool TryGetAllKeyCenter(out Vector3 center)
+    {
+        center = Vector3.zero;
+        int count = GetKeyCount();
+        int validCount = 0;
+
+        for (int i = 0; i < count; i++)
+        {
+            Transform key = GetKeyAt(i);
+            if (key == null || !IsFiniteVector(key.position))
+                continue;
+
+            center += key.position;
+            validCount++;
+        }
+
+        if (validCount <= 0)
+            return false;
+
+        center /= validCount;
+        return true;
+    }
+
+    private Vector3 ApplyKeyboardPopCastVfxYOffset(Vector3 position)
+    {
+        float yOffset = IsFiniteFloat(keyboardPopCastVfxYOffset) ? keyboardPopCastVfxYOffset : 0f;
+        return position + Vector3.up * yOffset;
+    }
+
+    private void SpawnKeyboardPopCastVfxLocal(Vector3 position)
+    {
+        if (keyboardPopCastVfxPrefab == null)
+        {
+            Log($"{LogPrefix} Cast VFX skipped prefab null");
+            return;
+        }
+
+        if (!IsFiniteVector(position))
+            position = ApplyKeyboardPopCastVfxYOffset(transform.position);
+
+        ClearKeyboardPopCastVfxLocal();
+
+        Transform parent = keyboardPopCastVfxAttachToRoot ? transform : null;
+        GameObject instance = Instantiate(keyboardPopCastVfxPrefab, position, transform.rotation, parent);
+        if (instance == null)
+            return;
+
+        _activeKeyboardPopCastVfx = instance;
+
+        float lifetime = IsFiniteFloat(keyboardPopCastVfxLifetime)
+            ? Mathf.Max(0f, keyboardPopCastVfxLifetime)
+            : 0f;
+        if (lifetime > 0f)
+            Destroy(instance, lifetime);
+
+        Log($"{LogPrefix} Cast VFX spawned position={position}");
+    }
+
+    private void ClearKeyboardPopCastVfxLocal()
+    {
+        if (_activeKeyboardPopCastVfx == null)
+            return;
+
+        Destroy(_activeKeyboardPopCastVfx);
+        _activeKeyboardPopCastVfx = null;
+        Log($"{LogPrefix} Cast VFX cleanup");
     }
 
     private bool HasValidKey()

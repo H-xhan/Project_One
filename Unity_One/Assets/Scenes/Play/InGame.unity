@@ -10573,6 +10573,11 @@ MonoBehaviour:
   playerMask:
     serializedVersion: 2
     m_Bits: 64
+  keyboardPopCastVfxPrefab: {fileID: 7711606015516149856, guid: da430341cc3483e44a06a59c7b8ef571, type: 3}
+  keyboardPopCastVfxYOffset: 0.35
+  keyboardPopCastVfxLifetime: 1.5
+  keyboardPopCastVfxUseSelectedKeysCenter: 1
+  keyboardPopCastVfxAttachToRoot: 0
   enableDebugLogs: 0
 --- !u!114 &1243381397
 MonoBehaviour:
