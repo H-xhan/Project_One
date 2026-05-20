@@ -42,6 +42,19 @@ public class GameStateManager : NetworkBehaviour
     [SerializeField, Tooltip("Playing 진입 시 플레이어를 게임 존으로 보낼지 여부")]
     private bool teleportPlayersOnEnterPlaying = true;
 
+    [Header("Cursor")]
+    [SerializeField, Tooltip("Playing 상태 진입 시 마우스 커서를 숨기고 lock할지 여부입니다.")]
+    private bool autoLockCursorOnPlaying = true;
+
+    [SerializeField, Tooltip("Playing 외 상태에서 UI 조작을 위해 마우스 커서를 보이게 할지 여부입니다.")]
+    private bool unlockCursorOutsidePlaying = true;
+
+    [SerializeField, Tooltip("빌드에서 포커스를 되찾았을 때 Playing 상태라면 커서 lock을 다시 적용할지 여부입니다.")]
+    private bool reapplyCursorLockOnFocus = true;
+
+    [SerializeField, Tooltip("Playing 중 커서 lock이 풀렸을 때 재적용하는 최소 간격입니다.")]
+    private float cursorLockRefreshInterval = 0.25f;
+
     [Header("라운드 결과")]
     [SerializeField, Tooltip("Playing 상태에서 마지막 생존자 승리 판정을 사용할지 여부입니다.")]
     private bool enableLastSurvivorWinCheck = true;
@@ -94,7 +107,9 @@ public class GameStateManager : NetworkBehaviour
 
     private readonly List<ulong> _roundParticipantClientIds = new List<ulong>();
     private float _nextSurvivorCheckTime;
+    private float _nextCursorLockRefreshAt;
     private bool _roundResultResolved;
+    private bool _isStateValueChangeSubscribed;
 
     public bool HasRoundWinner => RoundHasWinnerValue.Value;
     public bool IsRoundDraw => RoundIsDrawValue.Value;
@@ -117,9 +132,27 @@ public class GameStateManager : NetworkBehaviour
 
         ResolveRefs();
 
+        SubscribeGameStateCursorEvents();
+        ApplyCursorStateForCurrentGameState("network-spawn");
+
         if (!IsServer) return;
 
         EnterLobby(true);
+    }
+
+    public override void OnNetworkDespawn()
+    {
+        UnsubscribeGameStateCursorEvents();
+        if (unlockCursorOutsidePlaying)
+            SetCursorLocked(false, "network-despawn");
+
+        base.OnNetworkDespawn();
+    }
+
+    public override void OnDestroy()
+    {
+        UnsubscribeGameStateCursorEvents();
+        base.OnDestroy();
     }
 
     private void ResolveRefs()
@@ -136,6 +169,8 @@ public class GameStateManager : NetworkBehaviour
 
     private void Update()
     {
+        RefreshCursorLockIfNeeded();
+
         if (!IsServer) return;
 
         ResolveRefs();
@@ -188,6 +223,7 @@ public class GameStateManager : NetworkBehaviour
     private void EnterLobby(bool isInitialSpawn)
     {
         StateValue.Value = (int)GameState.Lobby;
+        ApplyCursorStateForCurrentGameState("enter-lobby");
         StateTimer.Value = 0f;
         ResetRoundResultServer();
         ClearRoundMissionsServer();
@@ -207,6 +243,7 @@ public class GameStateManager : NetworkBehaviour
     private void EnterCountdown()
     {
         StateValue.Value = (int)GameState.Countdown;
+        ApplyCursorStateForCurrentGameState("enter-countdown");
         StateTimer.Value = countdownSeconds;
 
         Log("[GameStateManager] EnterCountdown");
@@ -218,6 +255,7 @@ public class GameStateManager : NetworkBehaviour
         CaptureRoundParticipantsServer();
 
         StateValue.Value = (int)GameState.Playing;
+        ApplyCursorStateForCurrentGameState("enter-playing");
         StateTimer.Value = playSeconds;
         _nextSurvivorCheckTime = Time.unscaledTime + Mathf.Max(0f, survivorCheckInterval);
         BeginRoundMissionsServer();
@@ -233,6 +271,7 @@ public class GameStateManager : NetworkBehaviour
     private void EnterResults()
     {
         StateValue.Value = (int)GameState.Results;
+        ApplyCursorStateForCurrentGameState("enter-results");
         StateTimer.Value = resultsSeconds;
 
         Log("[GameStateManager] EnterResults");
@@ -428,6 +467,120 @@ public class GameStateManager : NetworkBehaviour
             ResolveRoundWinnerServer(winnerClientId, false);
 
         return true;
+    }
+
+    private void SubscribeGameStateCursorEvents()
+    {
+        if (_isStateValueChangeSubscribed)
+            return;
+
+        StateValue.OnValueChanged += HandleStateValueChangedForCursor;
+        _isStateValueChangeSubscribed = true;
+    }
+
+    private void UnsubscribeGameStateCursorEvents()
+    {
+        if (!_isStateValueChangeSubscribed)
+            return;
+
+        StateValue.OnValueChanged -= HandleStateValueChangedForCursor;
+        _isStateValueChangeSubscribed = false;
+    }
+
+    private void HandleStateValueChangedForCursor(int previousStateValue, int newStateValue)
+    {
+        ApplyCursorStateForGameState((GameState)newStateValue, "state-changed");
+    }
+
+    private void OnApplicationFocus(bool hasFocus)
+    {
+        if (!hasFocus || !reapplyCursorLockOnFocus)
+            return;
+
+        if (GetState() == GameState.Playing)
+            ApplyCursorStateForGameState(GameState.Playing, "focus");
+    }
+
+    private void RefreshCursorLockIfNeeded()
+    {
+        if (!autoLockCursorOnPlaying)
+            return;
+        if (GetState() != GameState.Playing)
+            return;
+        if (ShouldSkipCursorApi())
+            return;
+        if (Time.unscaledTime < _nextCursorLockRefreshAt)
+            return;
+
+        _nextCursorLockRefreshAt = Time.unscaledTime + GetCursorLockRefreshInterval();
+
+        if (Cursor.lockState != CursorLockMode.Locked || Cursor.visible)
+            ApplyCursorStateForGameState(GameState.Playing, "refresh");
+    }
+
+    private void ApplyCursorStateForCurrentGameState(string reason)
+    {
+        ApplyCursorStateForGameState(GetState(), reason);
+    }
+
+    private void ApplyCursorStateForGameState(GameState state, string reason)
+    {
+        if (ShouldSkipCursorApi())
+            return;
+
+        if (ShouldLockCursorForState(state))
+        {
+            SetCursorLocked(true, reason);
+        }
+        else if (ShouldUnlockCursorForState(state))
+        {
+            SetCursorLocked(false, reason);
+        }
+    }
+
+    private bool ShouldLockCursorForState(GameState state)
+    {
+        return autoLockCursorOnPlaying && state == GameState.Playing;
+    }
+
+    private bool ShouldUnlockCursorForState(GameState state)
+    {
+        return unlockCursorOutsidePlaying && state != GameState.Playing;
+    }
+
+    private void SetCursorLocked(bool locked, string reason)
+    {
+        if (ShouldSkipCursorApi())
+            return;
+
+        CursorLockMode targetLockState = locked ? CursorLockMode.Locked : CursorLockMode.None;
+        bool alreadyApplied = Cursor.lockState == targetLockState && Cursor.visible == !locked;
+
+        Cursor.lockState = targetLockState;
+        Cursor.visible = !locked;
+
+        if (locked)
+            _nextCursorLockRefreshAt = Time.unscaledTime + GetCursorLockRefreshInterval();
+
+        if (!alreadyApplied)
+            Log($"[GameStateManager] Cursor {(locked ? "locked" : "unlocked")} reason={reason}");
+    }
+
+    private float GetCursorLockRefreshInterval()
+    {
+        return Mathf.Max(0.01f, cursorLockRefreshInterval);
+    }
+
+    private bool ShouldSkipCursorApi()
+    {
+        if (Application.isBatchMode)
+            return true;
+
+        NetworkManager networkManager = NetworkManager.Singleton;
+        return networkManager != null &&
+            networkManager.IsListening &&
+            networkManager.IsServer &&
+            !networkManager.IsClient;
     }
 
     private void Log(string message)
