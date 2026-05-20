@@ -156,6 +156,7 @@ public struct MissionResult
 public class RoundMissionManager : NetworkBehaviour
 {
     private const ulong InvalidClientId = ulong.MaxValue;
+    private const string MissionIdAnyItemInZone = "mission_any_item_in_zone";
 
     [SerializeField, Tooltip("라운드 미션 시스템을 사용할지 여부입니다.")]
     private bool enableMissions = true;
@@ -215,6 +216,7 @@ public class RoundMissionManager : NetworkBehaviour
     private void Awake()
     {
         EnsureDefaultMissionTemplates();
+        EnsureRuntimeMissionTemplates();
     }
 
     public void ServerBeginRoundMissions(IReadOnlyList<ulong> participantClientIds)
@@ -228,6 +230,7 @@ public class RoundMissionManager : NetworkBehaviour
             return;
 
         EnsureDefaultMissionTemplates();
+        EnsureRuntimeMissionTemplates();
         CaptureParticipants(participantClientIds);
 
         if (_participantClientIds.Count == 0)
@@ -858,6 +861,9 @@ public class RoundMissionManager : NetworkBehaviour
     private bool EvaluateCarryToZone(MissionAssignment assignment, out string reason)
     {
         bool inZone = IsClientInsideZone(assignment.clientId, assignment.requiredZoneId);
+        if (IsAnyItemInZoneMission(assignment))
+            return EvaluateAnyItemInZone(assignment, inZone, out reason);
+
         bool hasItem = EvaluateHeldItemRequirement(assignment, out string itemReason);
 
         if (inZone && hasItem)
@@ -874,6 +880,52 @@ public class RoundMissionManager : NetworkBehaviour
 
         reason = !inZone ? "종료 순간 지정 구역 안에 있지 않았습니다." : itemReason;
         return false;
+    }
+
+    private bool EvaluateAnyItemInZone(MissionAssignment assignment, bool inZone, out string reason)
+    {
+        bool hasItem = EvaluateAnyHeldItemRequirement(assignment.clientId, out string itemReason);
+        if (inZone && hasItem)
+        {
+            reason = "종료 순간 지정 구역에서 아무 아이템이나 들고 있었습니다.";
+            Log($"[RoundMission] AnyItemInZone success client={assignment.clientId}");
+            return true;
+        }
+
+        if (!inZone && !hasItem)
+        {
+            reason = "지정 구역 안에서 아이템을 들고 있지 않았습니다.";
+            Log($"[RoundMission] AnyItemInZone failed client={assignment.clientId} reason={reason}");
+            return false;
+        }
+
+        reason = !inZone ? "종료 순간 지정 구역 안에 있지 않았습니다." : itemReason;
+        Log($"[RoundMission] AnyItemInZone failed client={assignment.clientId} reason={reason}");
+        return false;
+    }
+
+    private bool EvaluateAnyHeldItemRequirement(ulong clientId, out string reason)
+    {
+        if (!TryGetPlayerInteract(clientId, out PlayerInteractModule interact))
+        {
+            reason = "아이템 보유 여부를 확인할 수 없습니다.";
+            return false;
+        }
+
+        if (interact.HasHeldItem())
+        {
+            reason = "종료 순간 아무 아이템이나 들고 있었습니다.";
+            return true;
+        }
+
+        reason = "아이템을 들고 있지 않았습니다.";
+        return false;
+    }
+
+    private bool IsAnyItemInZoneMission(MissionAssignment assignment)
+    {
+        return assignment.family == MissionFamily.CarryToZone &&
+            string.Equals(assignment.missionId, MissionIdAnyItemInZone, StringComparison.Ordinal);
     }
 
     private bool EvaluateRichInDangerZone(MissionAssignment assignment, out string reason)
@@ -1441,10 +1493,59 @@ public class RoundMissionManager : NetworkBehaviour
             CreateDefaultTemplate(MissionFamily.LastLocation, "mission_last_location", "마지막 위치", 8, string.Empty, 0, 0, 0),
             CreateDefaultTemplate(MissionFamily.LastHeldItem, "mission_last_held_item", "마지막 소지품", 8, string.Empty, 0, 0, 0),
             CreateDefaultTemplate(MissionFamily.CarryToZone, "mission_carry_to_zone", "몰래 운반", 12, string.Empty, 0, 0, 0),
+            CreateAnyItemInZoneTemplate(),
             CreateDefaultTemplate(MissionFamily.RichInDangerZone, "mission_rich_in_danger_zone", "위험한 부자", 15, string.Empty, 0, 10, 0),
             CreateDefaultTemplate(MissionFamily.KnockOff, "mission_knock_off", "떨어트리기", 10, string.Empty, 0, 0, 1),
             CreateDefaultTemplate(MissionFamily.GuessMission, "mission_guess_mission", "상대 미션 맞추기", 12, string.Empty, 0, 0, 0)
         };
+    }
+
+    private void EnsureRuntimeMissionTemplates()
+    {
+        EnsureAnyItemInZoneMissionTemplate();
+    }
+
+    private void EnsureAnyItemInZoneMissionTemplate()
+    {
+        if (HasMissionTemplate(MissionIdAnyItemInZone))
+            return;
+
+        List<MissionTemplate> templates = missionTemplates != null
+            ? new List<MissionTemplate>(missionTemplates)
+            : new List<MissionTemplate>();
+        templates.Add(CreateAnyItemInZoneTemplate());
+        missionTemplates = templates.ToArray();
+        Log("[RoundMission] AnyItemInZone template added");
+    }
+
+    private bool HasMissionTemplate(string missionId)
+    {
+        if (missionTemplates == null || string.IsNullOrWhiteSpace(missionId))
+            return false;
+
+        for (int i = 0; i < missionTemplates.Length; i++)
+        {
+            MissionTemplate template = missionTemplates[i];
+            if (string.Equals(template.missionId, missionId, StringComparison.Ordinal))
+                return true;
+        }
+
+        return false;
+    }
+
+    private MissionTemplate CreateAnyItemInZoneTemplate()
+    {
+        MissionTemplate template = CreateDefaultTemplate(
+            MissionFamily.CarryToZone,
+            MissionIdAnyItemInZone,
+            "아무거나 운반",
+            10,
+            string.Empty,
+            0,
+            0,
+            0);
+        template.descriptionFormat = "종료 순간 {zone} 안에서 아무 아이템이나 들고 있으면 성공";
+        return template;
     }
 
     private MissionTemplate CreateDefaultTemplate(
