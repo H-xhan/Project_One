@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using Unity.Netcode;
 using UnityEngine;
+using UnityEngine.Rendering;
 
 public enum MissionFamily
 {
@@ -155,8 +156,20 @@ public struct MissionResult
 
 public class RoundMissionManager : NetworkBehaviour
 {
+    private enum MissionZoneMarkerShape
+    {
+        BoxColliderOutline = 0,
+        Ring = 1,
+        Rectangle = 2
+    }
+
     private const ulong InvalidClientId = ulong.MaxValue;
     private const string MissionIdAnyItemInZone = "mission_any_item_in_zone";
+    private const string MissionZoneMarkerRootName = "MissionZoneMarkers_Runtime";
+    private const float DefaultMissionZoneMarkerSurfaceOffset = 0.025f;
+    private const float MissionZoneMarkerMinimumSize = 0.05f;
+    private const float MissionZoneMarkerOutlineYOffset = 0.01f;
+    private const int MissionZoneMarkerRingSegments = 64;
 
     [SerializeField, Tooltip("라운드 미션 시스템을 사용할지 여부입니다.")]
     private bool enableMissions = true;
@@ -191,6 +204,45 @@ public class RoundMissionManager : NetworkBehaviour
     [SerializeField, Tooltip("미션 배정/판정 디버그 로그를 출력할지 여부입니다.")]
     private bool enableDebugLogs = false;
 
+    [SerializeField, Tooltip("미션 목표 구역 marker를 zone bounds 상단이 아니라 아래쪽 ground/surface에 투영해 표시할지 여부입니다.")]
+    private bool missionZoneMarkerUseGroundProjection = true;
+
+    [SerializeField, Tooltip("marker를 붙일 ground/surface를 찾기 위해 zone 중심 위에서 아래로 쏘는 raycast 시작 높이입니다.")]
+    private float missionZoneMarkerGroundProbeHeight = 3f;
+
+    [SerializeField, Tooltip("marker ground/surface raycast 검사 거리입니다.")]
+    private float missionZoneMarkerGroundProbeDistance = 8f;
+
+    [SerializeField, Tooltip("marker를 ground/surface 위에 살짝 띄우는 거리입니다.")]
+    private float missionZoneMarkerSurfaceOffset = DefaultMissionZoneMarkerSurfaceOffset;
+
+    [SerializeField, Tooltip("미션 구역 marker 내부 fill을 표시할지 여부입니다. 꺼두면 테두리만 표시합니다.")]
+    private bool missionZoneMarkerFillEnabled = false;
+
+    [SerializeField, Tooltip("미션 구역 marker 내부 fill 투명도입니다.")]
+    private float missionZoneMarkerFillAlpha = 0.08f;
+
+    [SerializeField, Tooltip("미션 목표 구역 marker 모양입니다. BoxColliderOutline이면 BoxCollider footprint 기반 사각 표시를 사용합니다.")]
+    private MissionZoneMarkerShape missionZoneMarkerShape = MissionZoneMarkerShape.BoxColliderOutline;
+
+    [SerializeField, Tooltip("미션 목표 구역 marker에 테두리 표시를 추가할지 여부입니다.")]
+    private bool missionZoneMarkerOutlineEnabled = true;
+
+    [SerializeField, Tooltip("미션 목표 구역 marker 테두리 두께입니다.")]
+    private float missionZoneMarkerOutlineWidth = 0.04f;
+
+    [SerializeField, Tooltip("미션 목표 구역 marker 테두리 투명도입니다.")]
+    private float missionZoneMarkerOutlineAlpha = 0.9f;
+
+    [SerializeField, Tooltip("Ring marker 반지름에 곱할 배율입니다.")]
+    private float missionZoneMarkerRingRadiusScale = 0.9f;
+
+    [SerializeField, Tooltip("Ring marker 최대 반지름입니다. 0 이하이면 제한하지 않습니다.")]
+    private float missionZoneMarkerMaxRingRadius = 2f;
+
+    [SerializeField, Tooltip("미션 목표 구역 marker의 위치/크기 디버그 로그를 출력할지 여부입니다.")]
+    private bool enableMissionZoneMarkerDebugLogs = false;
+
     private readonly List<ulong> _participantClientIds = new List<ulong>();
     private readonly Dictionary<ulong, MissionAssignment> _assignmentsByClientId = new Dictionary<ulong, MissionAssignment>();
     private readonly Dictionary<ulong, MissionResult> _resultsByClientId = new Dictionary<ulong, MissionResult>();
@@ -204,6 +256,14 @@ public class RoundMissionManager : NetworkBehaviour
     private bool _hasLocalMissionAssignment;
     private bool _hasLocalResultsSnapshot;
     private MissionAssignment _localMissionAssignment;
+    private readonly List<GameObject> _activeMissionZoneMarkers = new List<GameObject>();
+    private Transform _missionZoneMarkerRoot;
+    private Material _missionZoneMarkerMaterial;
+    private Material _missionZoneMarkerOutlineMaterial;
+    private Mesh _missionZoneMarkerMesh;
+    private string _activeMissionZoneMarkerZoneId = string.Empty;
+    private GameStateManager _missionZoneMarkerGameStateManager;
+    private bool _isMissionZoneMarkerGameStateSubscribed;
 
     public bool IsMissionRoundActive => _isMissionRoundActive;
     public bool HasEvaluatedResults => _hasEvaluatedResults;
@@ -217,6 +277,32 @@ public class RoundMissionManager : NetworkBehaviour
     {
         EnsureDefaultMissionTemplates();
         EnsureRuntimeMissionTemplates();
+    }
+
+    public override void OnNetworkSpawn()
+    {
+        base.OnNetworkSpawn();
+
+        SubscribeGameStateForZoneMarkerIfNeeded();
+        RefreshMissionZoneMarker("network-spawn");
+    }
+
+    public override void OnNetworkDespawn()
+    {
+        ClearMissionZoneMarkers("network-despawn");
+        UnsubscribeGameStateForZoneMarker();
+        DestroyMissionZoneMarkerResources();
+
+        base.OnNetworkDespawn();
+    }
+
+    public override void OnDestroy()
+    {
+        ClearMissionZoneMarkers("destroy");
+        UnsubscribeGameStateForZoneMarker();
+        DestroyMissionZoneMarkerResources();
+
+        base.OnDestroy();
     }
 
     public void ServerBeginRoundMissions(IReadOnlyList<ulong> participantClientIds)
@@ -301,6 +387,7 @@ public class RoundMissionManager : NetworkBehaviour
         if (!IsServer)
             return;
 
+        ClearMissionZoneMarkers("server-clear");
         _participantClientIds.Clear();
         _assignmentsByClientId.Clear();
         _resultsByClientId.Clear();
@@ -590,6 +677,7 @@ public class RoundMissionManager : NetworkBehaviour
         };
         _hasLocalMissionAssignment = true;
 
+        RefreshMissionZoneMarker("assignment");
         LocalMissionAssignmentChanged?.Invoke(_localMissionAssignment);
     }
 
@@ -603,6 +691,7 @@ public class RoundMissionManager : NetworkBehaviour
     {
         _localMissionAssignment = default;
         _hasLocalMissionAssignment = false;
+        ClearMissionZoneMarkers("assignment-clear");
         LocalMissionAssignmentChanged?.Invoke(_localMissionAssignment);
     }
 
@@ -639,6 +728,7 @@ public class RoundMissionManager : NetworkBehaviour
     [ClientRpc]
     private void CompleteMissionResultsClientRpc()
     {
+        ClearMissionZoneMarkers("mission-results");
         _hasLocalResultsSnapshot = true;
         LocalMissionResultsChanged?.Invoke();
     }
@@ -1574,6 +1664,782 @@ public class RoundMissionManager : NetworkBehaviour
         };
     }
 
+    private void RefreshMissionZoneMarker(string reason = null)
+    {
+        SubscribeGameStateForZoneMarkerIfNeeded();
+
+        if (!ShouldShowMissionZoneMarker(out MissionAssignment assignment, out string skipReason))
+        {
+            if (HasActiveMissionZoneMarkers() || !string.IsNullOrWhiteSpace(_activeMissionZoneMarkerZoneId))
+                ClearMissionZoneMarkers(skipReason);
+            else
+                Log($"[RoundMission] Zone marker skipped reason={skipReason}");
+
+            return;
+        }
+
+        string zoneId = assignment.requiredZoneId;
+        if (string.Equals(_activeMissionZoneMarkerZoneId, zoneId, StringComparison.Ordinal) &&
+            HasActiveMissionZoneMarkers())
+            return;
+
+        ClearMissionZoneMarkers(string.IsNullOrWhiteSpace(reason) ? "refresh" : reason);
+
+        if (!TryGetZoneForMarker(zoneId, out MissionZoneDefinition zone))
+        {
+            Log($"[RoundMission] Zone marker skipped reason=zone-not-found zone={zoneId}");
+            return;
+        }
+
+        _activeMissionZoneMarkerZoneId = zoneId;
+        CreateMissionZoneMarkers(zone);
+
+        int markerCount = CountActiveMissionZoneMarkers();
+        if (markerCount <= 0)
+        {
+            _activeMissionZoneMarkerZoneId = string.Empty;
+            Log($"[RoundMission] Zone marker skipped reason=no-marker-created zone={zoneId}");
+            return;
+        }
+
+        Log($"[RoundMission] Zone marker shown zone={zoneId} shape={GetMissionZoneMarkerShapeName()} colliders={markerCount}");
+    }
+
+    private void ClearMissionZoneMarkers(string reason = null)
+    {
+        bool hadMarkers = _activeMissionZoneMarkers.Count > 0 ||
+            _missionZoneMarkerRoot != null ||
+            !string.IsNullOrWhiteSpace(_activeMissionZoneMarkerZoneId);
+
+        for (int i = 0; i < _activeMissionZoneMarkers.Count; i++)
+        {
+            GameObject marker = _activeMissionZoneMarkers[i];
+            if (marker == null)
+                continue;
+
+            DestroyMissionZoneMarkerUnityObject(marker);
+        }
+
+        _activeMissionZoneMarkers.Clear();
+
+        if (_missionZoneMarkerRoot != null)
+        {
+            DestroyMissionZoneMarkerUnityObject(_missionZoneMarkerRoot.gameObject);
+            _missionZoneMarkerRoot = null;
+        }
+
+        _activeMissionZoneMarkerZoneId = string.Empty;
+
+        if (hadMarkers)
+            Log($"[RoundMission] Zone marker hidden reason={NormalizeMissionZoneMarkerReason(reason)}");
+    }
+
+    private bool ShouldShowMissionZoneMarker(out MissionAssignment assignment)
+    {
+        return ShouldShowMissionZoneMarker(out assignment, out _);
+    }
+
+    private bool ShouldShowMissionZoneMarker(out MissionAssignment assignment, out string reason)
+    {
+        assignment = default;
+        reason = string.Empty;
+
+        if (!IsPlayingForMissionZoneMarker())
+        {
+            reason = "not-playing";
+            return false;
+        }
+
+        if (!_hasLocalMissionAssignment)
+        {
+            reason = "no-assignment";
+            return false;
+        }
+
+        assignment = _localMissionAssignment;
+        if (!IsMissionZoneMarkerFamily(assignment.family))
+        {
+            reason = "non-zone-family";
+            return false;
+        }
+
+        if (string.IsNullOrWhiteSpace(assignment.requiredZoneId))
+        {
+            reason = "no-zone";
+            return false;
+        }
+
+        return true;
+    }
+
+    private bool IsMissionZoneMarkerFamily(MissionFamily family)
+    {
+        switch (family)
+        {
+            case MissionFamily.LastLocation:
+            case MissionFamily.CarryToZone:
+            case MissionFamily.RichInDangerZone:
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    private bool TryGetZoneForMarker(string zoneId, out MissionZoneDefinition zone)
+    {
+        zone = FindZone(zoneId);
+        return !string.IsNullOrWhiteSpace(zone.zoneId) &&
+            zone.colliders != null &&
+            zone.colliders.Length > 0;
+    }
+
+    private void CreateMissionZoneMarkers(MissionZoneDefinition zone)
+    {
+        if (zone.colliders == null || zone.colliders.Length == 0)
+            return;
+
+        if (!CanCreateMissionZoneMarkerResources())
+            return;
+
+        EnsureMissionZoneMarkerRoot();
+        if (_missionZoneMarkerRoot == null)
+            return;
+
+        for (int i = 0; i < zone.colliders.Length; i++)
+        {
+            GameObject marker = CreateMissionZoneMarkerForCollider(zone.colliders[i], i);
+            if (marker == null)
+                continue;
+
+            _activeMissionZoneMarkers.Add(marker);
+        }
+    }
+
+    private GameObject CreateMissionZoneMarkerForCollider(Collider zoneCollider, int index)
+    {
+        if (!CanUseZoneColliderForMarker(zoneCollider))
+            return null;
+
+        Bounds bounds = zoneCollider.bounds;
+        if (bounds.size.x <= 0f || bounds.size.z <= 0f)
+            return null;
+
+        float markerY = GetMissionZoneMarkerY(bounds, out string yMode);
+        GameObject marker = new GameObject($"MissionZoneMarker_{_activeMissionZoneMarkerZoneId}_{index}");
+        marker.layer = gameObject.layer;
+        marker.transform.SetParent(_missionZoneMarkerRoot, false);
+        marker.transform.position = new Vector3(
+            bounds.center.x,
+            markerY,
+            bounds.center.z);
+        marker.transform.rotation = Quaternion.identity;
+        marker.transform.localScale = new Vector3(
+            Mathf.Max(bounds.size.x, MissionZoneMarkerMinimumSize),
+            1f,
+            Mathf.Max(bounds.size.z, MissionZoneMarkerMinimumSize));
+
+        if (missionZoneMarkerFillEnabled)
+            AddMissionZoneMarkerFill(marker);
+
+        float ringRadius = CalculateMissionZoneMarkerRingRadius(bounds);
+        bool outlineCreated = CreateMissionZoneMarkerOutline(zoneCollider, bounds, markerY, index, ringRadius, out string outlineShape);
+        if (!missionZoneMarkerFillEnabled && !outlineCreated)
+        {
+            DestroyMissionZoneMarkerUnityObject(marker);
+            return null;
+        }
+
+        LogMissionZoneMarkerDetails(index, marker.transform.position, marker.transform.localScale, yMode, ringRadius, outlineShape);
+
+        return marker;
+    }
+
+    private void AddMissionZoneMarkerFill(GameObject marker)
+    {
+        if (marker == null)
+            return;
+
+        Material markerMaterial = GetOrCreateMissionZoneMarkerMaterial();
+        Mesh markerMesh = GetOrCreateMissionZoneMarkerMesh();
+        if (markerMaterial == null || markerMesh == null)
+            return;
+
+        MeshFilter meshFilter = marker.AddComponent<MeshFilter>();
+        meshFilter.sharedMesh = markerMesh;
+
+        MeshRenderer meshRenderer = marker.AddComponent<MeshRenderer>();
+        meshRenderer.sharedMaterial = markerMaterial;
+        meshRenderer.shadowCastingMode = ShadowCastingMode.Off;
+        meshRenderer.receiveShadows = false;
+    }
+
+    private bool CreateMissionZoneMarkerOutline(
+        Collider zoneCollider,
+        Bounds bounds,
+        float markerY,
+        int index,
+        float ringRadius,
+        out string outlineShape)
+    {
+        outlineShape = GetMissionZoneMarkerShapeName();
+        if (!missionZoneMarkerOutlineEnabled)
+            return false;
+
+        if (missionZoneMarkerShape == MissionZoneMarkerShape.BoxColliderOutline)
+        {
+            if (zoneCollider is BoxCollider box &&
+                TryCreateBoxColliderZoneOutline(box, _activeMissionZoneMarkerZoneId, index, _missionZoneMarkerRoot))
+            {
+                outlineShape = MissionZoneMarkerShape.BoxColliderOutline.ToString();
+                return true;
+            }
+
+            LogMissionZoneMarkerDebug(
+                $"[RoundMission] Zone marker fallback bounds zone={_activeMissionZoneMarkerZoneId} colliderIndex={index} collider={zoneCollider.GetType().Name}");
+            outlineShape = "BoundsRectangleFallback";
+            return CreateMissionZoneMarkerOutlineForBounds(
+                bounds,
+                markerY,
+                index,
+                ringRadius,
+                MissionZoneMarkerShape.Rectangle);
+        }
+
+        return CreateMissionZoneMarkerOutlineForBounds(
+            bounds,
+            markerY,
+            index,
+            ringRadius,
+            missionZoneMarkerShape);
+    }
+
+    private bool TryCreateBoxColliderZoneOutline(BoxCollider box, string zoneId, int index, Transform parent)
+    {
+        if (box == null || parent == null)
+            return false;
+
+        Vector3[] corners = GetBoxColliderWorldFootprintCorners(box);
+        if (corners.Length < 4)
+            return false;
+
+        LineRenderer lineRenderer = CreateMissionZoneMarkerLineRenderer(
+            $"MissionZoneMarkerOutline_{zoneId}_{index}",
+            parent,
+            false);
+        if (lineRenderer == null)
+            return false;
+
+        Vector3 projectedCenter = ProjectMarkerPointToSurface(box.bounds.center, box.bounds);
+        float y = projectedCenter.y + MissionZoneMarkerOutlineYOffset;
+
+        lineRenderer.positionCount = 5;
+        lineRenderer.SetPosition(0, new Vector3(corners[0].x, y, corners[0].z));
+        lineRenderer.SetPosition(1, new Vector3(corners[1].x, y, corners[1].z));
+        lineRenderer.SetPosition(2, new Vector3(corners[2].x, y, corners[2].z));
+        lineRenderer.SetPosition(3, new Vector3(corners[3].x, y, corners[3].z));
+        lineRenderer.SetPosition(4, new Vector3(corners[0].x, y, corners[0].z));
+        return true;
+    }
+
+    private Vector3[] GetBoxColliderWorldFootprintCorners(BoxCollider box)
+    {
+        if (box == null)
+            return Array.Empty<Vector3>();
+
+        Vector3 center = box.center;
+        Vector3 halfSize = box.size * 0.5f;
+        return new[]
+        {
+            box.transform.TransformPoint(center + new Vector3(halfSize.x, 0f, halfSize.z)),
+            box.transform.TransformPoint(center + new Vector3(halfSize.x, 0f, -halfSize.z)),
+            box.transform.TransformPoint(center + new Vector3(-halfSize.x, 0f, -halfSize.z)),
+            box.transform.TransformPoint(center + new Vector3(-halfSize.x, 0f, halfSize.z))
+        };
+    }
+
+    private Vector3 ProjectMarkerPointToSurface(Vector3 worldPoint, Bounds bounds)
+    {
+        if (missionZoneMarkerUseGroundProjection &&
+            TryProjectMissionZoneMarkerSurface(worldPoint, bounds, out float projectedY))
+        {
+            return new Vector3(worldPoint.x, projectedY, worldPoint.z);
+        }
+
+        return new Vector3(
+            worldPoint.x,
+            bounds.min.y + Mathf.Max(0f, missionZoneMarkerSurfaceOffset),
+            worldPoint.z);
+    }
+
+    private bool CreateMissionZoneMarkerOutlineForBounds(
+        Bounds bounds,
+        float markerY,
+        int index,
+        float ringRadius,
+        MissionZoneMarkerShape shape)
+    {
+        if (!missionZoneMarkerOutlineEnabled)
+            return false;
+
+        float y = markerY + MissionZoneMarkerOutlineYOffset;
+        LineRenderer lineRenderer = CreateMissionZoneMarkerLineRenderer(
+            GetMissionZoneMarkerOutlineName(index, shape),
+            _missionZoneMarkerRoot,
+            shape == MissionZoneMarkerShape.Ring);
+        if (lineRenderer == null)
+            return false;
+
+        if (shape == MissionZoneMarkerShape.Ring)
+            ConfigureMissionZoneMarkerRing(lineRenderer, bounds.center, y, ringRadius);
+        else
+            ConfigureMissionZoneMarkerRectangle(lineRenderer, bounds, y);
+
+        return true;
+    }
+
+    private LineRenderer CreateMissionZoneMarkerLineRenderer(string objectName, Transform parent, bool loop)
+    {
+        Material outlineMaterial = GetOrCreateMissionZoneMarkerOutlineMaterial();
+        if (outlineMaterial == null || parent == null)
+            return null;
+
+        GameObject outline = new GameObject(objectName);
+        outline.layer = gameObject.layer;
+        outline.transform.SetParent(parent, false);
+
+        LineRenderer lineRenderer = outline.AddComponent<LineRenderer>();
+        lineRenderer.sharedMaterial = outlineMaterial;
+        lineRenderer.useWorldSpace = true;
+        lineRenderer.loop = loop;
+        lineRenderer.widthMultiplier = Mathf.Max(0.001f, missionZoneMarkerOutlineWidth);
+        lineRenderer.numCornerVertices = 2;
+        lineRenderer.numCapVertices = 2;
+        lineRenderer.shadowCastingMode = ShadowCastingMode.Off;
+        lineRenderer.receiveShadows = false;
+
+        Color outlineColor = GetMissionZoneMarkerOutlineColor();
+        lineRenderer.startColor = outlineColor;
+        lineRenderer.endColor = outlineColor;
+        return lineRenderer;
+    }
+
+    private bool CanCreateMissionZoneMarkerResources()
+    {
+        if (!missionZoneMarkerFillEnabled && !missionZoneMarkerOutlineEnabled)
+            return false;
+
+        if (missionZoneMarkerFillEnabled &&
+            (GetOrCreateMissionZoneMarkerMaterial() == null || GetOrCreateMissionZoneMarkerMesh() == null))
+            return false;
+
+        return !missionZoneMarkerOutlineEnabled ||
+            GetOrCreateMissionZoneMarkerOutlineMaterial() != null;
+    }
+
+    private Material GetOrCreateMissionZoneMarkerMaterial()
+    {
+        if (_missionZoneMarkerMaterial != null)
+            return _missionZoneMarkerMaterial;
+
+        Shader shader = FindMissionZoneMarkerShader();
+        if (shader == null)
+        {
+            Log("[RoundMission] Zone marker skipped reason=no-shader");
+            return null;
+        }
+
+        _missionZoneMarkerMaterial = new Material(shader)
+        {
+            name = "MissionZoneMarker_Runtime_Material"
+        };
+
+        ConfigureMissionZoneMarkerMaterial(_missionZoneMarkerMaterial, GetMissionZoneMarkerFillColor());
+        return _missionZoneMarkerMaterial;
+    }
+
+    private Material GetOrCreateMissionZoneMarkerOutlineMaterial()
+    {
+        if (_missionZoneMarkerOutlineMaterial != null)
+            return _missionZoneMarkerOutlineMaterial;
+
+        Shader shader = FindMissionZoneMarkerShader();
+        if (shader == null)
+        {
+            Log("[RoundMission] Zone marker skipped reason=no-outline-shader");
+            return null;
+        }
+
+        _missionZoneMarkerOutlineMaterial = new Material(shader)
+        {
+            name = "MissionZoneMarker_Runtime_OutlineMaterial"
+        };
+
+        ConfigureMissionZoneMarkerMaterial(_missionZoneMarkerOutlineMaterial, GetMissionZoneMarkerOutlineColor());
+        return _missionZoneMarkerOutlineMaterial;
+    }
+
+    private Mesh GetOrCreateMissionZoneMarkerMesh()
+    {
+        if (_missionZoneMarkerMesh != null)
+            return _missionZoneMarkerMesh;
+
+        _missionZoneMarkerMesh = new Mesh
+        {
+            name = "MissionZoneMarker_Runtime_Mesh"
+        };
+        _missionZoneMarkerMesh.vertices = new[]
+        {
+            new Vector3(-0.5f, 0f, -0.5f),
+            new Vector3(0.5f, 0f, -0.5f),
+            new Vector3(-0.5f, 0f, 0.5f),
+            new Vector3(0.5f, 0f, 0.5f)
+        };
+        _missionZoneMarkerMesh.triangles = new[]
+        {
+            0, 2, 1,
+            1, 2, 3,
+            0, 1, 2,
+            1, 3, 2
+        };
+        _missionZoneMarkerMesh.uv = new[]
+        {
+            new Vector2(0f, 0f),
+            new Vector2(1f, 0f),
+            new Vector2(0f, 1f),
+            new Vector2(1f, 1f)
+        };
+        _missionZoneMarkerMesh.RecalculateNormals();
+        _missionZoneMarkerMesh.RecalculateBounds();
+        return _missionZoneMarkerMesh;
+    }
+
+    private void SubscribeGameStateForZoneMarkerIfNeeded()
+    {
+        if (_isMissionZoneMarkerGameStateSubscribed && _missionZoneMarkerGameStateManager != null)
+            return;
+
+        if (_isMissionZoneMarkerGameStateSubscribed)
+            UnsubscribeGameStateForZoneMarker();
+
+        if (_missionZoneMarkerGameStateManager == null)
+            _missionZoneMarkerGameStateManager = FindFirstObjectByType<GameStateManager>();
+
+        if (_missionZoneMarkerGameStateManager == null ||
+            _missionZoneMarkerGameStateManager.StateValue == null)
+            return;
+
+        _missionZoneMarkerGameStateManager.StateValue.OnValueChanged += HandleGameStateChanged;
+        _isMissionZoneMarkerGameStateSubscribed = true;
+    }
+
+    private void UnsubscribeGameStateForZoneMarker()
+    {
+        if (_isMissionZoneMarkerGameStateSubscribed &&
+            _missionZoneMarkerGameStateManager != null &&
+            _missionZoneMarkerGameStateManager.StateValue != null)
+        {
+            _missionZoneMarkerGameStateManager.StateValue.OnValueChanged -= HandleGameStateChanged;
+        }
+
+        _isMissionZoneMarkerGameStateSubscribed = false;
+        _missionZoneMarkerGameStateManager = null;
+    }
+
+    private void HandleGameStateChanged(int previousValue, int currentValue)
+    {
+        GameStateManager.GameState currentState = (GameStateManager.GameState)currentValue;
+        if (currentState == GameStateManager.GameState.Playing)
+        {
+            RefreshMissionZoneMarker("Playing");
+            return;
+        }
+
+        ClearMissionZoneMarkers(GetMissionZoneMarkerStateReason(currentValue));
+    }
+
+    private bool IsPlayingForMissionZoneMarker()
+    {
+        SubscribeGameStateForZoneMarkerIfNeeded();
+        return _missionZoneMarkerGameStateManager != null &&
+            _missionZoneMarkerGameStateManager.GetState() == GameStateManager.GameState.Playing;
+    }
+
+    private bool CanUseZoneColliderForMarker(Collider zoneCollider)
+    {
+        return zoneCollider != null &&
+            zoneCollider.enabled &&
+            zoneCollider.gameObject.activeInHierarchy;
+    }
+
+    private void EnsureMissionZoneMarkerRoot()
+    {
+        if (_missionZoneMarkerRoot != null)
+            return;
+
+        GameObject rootObject = new GameObject(MissionZoneMarkerRootName);
+        rootObject.layer = gameObject.layer;
+        _missionZoneMarkerRoot = rootObject.transform;
+        _missionZoneMarkerRoot.SetParent(transform, false);
+    }
+
+    private Shader FindMissionZoneMarkerShader()
+    {
+        string[] shaderNames =
+        {
+            "Universal Render Pipeline/Unlit",
+            "Sprites/Default",
+            "Unlit/Color"
+        };
+
+        for (int i = 0; i < shaderNames.Length; i++)
+        {
+            Shader shader = Shader.Find(shaderNames[i]);
+            if (shader != null)
+                return shader;
+        }
+
+        return null;
+    }
+
+    private float GetMissionZoneMarkerY(Bounds bounds, out string yMode)
+    {
+        if (missionZoneMarkerUseGroundProjection)
+        {
+            if (TryProjectMissionZoneMarkerSurface(bounds.center, bounds, out float projectedY))
+            {
+                yMode = "GroundProjection";
+                return projectedY;
+            }
+
+            yMode = "GroundFallback";
+            return bounds.min.y + Mathf.Max(0f, missionZoneMarkerSurfaceOffset);
+        }
+
+        yMode = "BoundsBottom";
+        return bounds.min.y + Mathf.Max(0f, missionZoneMarkerSurfaceOffset);
+    }
+
+    private bool TryProjectMissionZoneMarkerSurface(Vector3 worldPoint, Bounds bounds, out float projectedY)
+    {
+        projectedY = 0f;
+        if (!missionZoneMarkerUseGroundProjection)
+            return false;
+
+        float probeHeight = Mathf.Max(0f, missionZoneMarkerGroundProbeHeight);
+        Vector3 rayOrigin = new Vector3(
+            worldPoint.x,
+            Mathf.Max(worldPoint.y, bounds.center.y) + probeHeight,
+            worldPoint.z);
+        float rayDistance = probeHeight + Mathf.Max(0.01f, missionZoneMarkerGroundProbeDistance);
+
+        if (!Physics.Raycast(
+            rayOrigin,
+            Vector3.down,
+            out RaycastHit hit,
+            rayDistance,
+            Physics.DefaultRaycastLayers,
+            QueryTriggerInteraction.Ignore))
+        {
+            return false;
+        }
+
+        projectedY = hit.point.y + Mathf.Max(0f, missionZoneMarkerSurfaceOffset);
+        return true;
+    }
+
+    private string GetMissionZoneMarkerShapeName()
+    {
+        return missionZoneMarkerShape.ToString();
+    }
+
+    private string GetMissionZoneMarkerOutlineName(int index, MissionZoneMarkerShape shape)
+    {
+        string prefix = shape == MissionZoneMarkerShape.Ring
+            ? "MissionZoneMarkerRing"
+            : "MissionZoneMarkerOutline";
+        return $"{prefix}_{_activeMissionZoneMarkerZoneId}_{index}";
+    }
+
+    private void ConfigureMissionZoneMarkerRing(LineRenderer lineRenderer, Vector3 center, float y, float radius)
+    {
+        if (lineRenderer == null)
+            return;
+
+        lineRenderer.positionCount = MissionZoneMarkerRingSegments;
+        for (int i = 0; i < MissionZoneMarkerRingSegments; i++)
+        {
+            float angle = (Mathf.PI * 2f * i) / MissionZoneMarkerRingSegments;
+            Vector3 point = new Vector3(
+                center.x + Mathf.Cos(angle) * radius,
+                y,
+                center.z + Mathf.Sin(angle) * radius);
+            lineRenderer.SetPosition(i, point);
+        }
+    }
+
+    private void ConfigureMissionZoneMarkerRectangle(LineRenderer lineRenderer, Bounds bounds, float y)
+    {
+        if (lineRenderer == null)
+            return;
+
+        lineRenderer.positionCount = 5;
+        lineRenderer.SetPosition(0, new Vector3(bounds.min.x, y, bounds.min.z));
+        lineRenderer.SetPosition(1, new Vector3(bounds.max.x, y, bounds.min.z));
+        lineRenderer.SetPosition(2, new Vector3(bounds.max.x, y, bounds.max.z));
+        lineRenderer.SetPosition(3, new Vector3(bounds.min.x, y, bounds.max.z));
+        lineRenderer.SetPosition(4, new Vector3(bounds.min.x, y, bounds.min.z));
+    }
+
+    private float CalculateMissionZoneMarkerRingRadius(Bounds bounds)
+    {
+        float radius = Mathf.Max(bounds.size.x, bounds.size.z) * 0.5f;
+        radius *= Mathf.Max(0.01f, missionZoneMarkerRingRadiusScale);
+        radius = Mathf.Max(MissionZoneMarkerMinimumSize, radius);
+
+        if (missionZoneMarkerMaxRingRadius > 0f)
+            radius = Mathf.Min(radius, missionZoneMarkerMaxRingRadius);
+
+        return radius;
+    }
+
+    private Color GetMissionZoneMarkerFillColor()
+    {
+        return new Color(1f, 0.86f, 0.05f, Mathf.Clamp01(missionZoneMarkerFillAlpha));
+    }
+
+    private Color GetMissionZoneMarkerOutlineColor()
+    {
+        return new Color(1f, 0.98f, 0.05f, Mathf.Clamp01(missionZoneMarkerOutlineAlpha));
+    }
+
+    private void ConfigureMissionZoneMarkerMaterial(Material material, Color markerColor)
+    {
+        if (material == null)
+            return;
+
+        if (material.HasProperty("_BaseColor"))
+            material.SetColor("_BaseColor", markerColor);
+
+        if (material.HasProperty("_Color"))
+            material.SetColor("_Color", markerColor);
+
+        material.SetOverrideTag("RenderType", "Transparent");
+        if (material.HasProperty("_Surface"))
+            material.SetFloat("_Surface", 1f);
+
+        if (material.HasProperty("_Blend"))
+            material.SetFloat("_Blend", 0f);
+
+        if (material.HasProperty("_AlphaClip"))
+            material.SetFloat("_AlphaClip", 0f);
+
+        if (material.HasProperty("_SrcBlend"))
+            material.SetInt("_SrcBlend", (int)BlendMode.SrcAlpha);
+
+        if (material.HasProperty("_DstBlend"))
+            material.SetInt("_DstBlend", (int)BlendMode.OneMinusSrcAlpha);
+
+        if (material.HasProperty("_ZWrite"))
+            material.SetInt("_ZWrite", 0);
+
+        if (material.HasProperty("_Cull"))
+            material.SetInt("_Cull", (int)CullMode.Off);
+
+        material.EnableKeyword("_SURFACE_TYPE_TRANSPARENT");
+        material.EnableKeyword("_ALPHABLEND_ON");
+        material.renderQueue = (int)RenderQueue.Transparent;
+    }
+
+    private bool HasActiveMissionZoneMarkers()
+    {
+        return CountActiveMissionZoneMarkers() > 0;
+    }
+
+    private int CountActiveMissionZoneMarkers()
+    {
+        int activeCount = 0;
+        for (int i = _activeMissionZoneMarkers.Count - 1; i >= 0; i--)
+        {
+            if (_activeMissionZoneMarkers[i] == null)
+            {
+                _activeMissionZoneMarkers.RemoveAt(i);
+                continue;
+            }
+
+            activeCount++;
+        }
+
+        return activeCount;
+    }
+
+    private string GetMissionZoneMarkerStateReason(int stateValue)
+    {
+        if (Enum.IsDefined(typeof(GameStateManager.GameState), stateValue))
+            return ((GameStateManager.GameState)stateValue).ToString();
+
+        return $"state-{stateValue}";
+    }
+
+    private string NormalizeMissionZoneMarkerReason(string reason)
+    {
+        return string.IsNullOrWhiteSpace(reason) ? "clear" : reason;
+    }
+
+    private void LogMissionZoneMarkerDetails(
+        int colliderIndex,
+        Vector3 position,
+        Vector3 scale,
+        string yMode,
+        float ringRadius,
+        string outlineShape)
+    {
+        string radiusLog = outlineShape == MissionZoneMarkerShape.Ring.ToString()
+            ? $" radius={ringRadius:0.##}"
+            : string.Empty;
+        LogMissionZoneMarkerDebug(
+            $"[RoundMission] Zone marker shown zone={_activeMissionZoneMarkerZoneId} colliderIndex={colliderIndex} shape={outlineShape} yMode={yMode} pos={position.ToString("F2")} size=({scale.x:0.##},{scale.z:0.##}){radiusLog}");
+    }
+
+    private void LogMissionZoneMarkerDebug(string message)
+    {
+        if (!enableMissionZoneMarkerDebugLogs)
+            return;
+
+        Debug.Log(message, this);
+    }
+
+    private void DestroyMissionZoneMarkerResources()
+    {
+        if (_missionZoneMarkerMaterial != null)
+        {
+            DestroyMissionZoneMarkerUnityObject(_missionZoneMarkerMaterial);
+            _missionZoneMarkerMaterial = null;
+        }
+
+        if (_missionZoneMarkerOutlineMaterial != null)
+        {
+            DestroyMissionZoneMarkerUnityObject(_missionZoneMarkerOutlineMaterial);
+            _missionZoneMarkerOutlineMaterial = null;
+        }
+
+        if (_missionZoneMarkerMesh != null)
+        {
+            DestroyMissionZoneMarkerUnityObject(_missionZoneMarkerMesh);
+            _missionZoneMarkerMesh = null;
+        }
+    }
+
+    private void DestroyMissionZoneMarkerUnityObject(UnityEngine.Object target)
+    {
+        if (target == null)
+            return;
+
+        if (Application.isPlaying)
+            Destroy(target);
+        else
+            DestroyImmediate(target);
+    }
+
     private void Log(string message)
     {
         if (!enableDebugLogs)
@@ -1586,6 +2452,14 @@ public class RoundMissionManager : NetworkBehaviour
     {
         fallbackRewardCoins = Mathf.Max(0, fallbackRewardCoins);
         minimumSharedMissionSplitReward = Mathf.Max(0, minimumSharedMissionSplitReward);
+        missionZoneMarkerGroundProbeHeight = Mathf.Max(0f, missionZoneMarkerGroundProbeHeight);
+        missionZoneMarkerGroundProbeDistance = Mathf.Max(0.01f, missionZoneMarkerGroundProbeDistance);
+        missionZoneMarkerSurfaceOffset = Mathf.Max(0f, missionZoneMarkerSurfaceOffset);
+        missionZoneMarkerFillAlpha = Mathf.Clamp01(missionZoneMarkerFillAlpha);
+        missionZoneMarkerOutlineWidth = Mathf.Max(0.001f, missionZoneMarkerOutlineWidth);
+        missionZoneMarkerOutlineAlpha = Mathf.Clamp01(missionZoneMarkerOutlineAlpha);
+        missionZoneMarkerRingRadiusScale = Mathf.Max(0.01f, missionZoneMarkerRingRadiusScale);
+        missionZoneMarkerMaxRingRadius = Mathf.Max(0f, missionZoneMarkerMaxRingRadius);
         EnsureDefaultMissionTemplates();
 
         if (missionTemplates == null)
