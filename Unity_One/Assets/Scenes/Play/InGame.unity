@@ -1615,6 +1615,9 @@ MonoBehaviour:
     requiredFallCount: 0
     weight: 1
     enabled: 1
+  useSharedRoundMission: 1
+  splitSharedMissionRewardAmongWinners: 1
+  minimumSharedMissionSplitReward: 0
   fallbackRewardCoins: 8
   guessMissionRequiresDifferentTarget: 1
   enableDebugLogs: 1
