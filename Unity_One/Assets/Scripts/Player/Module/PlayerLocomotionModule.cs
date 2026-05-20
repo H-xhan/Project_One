@@ -294,6 +294,9 @@ public class PlayerLocomotionModule : NetworkBehaviour
         if (!CanSpinDashByStatusServer())
             return false;
 
+        if (!ServerHasRequiredHeldItemForSpinDash())
+            return false;
+
         if (!IsFinitePositive(spinDashDuration) || !IsFinitePositive(spinDashSpeed))
             return false;
 
@@ -1315,6 +1318,24 @@ public class PlayerLocomotionModule : NetworkBehaviour
             return false;
 
         return statusModule.CanMove;
+    }
+
+    private bool ServerHasRequiredHeldItemForSpinDash()
+    {
+        PlayerInteractModule interactModule = ResolveInteractModule();
+        if (interactModule == null)
+        {
+            LogSpinDash("Start rejected: interact module missing");
+            return false;
+        }
+
+        if (!interactModule.HasHeldItem())
+        {
+            LogSpinDash("Start rejected: held item required");
+            return false;
+        }
+
+        return true;
     }
 
     private bool CanContinueSpinDashByStatusServer()
