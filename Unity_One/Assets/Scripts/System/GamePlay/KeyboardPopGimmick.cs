@@ -3,7 +3,7 @@ using System.Collections.Generic;
 using Unity.Netcode;
 using UnityEngine;
 
-public class KeyboardPopGimmick : MonoBehaviour
+public class KeyboardPopGimmick : NetworkBehaviour
 {
     private const string LogPrefix = "[KEYBOARD_POP]";
 
@@ -144,8 +144,10 @@ public class KeyboardPopGimmick : MonoBehaviour
     private Vector3[] _rotationAxes;
     private float[] _arcHeights;
     private float[] _hideAtTimes;
+    private float[] _hideAfterLandingDelays;
     private readonly HashSet<PlayerStatusModule> _hitPlayers = new HashSet<PlayerStatusModule>();
     private Coroutine _runningRoutine;
+    private Coroutine _clientVisualRoutine;
 
     private void Awake()
     {
@@ -160,6 +162,12 @@ public class KeyboardPopGimmick : MonoBehaviour
     private void OnDisable()
     {
         StopRunningAndRestore();
+    }
+
+    public override void OnDestroy()
+    {
+        StopRunningAndRestore();
+        base.OnDestroy();
     }
 
     private void Update()
@@ -197,6 +205,7 @@ public class KeyboardPopGimmick : MonoBehaviour
         }
 
         PrepareBurstData();
+        SendPlayKeyboardPopVisual();
         _runningRoutine = StartCoroutine(RunRoutine());
     }
 
@@ -210,7 +219,9 @@ public class KeyboardPopGimmick : MonoBehaviour
         yield return LaunchKeysRoutine();
         Log($"{LogPrefix} Launched keys: count={CountValidPreparedKeys()}");
 
-        SetKeysToLandingTargets(rotateWhileFlying ? flyingRotationSpeed * Mathf.Max(0f, launchDuration) : 0f);
+        SetKeysToLandingTargets(
+            rotateWhileFlying ? flyingRotationSpeed * Mathf.Max(0f, launchDuration) : 0f,
+            rotateWhileFlying);
         ScheduleHideAfterLanding();
 
         Log($"{LogPrefix} Impact.");
@@ -225,12 +236,18 @@ public class KeyboardPopGimmick : MonoBehaviour
         yield return WaitForSecondsSafe(cooldownDuration);
 
         _runningRoutine = null;
+        SendStopKeyboardPopVisual(!stayScatteredAfterImpact);
         Log($"{LogPrefix} Ended.");
     }
 
     private IEnumerator PlayTelegraphRoutine()
     {
-        float duration = Mathf.Max(0f, telegraphDuration);
+        return PlayTelegraphVisualRoutine(telegraphDuration);
+    }
+
+    private IEnumerator PlayTelegraphVisualRoutine(float visualTelegraphDuration)
+    {
+        float duration = Mathf.Max(0f, visualTelegraphDuration);
         if (duration <= 0f)
         {
             RestoreOriginalTransforms();
@@ -251,10 +268,20 @@ public class KeyboardPopGimmick : MonoBehaviour
 
     private IEnumerator LaunchKeysRoutine()
     {
-        float duration = Mathf.Max(0f, launchDuration);
+        return LaunchKeysVisualRoutine(launchDuration, rotateWhileFlying, flyingRotationSpeed);
+    }
+
+    private IEnumerator LaunchKeysVisualRoutine(
+        float visualLaunchDuration,
+        bool visualRotateWhileFlying,
+        float visualFlyingRotationSpeed)
+    {
+        float duration = Mathf.Max(0f, visualLaunchDuration);
         if (duration <= 0f)
         {
-            SetKeysToLandingTargets(rotateWhileFlying ? flyingRotationSpeed * duration : 0f);
+            SetKeysToLandingTargets(
+                visualRotateWhileFlying ? visualFlyingRotationSpeed * duration : 0f,
+                visualRotateWhileFlying);
             yield break;
         }
 
@@ -264,12 +291,14 @@ public class KeyboardPopGimmick : MonoBehaviour
             float t = Mathf.Clamp01(elapsed / duration);
             float smoothT = Mathf.SmoothStep(0f, 1f, t);
             float arcMultiplier = Mathf.Sin(t * Mathf.PI);
-            SetKeysToBurstPose(smoothT, arcMultiplier, elapsed);
+            SetKeysToBurstPose(smoothT, arcMultiplier, elapsed, visualRotateWhileFlying, visualFlyingRotationSpeed);
             elapsed += Time.deltaTime;
             yield return null;
         }
 
-        SetKeysToLandingTargets(rotateWhileFlying ? flyingRotationSpeed * duration : 0f);
+        SetKeysToLandingTargets(
+            visualRotateWhileFlying ? visualFlyingRotationSpeed * duration : 0f,
+            visualRotateWhileFlying);
     }
 
     private void ApplyServerKnockback()
@@ -353,6 +382,7 @@ public class KeyboardPopGimmick : MonoBehaviour
         _rotationAxes = new Vector3[count];
         _arcHeights = new float[count];
         _hideAtTimes = new float[count];
+        _hideAfterLandingDelays = BuildHideAfterLandingDelays(count);
         ClearHideTimers();
 
         for (int i = 0; i < count; i++)
@@ -697,6 +727,16 @@ public class KeyboardPopGimmick : MonoBehaviour
 
     private void SetKeysToBurstPose(float t, float arcMultiplier, float elapsed)
     {
+        SetKeysToBurstPose(t, arcMultiplier, elapsed, rotateWhileFlying, flyingRotationSpeed);
+    }
+
+    private void SetKeysToBurstPose(
+        float t,
+        float arcMultiplier,
+        float elapsed,
+        bool visualRotateWhileFlying,
+        float visualFlyingRotationSpeed)
+    {
         int count = GetPreparedKeyCount();
         for (int i = 0; i < count; i++)
         {
@@ -708,12 +748,17 @@ public class KeyboardPopGimmick : MonoBehaviour
             Vector3 baseWorldPosition = Vector3.LerpUnclamped(startWorldPosition, _landingWorldPositions[i], t);
             key.position = baseWorldPosition + Vector3.up * (arcMultiplier * GetArcHeight(i));
 
-            if (rotateWhileFlying)
-                key.localRotation = _originalLocalRotations[i] * Quaternion.AngleAxis(flyingRotationSpeed * elapsed, _rotationAxes[i]);
+            if (visualRotateWhileFlying)
+                key.localRotation = _originalLocalRotations[i] * Quaternion.AngleAxis(visualFlyingRotationSpeed * elapsed, _rotationAxes[i]);
         }
     }
 
     private void SetKeysToLandingTargets(float rotationAngle)
+    {
+        SetKeysToLandingTargets(rotationAngle, rotateWhileFlying);
+    }
+
+    private void SetKeysToLandingTargets(float rotationAngle, bool visualRotateWhileFlying)
     {
         int count = GetPreparedKeyCount();
         for (int i = 0; i < count; i++)
@@ -723,7 +768,7 @@ public class KeyboardPopGimmick : MonoBehaviour
                 continue;
 
             key.position = _landingWorldPositions[i];
-            key.localRotation = rotateWhileFlying
+            key.localRotation = visualRotateWhileFlying
                 ? _originalLocalRotations[i] * Quaternion.AngleAxis(rotationAngle, _rotationAxes[i])
                 : _originalLocalRotations[i];
         }
@@ -731,15 +776,18 @@ public class KeyboardPopGimmick : MonoBehaviour
 
     private void ScheduleHideAfterLanding()
     {
+        ScheduleHideAfterLanding(_hideAfterLandingDelays, hideKeysAfterLanding);
+    }
+
+    private void ScheduleHideAfterLanding(float[] hideAfterLandingDelays, bool shouldHideKeysAfterLanding)
+    {
         if (_hideAtTimes == null || _hideAtTimes.Length != GetStoredKeyCount())
             _hideAtTimes = new float[GetStoredKeyCount()];
 
         ClearHideTimers();
-        if (!hideKeysAfterLanding)
+        if (!shouldHideKeysAfterLanding)
             return;
 
-        float minDelay = Mathf.Max(0f, hideAfterLandingMinDelay);
-        float maxDelay = Mathf.Max(minDelay, hideAfterLandingMaxDelay);
         int count = Mathf.Min(GetPreparedKeyCount(), _hideAtTimes.Length);
 
         for (int i = 0; i < count; i++)
@@ -748,13 +796,19 @@ public class KeyboardPopGimmick : MonoBehaviour
             if (key == null)
                 continue;
 
-            _hideAtTimes[i] = Time.time + Random.Range(minDelay, maxDelay);
+            float hideDelay = hideAfterLandingDelays != null && i < hideAfterLandingDelays.Length
+                ? hideAfterLandingDelays[i]
+                : -1f;
+            if (!IsFiniteFloat(hideDelay) || hideDelay < 0f)
+                continue;
+
+            _hideAtTimes[i] = Time.time + hideDelay;
         }
     }
 
     private void ProcessHideTimers()
     {
-        if (!hideKeysAfterLanding || _hideAtTimes == null)
+        if (_hideAtTimes == null)
             return;
 
         float now = Time.time;
@@ -792,8 +846,213 @@ public class KeyboardPopGimmick : MonoBehaviour
             _runningRoutine = null;
         }
 
+        SendCleanupKeyboardPopVisual();
+        StopClientKeyboardPopVisualRoutine();
         RestoreOriginalTransforms();
         _hitPlayers.Clear();
+    }
+
+    private float[] BuildHideAfterLandingDelays(int count)
+    {
+        int safeCount = Mathf.Max(0, count);
+        float[] hideDelays = new float[safeCount];
+        for (int i = 0; i < safeCount; i++)
+            hideDelays[i] = -1f;
+
+        if (!hideKeysAfterLanding)
+            return hideDelays;
+
+        float minDelay = Mathf.Max(0f, hideAfterLandingMinDelay);
+        float maxDelay = Mathf.Max(minDelay, hideAfterLandingMaxDelay);
+        for (int i = 0; i < safeCount; i++)
+        {
+            if (GetKeyAt(i) == null)
+                continue;
+
+            hideDelays[i] = Random.Range(minDelay, maxDelay);
+        }
+
+        return hideDelays;
+    }
+
+    private void SendPlayKeyboardPopVisual()
+    {
+        if (!CanSendKeyboardPopVisualMessage())
+            return;
+
+        PlayKeyboardPopVisualClientRpc(
+            _landingWorldPositions ?? System.Array.Empty<Vector3>(),
+            _scatterDirections ?? System.Array.Empty<Vector3>(),
+            _rotationAxes ?? System.Array.Empty<Vector3>(),
+            _arcHeights ?? System.Array.Empty<float>(),
+            _hideAfterLandingDelays ?? System.Array.Empty<float>(),
+            telegraphDuration,
+            launchDuration,
+            activeDuration,
+            cooldownDuration,
+            rotateWhileFlying,
+            flyingRotationSpeed,
+            stayScatteredAfterImpact,
+            hideKeysAfterLanding,
+            resetKeysBeforeStart);
+        Log($"{LogPrefix} Visual RPC sent keys={CountValidPreparedKeys()}");
+    }
+
+    private void SendStopKeyboardPopVisual(bool restoreOriginal)
+    {
+        if (CanSendKeyboardPopVisualMessage())
+            StopKeyboardPopVisualClientRpc(restoreOriginal);
+    }
+
+    private void SendCleanupKeyboardPopVisual()
+    {
+        if (CanSendKeyboardPopVisualMessage())
+            CleanupKeyboardPopVisualClientRpc();
+    }
+
+    private bool CanSendKeyboardPopVisualMessage()
+    {
+        return IsServer && IsSpawned;
+    }
+
+    private bool ShouldSkipKeyboardPopVisualOnThisPeer()
+    {
+        return IsServer;
+    }
+
+    [ClientRpc]
+    private void PlayKeyboardPopVisualClientRpc(
+        Vector3[] landingWorldPositions,
+        Vector3[] scatterDirections,
+        Vector3[] rotationAxes,
+        float[] arcHeights,
+        float[] hideAfterLandingDelays,
+        float visualTelegraphDuration,
+        float visualLaunchDuration,
+        float visualActiveDuration,
+        float visualCooldownDuration,
+        bool visualRotateWhileFlying,
+        float visualFlyingRotationSpeed,
+        bool visualStayScatteredAfterImpact,
+        bool visualHideKeysAfterLanding,
+        bool visualResetKeysBeforeStart)
+    {
+        if (ShouldSkipKeyboardPopVisualOnThisPeer())
+            return;
+
+        EnsureOriginalTransformsCaptured();
+        if (!TryApplyKeyboardPopVisualPayload(
+            landingWorldPositions,
+            scatterDirections,
+            rotationAxes,
+            arcHeights,
+            hideAfterLandingDelays))
+        {
+            Log($"{LogPrefix} Visual RPC ignored. reason=invalid-payload");
+            return;
+        }
+
+        if (_clientVisualRoutine != null)
+            StopCoroutine(_clientVisualRoutine);
+
+        if (visualResetKeysBeforeStart)
+            RestoreOriginalTransforms();
+
+        _clientVisualRoutine = StartCoroutine(RunKeyboardPopVisualOnlyRoutine(
+            visualTelegraphDuration,
+            visualLaunchDuration,
+            visualActiveDuration,
+            visualCooldownDuration,
+            visualRotateWhileFlying,
+            visualFlyingRotationSpeed,
+            visualStayScatteredAfterImpact,
+            visualHideKeysAfterLanding));
+        Log($"{LogPrefix} Visual RPC received keys={CountValidPreparedKeys()}");
+    }
+
+    [ClientRpc]
+    private void StopKeyboardPopVisualClientRpc(bool restoreOriginal)
+    {
+        if (ShouldSkipKeyboardPopVisualOnThisPeer())
+            return;
+
+        StopClientKeyboardPopVisualRoutine();
+        if (restoreOriginal)
+            RestoreOriginalTransforms();
+
+        Log($"{LogPrefix} Visual RPC stopped restore={restoreOriginal}");
+    }
+
+    [ClientRpc]
+    private void CleanupKeyboardPopVisualClientRpc()
+    {
+        if (ShouldSkipKeyboardPopVisualOnThisPeer())
+            return;
+
+        StopClientKeyboardPopVisualRoutine();
+        RestoreOriginalTransforms();
+        Log($"{LogPrefix} Visual cleanup client");
+    }
+
+    private bool TryApplyKeyboardPopVisualPayload(
+        Vector3[] landingWorldPositions,
+        Vector3[] scatterDirections,
+        Vector3[] rotationAxes,
+        float[] arcHeights,
+        float[] hideAfterLandingDelays)
+    {
+        if (landingWorldPositions == null ||
+            scatterDirections == null ||
+            rotationAxes == null ||
+            arcHeights == null)
+        {
+            return false;
+        }
+
+        _landingWorldPositions = landingWorldPositions;
+        _scatterDirections = scatterDirections;
+        _rotationAxes = rotationAxes;
+        _arcHeights = arcHeights;
+        _hideAfterLandingDelays = hideAfterLandingDelays ?? System.Array.Empty<float>();
+        ClearHideTimers();
+        return GetPreparedKeyCount() > 0;
+    }
+
+    private IEnumerator RunKeyboardPopVisualOnlyRoutine(
+        float visualTelegraphDuration,
+        float visualLaunchDuration,
+        float visualActiveDuration,
+        float visualCooldownDuration,
+        bool visualRotateWhileFlying,
+        float visualFlyingRotationSpeed,
+        bool visualStayScatteredAfterImpact,
+        bool visualHideKeysAfterLanding)
+    {
+        yield return PlayTelegraphVisualRoutine(visualTelegraphDuration);
+        yield return LaunchKeysVisualRoutine(visualLaunchDuration, visualRotateWhileFlying, visualFlyingRotationSpeed);
+
+        float landingRotationAngle = visualRotateWhileFlying
+            ? visualFlyingRotationSpeed * Mathf.Max(0f, visualLaunchDuration)
+            : 0f;
+        SetKeysToLandingTargets(landingRotationAngle, visualRotateWhileFlying);
+        ScheduleHideAfterLanding(_hideAfterLandingDelays, visualHideKeysAfterLanding);
+
+        yield return WaitForSecondsSafe(visualActiveDuration);
+
+        if (!visualStayScatteredAfterImpact)
+            RestoreOriginalTransforms();
+
+        yield return WaitForSecondsSafe(visualCooldownDuration);
+        _clientVisualRoutine = null;
+    }
+
+    private void StopClientKeyboardPopVisualRoutine()
+    {
+        if (_clientVisualRoutine == null)
+            return;
+
+        StopCoroutine(_clientVisualRoutine);
+        _clientVisualRoutine = null;
     }
 
     private bool HasValidKey()
