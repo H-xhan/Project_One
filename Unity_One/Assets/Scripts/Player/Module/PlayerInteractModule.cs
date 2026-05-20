@@ -115,6 +115,37 @@ public class PlayerInteractModule : NetworkBehaviour
     [Tooltip("캐릭터 grab 상태 로그를 출력할지 여부입니다.")]
     [SerializeField] private bool characterGrabDebugLogs = false;
 
+    [Header("Character Carry Follow")]
+    [Tooltip("Lift ready 이후 잡힌 캐릭터를 grabber carry anchor 위치로 따라오게 할지 여부입니다.")]
+    [SerializeField] private bool enableCharacterCarryFollow = true;
+
+    [Tooltip("잡힌 캐릭터를 grabber 앞쪽으로 얼마나 떨어뜨려 들고 있을지입니다.")]
+    [SerializeField] private float characterCarryForwardOffset = 0.75f;
+
+    [Tooltip("잡힌 캐릭터를 grabber 위쪽으로 얼마나 올릴지입니다.")]
+    [SerializeField] private float characterCarryUpOffset = 1.05f;
+
+    [Tooltip("잡힌 캐릭터 carry 위치의 좌우 오프셋입니다.")]
+    [SerializeField] private float characterCarryRightOffset = 0f;
+
+    [Tooltip("잡힌 캐릭터가 carry 위치를 따라가는 보간 속도입니다. 0 이하이면 즉시 이동합니다.")]
+    [SerializeField] private float characterCarryFollowLerp = 18f;
+
+    [Tooltip("grabber와 grabbed target 사이 거리가 너무 멀어지면 release하는 거리입니다.")]
+    [SerializeField] private float characterCarryMaxDistance = 4f;
+
+    [Tooltip("carry 중 target CharacterController를 잠시 끌지 여부입니다.")]
+    [SerializeField] private bool characterCarryDisableTargetController = true;
+
+    [Tooltip("carry 중 target Rigidbody를 kinematic으로 전환할지 여부입니다.")]
+    [SerializeField] private bool characterCarrySetTargetRigidbodyKinematic = true;
+
+    [Tooltip("carry 중 target이 grabber의 forward 방향을 바라보게 할지 여부입니다.")]
+    [SerializeField] private bool characterCarryFaceGrabberForward = true;
+
+    [Tooltip("release 시 target 위치가 바닥에 너무 박히지 않도록 보정할 Y 오프셋입니다.")]
+    [SerializeField] private float characterCarryGroundReleaseYOffset = 0.05f;
+
     [Header("Debug")]
     [Tooltip("상호작용/장착 처리 디버그 로그를 출력할지 여부입니다.")]
     [SerializeField] private bool enableDebugLogs = false;
@@ -155,6 +186,13 @@ public class PlayerInteractModule : NetworkBehaviour
     private int _escapeTapCount;
     private float _lastEscapeTapAt;
     private float _regrabImmuneUntil;
+    private bool _isCarryingCharacter;
+    private CharacterController _carriedCharacterController;
+    private Rigidbody _carriedCharacterRigidbody;
+    private bool _carriedCharacterControllerWasEnabled;
+    private bool _carriedCharacterRigidbodyWasKinematic;
+    private bool _carriedCharacterRigidbodyUseGravity;
+    private Transform _carriedCharacterRoot;
 
     private int _cachedWeaponAnimId;
     private Vector3 _cachedLocalPos;
@@ -629,7 +667,10 @@ public class PlayerInteractModule : NetworkBehaviour
         CharacterGrabLog($"[PlayerInteract] Character grab started target={GetCharacterGrabDebugName(targetStatus, targetInteract)}");
 
         if (liftReadyImmediately)
+        {
             CharacterGrabLog($"[PlayerInteract] Character grab lift ready target={GetCharacterGrabDebugName(targetStatus, targetInteract)}");
+            ServerBeginCharacterCarryFollow("LiftReady");
+        }
     }
 
     public void ServerReleaseCharacterGrab(string reason)
@@ -783,7 +824,11 @@ public class PlayerInteractModule : NetworkBehaviour
             {
                 SetCharacterLiftReadyForPair(true);
                 CharacterGrabLog($"[PlayerInteract] Character grab lift ready target={GetCharacterGrabDebugName(_grabbedCharacterStatus, _grabbedCharacterInteract)}");
+                ServerBeginCharacterCarryFollow("LiftReady");
             }
+
+            if (_isCharacterLiftReady)
+                ServerUpdateCharacterCarryFollow();
         }
 
         if (IsGrabbedByCharacter)
@@ -932,6 +977,7 @@ public class PlayerInteractModule : NetworkBehaviour
 
     private void SafeClearCharacterGrabState(string reason, bool applyEscapeRegrabImmunity)
     {
+        ServerEndCharacterCarryFollow(reason);
         ClearCharacterGrabMoveSpeedMultipliers(this);
 
         _grabbedCharacter = default;
@@ -957,6 +1003,217 @@ public class PlayerInteractModule : NetworkBehaviour
         PlayerInteractModule grabbedInteract = ResolveGrabbedCharacterInteract();
         if (grabbedInteract != null && grabbedInteract != this)
             grabbedInteract._isCharacterLiftReady = isReady;
+    }
+
+    private void ServerBeginCharacterCarryFollow(string reason)
+    {
+        if (!IsServer)
+            return;
+
+        if (_isCarryingCharacter || !enableCharacterCarryFollow)
+            return;
+
+        if (!IsGrabbingCharacter)
+            return;
+
+        if (!ResolveGrabbedCharacterRefs() || _grabbedCharacterStatus == null)
+        {
+            ServerReleaseCharacterGrab("invalid-target");
+            return;
+        }
+
+        if (_grabbedCharacterStatus.IsEliminated)
+        {
+            ServerReleaseCharacterGrab("target-eliminated");
+            return;
+        }
+
+        if (!TryResolveCharacterCarryTarget(out Transform targetRoot, out CharacterController targetController, out Rigidbody targetRigidbody))
+        {
+            ServerReleaseCharacterGrab("invalid-target");
+            return;
+        }
+
+        _carriedCharacterRoot = targetRoot;
+        _carriedCharacterController = targetController;
+        _carriedCharacterRigidbody = targetRigidbody;
+        _carriedCharacterControllerWasEnabled = targetController != null && targetController.enabled;
+        _carriedCharacterRigidbodyWasKinematic = targetRigidbody != null && targetRigidbody.isKinematic;
+        _carriedCharacterRigidbodyUseGravity = targetRigidbody != null && targetRigidbody.useGravity;
+        _isCarryingCharacter = true;
+
+        if (characterCarryDisableTargetController && targetController != null && targetController.enabled)
+            targetController.enabled = false;
+
+        if (characterCarrySetTargetRigidbodyKinematic && targetRigidbody != null)
+        {
+            targetRigidbody.isKinematic = true;
+            targetRigidbody.useGravity = false;
+        }
+
+        ServerApplyCharacterCarryPose(true);
+        CharacterGrabLog($"[PlayerInteract] Character carry started target={GetCharacterGrabDebugName(_grabbedCharacterStatus, _grabbedCharacterInteract)} reason={reason ?? "<null>"}");
+    }
+
+    private void ServerUpdateCharacterCarryFollow()
+    {
+        if (!IsServer || !enableCharacterCarryFollow)
+            return;
+
+        if (!_isCarryingCharacter)
+        {
+            ServerBeginCharacterCarryFollow("LiftReady");
+            return;
+        }
+
+        if (!ResolveGrabbedCharacterRefs() || _grabbedCharacterStatus == null || _grabbedCharacterStatus.IsEliminated)
+        {
+            ServerReleaseCharacterGrab(_grabbedCharacterStatus != null && _grabbedCharacterStatus.IsEliminated ? "target-eliminated" : "invalid-target");
+            return;
+        }
+
+        if (_carriedCharacterRoot == null)
+        {
+            ServerReleaseCharacterGrab("invalid-target");
+            return;
+        }
+
+        float maxDistance = Mathf.Max(0f, characterCarryMaxDistance);
+        if (maxDistance > 0f)
+        {
+            float distanceSqr = (_carriedCharacterRoot.position - transform.position).sqrMagnitude;
+            if (distanceSqr > maxDistance * maxDistance)
+            {
+                ServerReleaseCharacterGrab("carry-distance");
+                return;
+            }
+        }
+
+        ServerApplyCharacterCarryPose(false);
+    }
+
+    private void ServerEndCharacterCarryFollow(string reason)
+    {
+        if (!_isCarryingCharacter)
+        {
+            ClearCharacterCarryRuntimeCache();
+            return;
+        }
+
+        Transform targetRoot = _carriedCharacterRoot;
+        CharacterController targetController = _carriedCharacterController;
+        Rigidbody targetRigidbody = _carriedCharacterRigidbody;
+
+        if (targetRoot != null)
+        {
+            float releaseYOffset = Mathf.Max(0f, characterCarryGroundReleaseYOffset);
+            if (releaseYOffset > 0f)
+                targetRoot.position += Vector3.up * releaseYOffset;
+        }
+
+        if (targetRigidbody != null && characterCarrySetTargetRigidbodyKinematic)
+        {
+            targetRigidbody.useGravity = _carriedCharacterRigidbodyUseGravity;
+            targetRigidbody.isKinematic = _carriedCharacterRigidbodyWasKinematic;
+        }
+
+        if (targetController != null && characterCarryDisableTargetController)
+            targetController.enabled = _carriedCharacterControllerWasEnabled;
+
+        CharacterGrabLog($"[PlayerInteract] Character carry released reason={reason ?? "<null>"}");
+        CharacterGrabLog("[PlayerInteract] Character carry restored controller/rigidbody");
+        ClearCharacterCarryRuntimeCache();
+    }
+
+    private bool TryResolveCharacterCarryTarget(out Transform targetRoot, out CharacterController targetController, out Rigidbody targetRigidbody)
+    {
+        targetRoot = null;
+        targetController = null;
+        targetRigidbody = null;
+
+        if (!TryGetNetworkObjectSafe(_grabbedCharacter, out NetworkObject targetNetObj) || targetNetObj == null || !targetNetObj.IsSpawned)
+            return false;
+
+        targetRoot = targetNetObj.transform;
+
+        if (_grabbedCharacterStatus != null)
+        {
+            targetController = _grabbedCharacterStatus.GetComponentInParent<CharacterController>();
+            targetRigidbody = _grabbedCharacterStatus.GetComponentInParent<Rigidbody>();
+        }
+
+        if (targetController == null)
+            targetController = targetNetObj.GetComponentInChildren<CharacterController>(true);
+
+        if (targetRigidbody == null)
+            targetRigidbody = targetNetObj.GetComponentInChildren<Rigidbody>(true);
+
+        return targetRoot != null;
+    }
+
+    private void ServerApplyCharacterCarryPose(bool immediate)
+    {
+        if (_carriedCharacterRoot == null)
+            return;
+
+        Vector3 targetPosition = GetCharacterCarryAnchorPosition();
+        Quaternion targetRotation = GetCharacterCarryAnchorRotation();
+        float followLerp = Mathf.Max(0f, characterCarryFollowLerp);
+
+        if (!immediate && followLerp > 0f)
+        {
+            float t = Mathf.Clamp01(followLerp * Time.deltaTime);
+            targetPosition = Vector3.Lerp(_carriedCharacterRoot.position, targetPosition, t);
+            targetRotation = Quaternion.Slerp(_carriedCharacterRoot.rotation, targetRotation, t);
+        }
+
+        _carriedCharacterRoot.SetPositionAndRotation(targetPosition, targetRotation);
+    }
+
+    private Vector3 GetCharacterCarryAnchorPosition()
+    {
+        Vector3 forward = GetSafeCharacterCarryForward();
+        Vector3 right = Vector3.Cross(Vector3.up, forward);
+        if (right.sqrMagnitude < 0.0001f)
+            right = transform.right;
+
+        return transform.position
+            + forward.normalized * characterCarryForwardOffset
+            + right.normalized * characterCarryRightOffset
+            + Vector3.up * characterCarryUpOffset;
+    }
+
+    private Quaternion GetCharacterCarryAnchorRotation()
+    {
+        if (!characterCarryFaceGrabberForward && _carriedCharacterRoot != null)
+            return _carriedCharacterRoot.rotation;
+
+        Vector3 forward = GetSafeCharacterCarryForward();
+        return Quaternion.LookRotation(forward, Vector3.up);
+    }
+
+    private Vector3 GetSafeCharacterCarryForward()
+    {
+        Vector3 forward = transform.forward;
+        if (forward.sqrMagnitude >= 0.0001f)
+            return forward.normalized;
+
+        forward = transform.rotation * Vector3.forward;
+        if (forward.sqrMagnitude >= 0.0001f)
+            return forward.normalized;
+
+        return Vector3.forward;
+    }
+
+    private void ClearCharacterCarryRuntimeCache()
+    {
+        _isCarryingCharacter = false;
+        _carriedCharacterController = null;
+        _carriedCharacterRigidbody = null;
+        _carriedCharacterControllerWasEnabled = false;
+        _carriedCharacterRigidbodyWasKinematic = false;
+        _carriedCharacterRigidbodyUseGravity = false;
+        _carriedCharacterRoot = null;
     }
 
     private PlayerInteractModule ResolveEscapeTargetInteract()
