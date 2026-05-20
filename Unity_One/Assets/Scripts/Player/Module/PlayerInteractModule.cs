@@ -146,6 +146,28 @@ public class PlayerInteractModule : NetworkBehaviour
     [Tooltip("release 시 target 위치가 바닥에 너무 박히지 않도록 보정할 Y 오프셋입니다.")]
     [SerializeField] private float characterCarryGroundReleaseYOffset = 0.05f;
 
+    [Header("Character Throw")]
+    [Tooltip("들고 있는 캐릭터를 던질 수 있게 할지 여부입니다.")]
+    [SerializeField] private bool enableCharacterThrow = true;
+
+    [Tooltip("던질 때 전방으로 적용할 넉백 힘입니다.")]
+    [SerializeField] private float characterThrowForwardImpulse = 14f;
+
+    [Tooltip("던질 때 위쪽으로 적용할 넉백 힘입니다.")]
+    [SerializeField] private float characterThrowUpImpulse = 3f;
+
+    [Tooltip("던지기 직전 target을 grabber 앞쪽으로 놓을 위치 보정입니다.")]
+    [SerializeField] private float characterThrowReleaseForwardOffset = 0.75f;
+
+    [Tooltip("던지기 직전 target을 위쪽으로 살짝 띄울 위치 보정입니다.")]
+    [SerializeField] private float characterThrowReleaseUpOffset = 0.35f;
+
+    [Tooltip("던져진 직후 다시 잡히지 않는 시간입니다.")]
+    [SerializeField] private float characterThrowRegrabImmunitySeconds = 0.75f;
+
+    [Tooltip("던질 방향을 grabber forward 기준으로 사용할지 여부입니다.")]
+    [SerializeField] private bool characterThrowUseCarryAnchorDirection = true;
+
     [Header("Debug")]
     [Tooltip("상호작용/장착 처리 디버그 로그를 출력할지 여부입니다.")]
     [SerializeField] private bool enableDebugLogs = false;
@@ -421,6 +443,7 @@ public class PlayerInteractModule : NetworkBehaviour
     public bool IsGrabbedByCharacter => HasCharacterGrabReference(_grabbedByCharacter, _grabbedByInteract);
     public bool IsCharacterLiftReady => IsGrabbingCharacter && _isCharacterLiftReady;
     public bool IsCharacterGrabBusy => IsGrabbingCharacter || IsGrabbedByCharacter;
+    public bool CanThrowCarriedCharacter => CanThrowCarriedCharacterInternal();
 
     public bool CanPickupItemBecauseOfCharacterGrab()
     {
@@ -787,6 +810,78 @@ public class PlayerInteractModule : NetworkBehaviour
         ServerReleaseCharacterGrab("request-release");
     }
 
+    public void RequestThrowCarriedCharacter()
+    {
+        if (IsServer)
+        {
+            ServerTryThrowCarriedCharacter("Local");
+            return;
+        }
+
+        RequestThrowCarriedCharacterServerRpc();
+    }
+
+    [ServerRpc]
+    private void RequestThrowCarriedCharacterServerRpc(ServerRpcParams rpcParams = default)
+    {
+        if (rpcParams.Receive.SenderClientId != OwnerClientId)
+            return;
+
+        ServerTryThrowCarriedCharacter("Request");
+    }
+
+    public bool ServerTryThrowCarriedCharacter(string reason = "Throw")
+    {
+        if (!IsServer)
+            return false;
+
+        string throwReason = string.IsNullOrWhiteSpace(reason) ? "Throw" : reason;
+        if (!CanThrowCarriedCharacterInternal())
+        {
+            CharacterGrabLog($"[PlayerInteract] Character throw failed reason={throwReason}");
+            if (IsGrabbingCharacter && (!ResolveGrabbedCharacterRefs() || _grabbedCharacterStatus == null))
+                ServerReleaseCharacterGrab("ThrowInvalidTarget");
+
+            return false;
+        }
+
+        PlayerInteractModule targetInteract = ResolveGrabbedCharacterInteract();
+        PlayerStatusModule targetStatus = _grabbedCharacterStatus;
+        Transform targetRoot = _carriedCharacterRoot;
+        if (targetRoot == null || targetStatus == null || targetInteract == null)
+        {
+            CharacterGrabLog($"[PlayerInteract] Character throw failed reason=ThrowInvalidTarget");
+            ServerReleaseCharacterGrab("ThrowInvalidTarget");
+            return false;
+        }
+
+        if (targetStatus.IsEliminated)
+        {
+            CharacterGrabLog($"[PlayerInteract] Character throw failed reason=TargetEliminated");
+            ServerReleaseCharacterGrab("target-eliminated");
+            return false;
+        }
+
+        Vector3 throwDirection = GetCharacterThrowDirection(targetRoot);
+        Vector3 releasePosition = GetCharacterThrowReleasePosition(throwDirection);
+        Quaternion releaseRotation = Quaternion.LookRotation(throwDirection, Vector3.up);
+        Vector3 impulse = throwDirection * Mathf.Max(0f, characterThrowForwardImpulse) + Vector3.up * Mathf.Max(0f, characterThrowUpImpulse);
+        ulong actorClientId = OwnerClientId;
+        string targetName = GetCharacterGrabDebugName(targetStatus, targetInteract);
+
+        CharacterGrabLog($"[PlayerInteract] Character throw started target={targetName} reason={throwReason}");
+
+        targetRoot.SetPositionAndRotation(releasePosition, releaseRotation);
+        SafeClearCharacterGrabState("Throw", false);
+        targetInteract.SafeClearCharacterGrabState("Throw", false);
+        targetInteract._regrabImmuneUntil = Time.time + Mathf.Max(0f, characterThrowRegrabImmunitySeconds);
+
+        bool appliedKnockback = targetStatus.ServerTryApplyCombatKnockback(impulse, actorClientId);
+        CharacterGrabLog($"[PlayerInteract] Character throw impulse={impulse} applied={appliedKnockback}");
+        CharacterGrabLog($"[PlayerInteract] Character throw completed target={targetName}");
+        return appliedKnockback;
+    }
+
     private void ServerTickCharacterGrab()
     {
         if (!IsCharacterGrabBusy)
@@ -1005,6 +1100,24 @@ public class PlayerInteractModule : NetworkBehaviour
             grabbedInteract._isCharacterLiftReady = isReady;
     }
 
+    private bool CanThrowCarriedCharacterInternal()
+    {
+        if (!enableCharacterThrow)
+            return false;
+
+        if (!IsGrabbingCharacter || !IsCharacterLiftReady || !_isCarryingCharacter)
+            return false;
+
+        if (!ResolveGrabbedCharacterRefs() || _grabbedCharacterStatus == null || _grabbedCharacterStatus.IsEliminated)
+            return false;
+
+        PlayerInteractModule grabbedInteract = ResolveGrabbedCharacterInteract();
+        if (grabbedInteract == null)
+            return false;
+
+        return _carriedCharacterRoot != null;
+    }
+
     private void ServerBeginCharacterCarryFollow(string reason)
     {
         if (!IsServer)
@@ -1190,6 +1303,31 @@ public class PlayerInteractModule : NetworkBehaviour
 
         Vector3 forward = GetSafeCharacterCarryForward();
         return Quaternion.LookRotation(forward, Vector3.up);
+    }
+
+    private Vector3 GetCharacterThrowDirection(Transform targetRoot)
+    {
+        Vector3 direction = characterThrowUseCarryAnchorDirection
+            ? GetSafeCharacterCarryForward()
+            : targetRoot != null ? targetRoot.forward : Vector3.zero;
+
+        if (direction.sqrMagnitude >= 0.0001f)
+            return direction.normalized;
+
+        direction = transform.forward;
+        if (direction.sqrMagnitude >= 0.0001f)
+            return direction.normalized;
+
+        direction = transform.rotation * Vector3.forward;
+        return direction.sqrMagnitude >= 0.0001f ? direction.normalized : Vector3.forward;
+    }
+
+    private Vector3 GetCharacterThrowReleasePosition(Vector3 throwDirection)
+    {
+        Vector3 direction = throwDirection.sqrMagnitude >= 0.0001f ? throwDirection.normalized : GetSafeCharacterCarryForward();
+        return transform.position
+            + direction * Mathf.Max(0f, characterThrowReleaseForwardOffset)
+            + Vector3.up * Mathf.Max(0f, characterThrowReleaseUpOffset);
     }
 
     private Vector3 GetSafeCharacterCarryForward()
