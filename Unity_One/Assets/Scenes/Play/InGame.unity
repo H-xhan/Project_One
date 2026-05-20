@@ -1613,7 +1613,7 @@ MonoBehaviour:
     requiredItemId: 0
     requiredCoins: 0
     requiredFallCount: 0
-    weight: 1000
+    weight: 1
     enabled: 1
   useSharedRoundMission: 1
   splitSharedMissionRewardAmongWinners: 1
@@ -12549,6 +12549,10 @@ MonoBehaviour:
   autoReturnToLobby: 1
   teleportPlayersOnEnterLobby: 1
   teleportPlayersOnEnterPlaying: 1
+  autoLockCursorOnPlaying: 1
+  unlockCursorOutsidePlaying: 1
+  reapplyCursorLockOnFocus: 1
+  cursorLockRefreshInterval: 0.25
   enableLastSurvivorWinCheck: 1
   survivorCheckInterval: 0.25
   minimumParticipantsForLastSurvivorWin: 2

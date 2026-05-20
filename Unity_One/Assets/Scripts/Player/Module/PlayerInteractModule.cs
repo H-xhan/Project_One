@@ -11,6 +11,9 @@ public class PlayerInteractModule : NetworkBehaviour
     private const float PickupExpressionHoldSeconds = 0.75f;
     private const string RightWeaponSocketName = "RightWeaponSocket";
     private const string ItemDropAnchorName = "ItemDropAnchor";
+    private const string GrabberMoveMultiplierKey = "CharacterGrabber";
+    private const string GrabbedMoveMultiplierKey = "CharacterGrabbed";
+    private const string CharacterGrabEscapeReason = "escape";
 
     [Header("Raycast")]
     [Tooltip("오너가 사용하는 카메라")]
@@ -75,6 +78,43 @@ public class PlayerInteractModule : NetworkBehaviour
     [Tooltip("드랍 시 손 위치에서 위로 살짝 올려 겹침을 줄이는 거리")]
     [SerializeField] private float dropHandUpOffset = 0.05f;
 
+    [Header("Character Grab")]
+    [Tooltip("빈손 상태에서 다른 캐릭터를 잡을 수 있게 할지 여부입니다.")]
+    [SerializeField] private bool enableCharacterGrab = true;
+
+    [Tooltip("캐릭터 grab 대상 탐색 거리입니다.")]
+    [SerializeField] private float characterGrabDistance = 2.0f;
+
+    [Tooltip("캐릭터 grab 대상 탐색 반경입니다.")]
+    [SerializeField] private float characterGrabRadius = 0.45f;
+
+    [Tooltip("캐릭터 grab 대상 탐색에 사용할 레이어입니다.")]
+    [SerializeField] private LayerMask characterGrabMask = ~0;
+
+    [Tooltip("다른 캐릭터를 잡고 있는 동안 잡는 사람의 이동 속도 배율입니다.")]
+    [SerializeField] private float grabberMoveSpeedMultiplier = 0.65f;
+
+    [Tooltip("잡힌 사람의 이동 속도 배율입니다.")]
+    [SerializeField] private float grabbedMoveSpeedMultiplier = 0.2f;
+
+    [Tooltip("캐릭터를 잡은 뒤 들어 올릴 수 있게 되기까지 걸리는 시간입니다.")]
+    [SerializeField] private float liftChargeDuration = 1.2f;
+
+    [Tooltip("캐릭터를 최대 몇 초 동안 잡고 있을 수 있는지입니다.")]
+    [SerializeField] private float maxCharacterGrabDuration = 5f;
+
+    [Tooltip("잡힌 사람이 탈출하기 위해 필요한 Space 입력 횟수입니다.")]
+    [SerializeField] private int escapeTapRequiredCount = 6;
+
+    [Tooltip("탈출 입력이 너무 빠르게 중복 처리되지 않도록 하는 최소 간격입니다.")]
+    [SerializeField] private float escapeTapMinInterval = 0.1f;
+
+    [Tooltip("탈출 성공 후 다시 잡히지 않는 시간입니다.")]
+    [SerializeField] private float escapeRegrabImmunitySeconds = 0.75f;
+
+    [Tooltip("캐릭터 grab 상태 로그를 출력할지 여부입니다.")]
+    [SerializeField] private bool characterGrabDebugLogs = false;
+
     [Header("Debug")]
     [Tooltip("상호작용/장착 처리 디버그 로그를 출력할지 여부입니다.")]
     [SerializeField] private bool enableDebugLogs = false;
@@ -102,6 +142,19 @@ public class PlayerInteractModule : NetworkBehaviour
     private ItemPickupNetwork _heldPickup;
     private ItemDataSO _heldItemData;
     private WeaponItemDataSO _heldWeaponData;
+
+    private NetworkObjectReference _grabbedCharacter;
+    private NetworkObjectReference _grabbedByCharacter;
+    private PlayerInteractModule _grabbedCharacterInteract;
+    private PlayerInteractModule _grabbedByInteract;
+    private PlayerStatusModule _grabbedCharacterStatus;
+    private PlayerStatusModule _grabbedByStatus;
+    private float _characterGrabStartedAt;
+    private float _characterLiftReadyAt;
+    private bool _isCharacterLiftReady;
+    private int _escapeTapCount;
+    private float _lastEscapeTapAt;
+    private float _regrabImmuneUntil;
 
     private int _cachedWeaponAnimId;
     private Vector3 _cachedLocalPos;
@@ -152,17 +205,20 @@ public class PlayerInteractModule : NetworkBehaviour
         _heldItem.OnValueChanged -= OnHeldItemChanged;
         ClearExternalHeldItemPoseOverrideInternal("NetworkDespawn", false);
         DestroyLocalHeldVisual();
+        CleanupCharacterGrabOnLifecycle("network-despawn");
         base.OnNetworkDespawn();
     }
 
     private void OnDisable()
     {
         ClearExternalHeldItemPoseOverrideInternal("OnDisable", false);
+        CleanupCharacterGrabOnLifecycle("disable");
     }
 
     private void OnDestroy()
     {
         ClearExternalHeldItemPoseOverrideInternal("OnDestroy", false);
+        CleanupCharacterGrabOnLifecycle("destroy");
     }
 
     private void AutoFindRefs()
@@ -220,6 +276,9 @@ public class PlayerInteractModule : NetworkBehaviour
 
     private void Update()
     {
+        if (IsServer)
+            ServerTickCharacterGrab();
+
         if (_pendingAttach && !_attached && ShouldMaintainWorldAttachFallback())
         {
             if (Time.time - _pendingStartTime >= pickupPendingTime || TryApplyHeldWorldPose(false))
@@ -320,6 +379,16 @@ public class PlayerInteractModule : NetworkBehaviour
         return _heldCache != null && _heldCache.IsSpawned ? _heldCache.transform : null;
     }
 
+    public bool IsGrabbingCharacter => HasCharacterGrabReference(_grabbedCharacter, _grabbedCharacterInteract);
+    public bool IsGrabbedByCharacter => HasCharacterGrabReference(_grabbedByCharacter, _grabbedByInteract);
+    public bool IsCharacterLiftReady => IsGrabbingCharacter && _isCharacterLiftReady;
+    public bool IsCharacterGrabBusy => IsGrabbingCharacter || IsGrabbedByCharacter;
+
+    public bool CanPickupItemBecauseOfCharacterGrab()
+    {
+        return !IsGrabbingCharacter;
+    }
+
     public bool TryFindPickupTarget(out NetworkObjectReference target)
     {
         target = default;
@@ -327,6 +396,7 @@ public class PlayerInteractModule : NetworkBehaviour
         if (!_ownerMode) return false;
         if (ownerCamera == null) return false;
         if (HasHeldItem()) return false;
+        if (!CanPickupItemBecauseOfCharacterGrab()) return false;
 
         Ray cameraRay = ownerCamera.ViewportPointToRay(new Vector3(0.5f, 0.5f, 0f));
         if (TryFindPickupTargetFromRay(cameraRay, out target))
@@ -371,6 +441,7 @@ public class PlayerInteractModule : NetworkBehaviour
     public bool ServerTryPickup(NetworkObjectReference target)
     {
         if (!IsServer) return false;
+        if (!CanPickupItemBecauseOfCharacterGrab()) return false;
         if (ResolveHeldCache()) return false;
 
         if (!target.TryGet(out NetworkObject netObj)) return false;
@@ -493,6 +564,716 @@ public class PlayerInteractModule : NetworkBehaviour
             _cc.enabled = true;
 
         Log($"[PlayerInteract] ServerTryDrop -> {netObj.name}, localVisual:{usedLocalVisual}");
+    }
+
+    public bool TryFindCharacterGrabTarget(out PlayerStatusModule targetStatus)
+    {
+        targetStatus = null;
+
+        if (!_ownerMode) return false;
+        if (!enableCharacterGrab) return false;
+        if (ownerCamera == null) return false;
+        if (HasHeldItem()) return false;
+        if (IsCharacterGrabBusy) return false;
+
+        Ray cameraRay = ownerCamera.ViewportPointToRay(new Vector3(0.5f, 0.5f, 0f));
+        if (TryFindCharacterGrabTargetFromRay(cameraRay, out targetStatus))
+            return true;
+
+        Vector3 fallbackOrigin = GetCharacterGrabFallbackOrigin();
+        Vector3 fallbackDirection = cameraRay.origin + cameraRay.direction * Mathf.Max(0f, characterGrabDistance) - fallbackOrigin;
+        if (fallbackDirection.sqrMagnitude < 0.0001f)
+            fallbackDirection = transform.forward;
+
+        return TryFindCharacterGrabTargetFromRay(new Ray(fallbackOrigin, fallbackDirection.normalized), out targetStatus);
+    }
+
+    public void ServerTryStartCharacterGrab(PlayerStatusModule targetStatus)
+    {
+        if (!IsServer) return;
+
+        if (!CanStartCharacterGrab(targetStatus, out PlayerInteractModule targetInteract, out NetworkObject selfNetObj, out NetworkObject targetNetObj))
+            return;
+
+        float now = Time.time;
+        float liftDuration = Mathf.Max(0f, liftChargeDuration);
+        bool liftReadyImmediately = liftDuration <= 0f;
+
+        _grabbedCharacter = targetNetObj;
+        _grabbedCharacterInteract = targetInteract;
+        _grabbedCharacterStatus = targetStatus;
+        _grabbedByCharacter = default;
+        _grabbedByInteract = null;
+        _grabbedByStatus = null;
+        _characterGrabStartedAt = now;
+        _characterLiftReadyAt = now + liftDuration;
+        _isCharacterLiftReady = liftReadyImmediately;
+        _escapeTapCount = 0;
+        _lastEscapeTapAt = 0f;
+
+        targetInteract._grabbedCharacter = default;
+        targetInteract._grabbedCharacterInteract = null;
+        targetInteract._grabbedCharacterStatus = null;
+        targetInteract._grabbedByCharacter = selfNetObj;
+        targetInteract._grabbedByInteract = this;
+        targetInteract._grabbedByStatus = ResolveOwnStatusModule();
+        targetInteract._characterGrabStartedAt = now;
+        targetInteract._characterLiftReadyAt = _characterLiftReadyAt;
+        targetInteract._isCharacterLiftReady = liftReadyImmediately;
+        targetInteract._escapeTapCount = 0;
+        targetInteract._lastEscapeTapAt = 0f;
+
+        ApplyCharacterGrabMoveSpeedMultiplier(this, GrabberMoveMultiplierKey, grabberMoveSpeedMultiplier);
+        ApplyCharacterGrabMoveSpeedMultiplier(targetInteract, GrabbedMoveMultiplierKey, grabbedMoveSpeedMultiplier);
+
+        CharacterGrabLog($"[PlayerInteract] Character grab started target={GetCharacterGrabDebugName(targetStatus, targetInteract)}");
+
+        if (liftReadyImmediately)
+            CharacterGrabLog($"[PlayerInteract] Character grab lift ready target={GetCharacterGrabDebugName(targetStatus, targetInteract)}");
+    }
+
+    public void ServerReleaseCharacterGrab(string reason)
+    {
+        if (!IsServer) return;
+
+        string releaseReason = string.IsNullOrWhiteSpace(reason) ? "release" : reason;
+
+        if (IsGrabbingCharacter)
+        {
+            PlayerInteractModule grabbedInteract = ResolveGrabbedCharacterInteract();
+            string targetName = GetCharacterGrabDebugName(_grabbedCharacterStatus, grabbedInteract);
+            bool escaped = IsEscapeReleaseReason(releaseReason);
+
+            SafeClearCharacterGrabState(releaseReason, false);
+
+            if (grabbedInteract != null && grabbedInteract != this)
+                grabbedInteract.SafeClearCharacterGrabState(releaseReason, escaped);
+
+            CharacterGrabLog($"[PlayerInteract] Character grab released reason={releaseReason} target={targetName}");
+            return;
+        }
+
+        if (IsGrabbedByCharacter)
+        {
+            PlayerInteractModule grabberInteract = ResolveGrabbedByInteract();
+            if (grabberInteract != null && grabberInteract != this)
+            {
+                grabberInteract.ServerReleaseCharacterGrab(releaseReason);
+                return;
+            }
+
+            SafeClearCharacterGrabState(releaseReason, IsEscapeReleaseReason(releaseReason));
+            CharacterGrabLog($"[PlayerInteract] Character grab released reason={releaseReason} target=<self>");
+        }
+    }
+
+    public void ServerRegisterCharacterGrabEscapeTap(ulong senderClientId)
+    {
+        if (!IsServer) return;
+
+        PlayerInteractModule grabbedInteract = ResolveEscapeTargetInteract();
+        if (grabbedInteract == null)
+            return;
+
+        if (!grabbedInteract.TryGetOwnerClientIdForCharacterGrab(out ulong grabbedOwnerClientId))
+            return;
+
+        if (grabbedOwnerClientId != senderClientId)
+            return;
+
+        float now = Time.time;
+        float minInterval = Mathf.Max(0f, grabbedInteract.escapeTapMinInterval);
+        if (grabbedInteract._lastEscapeTapAt > 0f && now - grabbedInteract._lastEscapeTapAt < minInterval)
+            return;
+
+        grabbedInteract._lastEscapeTapAt = now;
+        grabbedInteract._escapeTapCount = Mathf.Max(0, grabbedInteract._escapeTapCount) + 1;
+
+        int requiredCount = Mathf.Max(1, grabbedInteract.escapeTapRequiredCount);
+        grabbedInteract.CharacterGrabLog($"[PlayerInteract] Character grab escape tap count={grabbedInteract._escapeTapCount}/{requiredCount}");
+
+        if (grabbedInteract._escapeTapCount < requiredCount)
+            return;
+
+        PlayerInteractModule grabberInteract = grabbedInteract.ResolveGrabbedByInteract();
+        if (grabberInteract != null && grabberInteract != grabbedInteract)
+            grabberInteract.ServerReleaseCharacterGrab(CharacterGrabEscapeReason);
+        else
+            grabbedInteract.ServerReleaseCharacterGrab(CharacterGrabEscapeReason);
+    }
+
+    public void RequestCharacterGrabEscapeTap()
+    {
+        if (IsServer)
+        {
+            ServerRegisterCharacterGrabEscapeTap(OwnerClientId);
+            return;
+        }
+
+        RequestCharacterGrabEscapeTapServerRpc();
+    }
+
+    public void RequestReleaseCharacterGrab()
+    {
+        if (IsServer)
+        {
+            if (IsGrabbingCharacter)
+                ServerReleaseCharacterGrab("request-release");
+            return;
+        }
+
+        RequestReleaseCharacterGrabServerRpc();
+    }
+
+    [ServerRpc]
+    private void RequestCharacterGrabEscapeTapServerRpc(ServerRpcParams rpcParams = default)
+    {
+        if (rpcParams.Receive.SenderClientId != OwnerClientId)
+            return;
+
+        ServerRegisterCharacterGrabEscapeTap(OwnerClientId);
+    }
+
+    [ServerRpc]
+    private void RequestReleaseCharacterGrabServerRpc(ServerRpcParams rpcParams = default)
+    {
+        if (rpcParams.Receive.SenderClientId != OwnerClientId)
+            return;
+
+        if (!IsGrabbingCharacter)
+            return;
+
+        ServerReleaseCharacterGrab("request-release");
+    }
+
+    private void ServerTickCharacterGrab()
+    {
+        if (!IsCharacterGrabBusy)
+            return;
+
+        PlayerStatusModule ownStatus = ResolveOwnStatusModule();
+        if (ownStatus != null && ownStatus.IsEliminated)
+        {
+            ServerReleaseCharacterGrab("eliminated");
+            return;
+        }
+
+        if (IsGrabbingCharacter)
+        {
+            if (!ResolveGrabbedCharacterRefs() || !IsCharacterGrabLinkValidAsGrabber())
+            {
+                ServerReleaseCharacterGrab("invalid-target");
+                return;
+            }
+
+            if (_grabbedCharacterStatus != null && _grabbedCharacterStatus.IsEliminated)
+            {
+                ServerReleaseCharacterGrab("target-eliminated");
+                return;
+            }
+
+            float maxDuration = Mathf.Max(0f, maxCharacterGrabDuration);
+            if (maxDuration > 0f && Time.time - _characterGrabStartedAt >= maxDuration)
+            {
+                ServerReleaseCharacterGrab("max-duration");
+                return;
+            }
+
+            if (!_isCharacterLiftReady && Time.time >= _characterLiftReadyAt)
+            {
+                SetCharacterLiftReadyForPair(true);
+                CharacterGrabLog($"[PlayerInteract] Character grab lift ready target={GetCharacterGrabDebugName(_grabbedCharacterStatus, _grabbedCharacterInteract)}");
+            }
+        }
+
+        if (IsGrabbedByCharacter)
+        {
+            if (!ResolveGrabbedByRefs() || !IsCharacterGrabLinkValidAsGrabbed())
+            {
+                SafeClearCharacterGrabState("invalid-grabber", false);
+                CharacterGrabLog("[PlayerInteract] Character grab released reason=invalid-grabber target=<self>");
+            }
+        }
+    }
+
+    private bool TryFindCharacterGrabTargetFromRay(Ray ray, out PlayerStatusModule targetStatus)
+    {
+        targetStatus = null;
+
+        float distance = Mathf.Max(0f, characterGrabDistance);
+        if (distance <= 0f)
+            return false;
+
+        float radius = Mathf.Max(0f, characterGrabRadius);
+        int layerMask = GetCharacterGrabLayerMask();
+        RaycastHit[] hits = radius > 0f
+            ? Physics.SphereCastAll(ray, radius, distance, layerMask, QueryTriggerInteraction.Collide)
+            : Physics.RaycastAll(ray, distance, layerMask, QueryTriggerInteraction.Collide);
+
+        float bestDistance = float.MaxValue;
+        for (int i = 0; i < hits.Length; i++)
+        {
+            Collider hitCollider = hits[i].collider;
+            if (hitCollider == null)
+                continue;
+
+            if (!TryResolvePlayerStatusFromCollider(hitCollider, out PlayerStatusModule candidateStatus))
+                continue;
+
+            if (!IsValidCharacterGrabCandidate(candidateStatus))
+                continue;
+
+            float hitDistance = Mathf.Max(0f, hits[i].distance);
+            if (hitDistance >= bestDistance)
+                continue;
+
+            bestDistance = hitDistance;
+            targetStatus = candidateStatus;
+        }
+
+        return targetStatus != null;
+    }
+
+    private bool CanStartCharacterGrab(
+        PlayerStatusModule targetStatus,
+        out PlayerInteractModule targetInteract,
+        out NetworkObject selfNetObj,
+        out NetworkObject targetNetObj)
+    {
+        targetInteract = null;
+        selfNetObj = null;
+        targetNetObj = null;
+
+        if (!enableCharacterGrab)
+            return false;
+
+        if (HasHeldItem())
+            return false;
+
+        if (IsCharacterGrabBusy)
+            return false;
+
+        if (!IsValidCharacterGrabCandidate(targetStatus))
+            return false;
+
+        targetInteract = ResolveInteractModule(targetStatus);
+        if (targetInteract == null || targetInteract == this)
+            return false;
+
+        selfNetObj = ResolveRootNetworkObject(this);
+        targetNetObj = ResolveRootNetworkObject(targetStatus);
+        if (selfNetObj == null || targetNetObj == null)
+            return false;
+
+        if (!selfNetObj.IsSpawned || !targetNetObj.IsSpawned)
+            return false;
+
+        if (selfNetObj == targetNetObj)
+            return false;
+
+        return IsCharacterGrabTargetInServerRange(targetStatus);
+    }
+
+    private bool IsValidCharacterGrabCandidate(PlayerStatusModule candidateStatus)
+    {
+        if (candidateStatus == null)
+            return false;
+
+        if (candidateStatus.IsEliminated)
+            return false;
+
+        if (IsSelfCharacterStatus(candidateStatus))
+            return false;
+
+        PlayerInteractModule candidateInteract = ResolveInteractModule(candidateStatus);
+        if (candidateInteract == null || candidateInteract == this)
+            return false;
+
+        if (candidateInteract.IsCharacterGrabBusy)
+            return false;
+
+        if (candidateInteract.IsCharacterRegrabImmune())
+            return false;
+
+        return true;
+    }
+
+    private bool IsCharacterGrabTargetInServerRange(PlayerStatusModule targetStatus)
+    {
+        float distance = Mathf.Max(0f, characterGrabDistance);
+        if (distance <= 0f)
+            return false;
+
+        float radius = Mathf.Max(0.01f, characterGrabRadius);
+        Vector3 origin = GetCharacterGrabServerOrigin();
+        Vector3 direction = transform.forward;
+        if (direction.sqrMagnitude < 0.0001f)
+            direction = Vector3.forward;
+
+        direction.Normalize();
+
+        Vector3 targetPoint = GetCharacterGrabTargetPoint(targetStatus);
+        Vector3 toTarget = targetPoint - origin;
+        float along = Vector3.Dot(toTarget, direction);
+        if (along < -radius || along > distance + radius)
+            return false;
+
+        Vector3 closestPoint = origin + direction * Mathf.Clamp(along, 0f, distance);
+        return (targetPoint - closestPoint).sqrMagnitude <= radius * radius;
+    }
+
+    private void CleanupCharacterGrabOnLifecycle(string reason)
+    {
+        if (IsServer)
+            ServerReleaseCharacterGrab(reason);
+        else
+            SafeClearCharacterGrabState(reason, false);
+    }
+
+    private void SafeClearCharacterGrabState(string reason, bool applyEscapeRegrabImmunity)
+    {
+        ClearCharacterGrabMoveSpeedMultipliers(this);
+
+        _grabbedCharacter = default;
+        _grabbedByCharacter = default;
+        _grabbedCharacterInteract = null;
+        _grabbedByInteract = null;
+        _grabbedCharacterStatus = null;
+        _grabbedByStatus = null;
+        _characterGrabStartedAt = 0f;
+        _characterLiftReadyAt = 0f;
+        _isCharacterLiftReady = false;
+        _escapeTapCount = 0;
+        _lastEscapeTapAt = 0f;
+
+        if (applyEscapeRegrabImmunity)
+            _regrabImmuneUntil = Time.time + Mathf.Max(0f, escapeRegrabImmunitySeconds);
+    }
+
+    private void SetCharacterLiftReadyForPair(bool isReady)
+    {
+        _isCharacterLiftReady = isReady;
+
+        PlayerInteractModule grabbedInteract = ResolveGrabbedCharacterInteract();
+        if (grabbedInteract != null && grabbedInteract != this)
+            grabbedInteract._isCharacterLiftReady = isReady;
+    }
+
+    private PlayerInteractModule ResolveEscapeTargetInteract()
+    {
+        if (IsGrabbedByCharacter)
+            return this;
+
+        if (IsGrabbingCharacter)
+            return ResolveGrabbedCharacterInteract();
+
+        return null;
+    }
+
+    private PlayerInteractModule ResolveGrabbedCharacterInteract()
+    {
+        if (_grabbedCharacterInteract != null)
+            return _grabbedCharacterInteract;
+
+        if (!TryGetNetworkObjectSafe(_grabbedCharacter, out NetworkObject netObj))
+            return null;
+
+        _grabbedCharacterInteract = ResolveInteractModule(netObj);
+        _grabbedCharacterStatus = ResolveStatusModule(netObj);
+        return _grabbedCharacterInteract;
+    }
+
+    private PlayerInteractModule ResolveGrabbedByInteract()
+    {
+        if (_grabbedByInteract != null)
+            return _grabbedByInteract;
+
+        if (!TryGetNetworkObjectSafe(_grabbedByCharacter, out NetworkObject netObj))
+            return null;
+
+        _grabbedByInteract = ResolveInteractModule(netObj);
+        _grabbedByStatus = ResolveStatusModule(netObj);
+        return _grabbedByInteract;
+    }
+
+    private bool ResolveGrabbedCharacterRefs()
+    {
+        PlayerInteractModule interact = ResolveGrabbedCharacterInteract();
+        if (interact == null)
+            return false;
+
+        if (_grabbedCharacterStatus == null)
+            _grabbedCharacterStatus = ResolveStatusModule(interact);
+
+        return _grabbedCharacterStatus != null;
+    }
+
+    private bool ResolveGrabbedByRefs()
+    {
+        PlayerInteractModule interact = ResolveGrabbedByInteract();
+        if (interact == null)
+            return false;
+
+        if (_grabbedByStatus == null)
+            _grabbedByStatus = ResolveStatusModule(interact);
+
+        return _grabbedByStatus != null;
+    }
+
+    private bool IsCharacterGrabLinkValidAsGrabber()
+    {
+        PlayerInteractModule grabbedInteract = ResolveGrabbedCharacterInteract();
+        return grabbedInteract != null && grabbedInteract._grabbedByInteract == this;
+    }
+
+    private bool IsCharacterGrabLinkValidAsGrabbed()
+    {
+        PlayerInteractModule grabberInteract = ResolveGrabbedByInteract();
+        return grabberInteract != null && grabberInteract._grabbedCharacterInteract == this;
+    }
+
+    private bool IsCharacterRegrabImmune()
+    {
+        return Time.time < _regrabImmuneUntil;
+    }
+
+    private bool TryGetOwnerClientIdForCharacterGrab(out ulong clientId)
+    {
+        clientId = ulong.MaxValue;
+
+        NetworkObject ownerObject = ResolveRootNetworkObject(this);
+        if (ownerObject == null)
+            ownerObject = NetworkObject;
+
+        if (ownerObject == null)
+            return false;
+
+        clientId = ownerObject.OwnerClientId;
+        return clientId != ulong.MaxValue;
+    }
+
+    private static void ApplyCharacterGrabMoveSpeedMultiplier(PlayerInteractModule interact, string sourceKey, float multiplier)
+    {
+        PlayerLocomotionModule locomotion = ResolveLocomotionModule(interact);
+        if (locomotion == null)
+            return;
+
+        locomotion.SetExternalMoveSpeedMultiplier(sourceKey, Mathf.Max(0f, multiplier));
+    }
+
+    private static void ClearCharacterGrabMoveSpeedMultipliers(PlayerInteractModule interact)
+    {
+        PlayerLocomotionModule locomotion = ResolveLocomotionModule(interact);
+        if (locomotion == null)
+            return;
+
+        locomotion.ClearExternalMoveSpeedMultiplier(GrabberMoveMultiplierKey);
+        locomotion.ClearExternalMoveSpeedMultiplier(GrabbedMoveMultiplierKey);
+    }
+
+    private Vector3 GetCharacterGrabFallbackOrigin()
+    {
+        return transform.position
+            + Vector3.up * Mathf.Max(0f, pickupFallbackOriginHeight)
+            + transform.forward * Mathf.Max(0f, pickupFallbackForwardOffset);
+    }
+
+    private Vector3 GetCharacterGrabServerOrigin()
+    {
+        if (_cc != null)
+            return _cc.transform.TransformPoint(_cc.center);
+
+        return transform.position + Vector3.up * Mathf.Max(0f, pickupFallbackOriginHeight);
+    }
+
+    private Vector3 GetCharacterGrabTargetPoint(PlayerStatusModule targetStatus)
+    {
+        if (targetStatus == null)
+            return Vector3.zero;
+
+        CharacterController targetController = targetStatus.GetComponentInParent<CharacterController>();
+        if (targetController != null)
+            return targetController.transform.TransformPoint(targetController.center);
+
+        NetworkObject targetNetObj = ResolveRootNetworkObject(targetStatus);
+        if (targetNetObj != null)
+            return targetNetObj.transform.position + Vector3.up * Mathf.Max(0f, pickupFallbackOriginHeight);
+
+        return targetStatus.transform.position;
+    }
+
+    private bool IsSelfCharacterStatus(PlayerStatusModule candidateStatus)
+    {
+        if (candidateStatus == null)
+            return false;
+
+        PlayerStatusModule ownStatus = ResolveOwnStatusModule();
+        if (ownStatus != null && candidateStatus == ownStatus)
+            return true;
+
+        NetworkObject selfNetObj = ResolveRootNetworkObject(this);
+        NetworkObject candidateNetObj = ResolveRootNetworkObject(candidateStatus);
+        return selfNetObj != null && candidateNetObj != null && selfNetObj == candidateNetObj;
+    }
+
+    private static bool TryResolvePlayerStatusFromCollider(Collider source, out PlayerStatusModule status)
+    {
+        status = null;
+
+        if (source == null)
+            return false;
+
+        status = source.GetComponentInParent<PlayerStatusModule>();
+        if (status != null)
+            return true;
+
+        if (source.attachedRigidbody != null)
+        {
+            status = source.attachedRigidbody.GetComponentInParent<PlayerStatusModule>();
+            if (status != null)
+                return true;
+        }
+
+        Transform root = source.transform.root;
+        if (root != null)
+            status = root.GetComponentInChildren<PlayerStatusModule>(true);
+
+        return status != null;
+    }
+
+    private PlayerStatusModule ResolveOwnStatusModule()
+    {
+        return ResolveStatusModule(this);
+    }
+
+    private static PlayerStatusModule ResolveStatusModule(PlayerInteractModule interact)
+    {
+        if (interact == null)
+            return null;
+
+        PlayerHub hub = interact.GetComponentInParent<PlayerHub>();
+        if (hub != null)
+        {
+            PlayerStatusModule status = hub.GetComponentInChildren<PlayerStatusModule>(true);
+            if (status != null)
+                return status;
+        }
+
+        PlayerStatusModule parentStatus = interact.GetComponentInParent<PlayerStatusModule>();
+        if (parentStatus != null)
+            return parentStatus;
+
+        return interact.GetComponentInChildren<PlayerStatusModule>(true);
+    }
+
+    private static PlayerStatusModule ResolveStatusModule(NetworkObject netObj)
+    {
+        if (netObj == null)
+            return null;
+
+        PlayerStatusModule status = netObj.GetComponentInChildren<PlayerStatusModule>(true);
+        if (status != null)
+            return status;
+
+        return netObj.GetComponentInParent<PlayerStatusModule>();
+    }
+
+    private static PlayerInteractModule ResolveInteractModule(PlayerStatusModule status)
+    {
+        if (status == null)
+            return null;
+
+        PlayerHub hub = status.GetComponentInParent<PlayerHub>();
+        if (hub != null)
+        {
+            PlayerInteractModule interact = hub.GetComponentInChildren<PlayerInteractModule>(true);
+            if (interact != null)
+                return interact;
+        }
+
+        PlayerInteractModule parentInteract = status.GetComponentInParent<PlayerInteractModule>();
+        if (parentInteract != null)
+            return parentInteract;
+
+        return status.GetComponentInChildren<PlayerInteractModule>(true);
+    }
+
+    private static PlayerInteractModule ResolveInteractModule(NetworkObject netObj)
+    {
+        if (netObj == null)
+            return null;
+
+        PlayerInteractModule interact = netObj.GetComponentInChildren<PlayerInteractModule>(true);
+        if (interact != null)
+            return interact;
+
+        return netObj.GetComponentInParent<PlayerInteractModule>();
+    }
+
+    private static PlayerLocomotionModule ResolveLocomotionModule(PlayerInteractModule interact)
+    {
+        if (interact == null)
+            return null;
+
+        PlayerHub hub = interact.GetComponentInParent<PlayerHub>();
+        if (hub != null)
+        {
+            PlayerLocomotionModule locomotion = hub.GetComponentInChildren<PlayerLocomotionModule>(true);
+            if (locomotion != null)
+                return locomotion;
+        }
+
+        PlayerLocomotionModule parentLocomotion = interact.GetComponentInParent<PlayerLocomotionModule>();
+        if (parentLocomotion != null)
+            return parentLocomotion;
+
+        return interact.GetComponentInChildren<PlayerLocomotionModule>(true);
+    }
+
+    private static NetworkObject ResolveRootNetworkObject(Component component)
+    {
+        if (component == null)
+            return null;
+
+        NetworkObject rootNetObj = component.GetComponentInParent<NetworkObject>();
+        if (rootNetObj != null)
+            return rootNetObj;
+
+        NetworkBehaviour behaviour = component as NetworkBehaviour;
+        return behaviour != null ? behaviour.NetworkObject : null;
+    }
+
+    private int GetCharacterGrabLayerMask()
+    {
+        return characterGrabMask.value != 0 ? characterGrabMask.value : Physics.DefaultRaycastLayers;
+    }
+
+    private bool HasCharacterGrabReference(NetworkObjectReference reference, PlayerInteractModule cachedInteract)
+    {
+        if (cachedInteract != null)
+            return true;
+
+        return TryGetNetworkObjectSafe(reference, out NetworkObject netObj) && netObj != null && netObj.IsSpawned;
+    }
+
+    private static bool IsEscapeReleaseReason(string reason)
+    {
+        return string.Equals(reason, CharacterGrabEscapeReason, System.StringComparison.OrdinalIgnoreCase);
+    }
+
+    private string GetCharacterGrabDebugName(PlayerStatusModule status, PlayerInteractModule interact)
+    {
+        NetworkObject netObj = status != null ? ResolveRootNetworkObject(status) : ResolveRootNetworkObject(interact);
+        if (netObj != null)
+            return netObj.name;
+
+        if (status != null)
+            return status.name;
+
+        if (interact != null)
+            return interact.name;
+
+        return "<null>";
     }
 
     private void RefreshDropAnchorPoseImmediately()
@@ -1439,6 +2220,12 @@ public class PlayerInteractModule : NetworkBehaviour
     {
         if (!enableDebugLogs) return;
         Debug.Log(message);
+    }
+
+    private void CharacterGrabLog(string message)
+    {
+        if (!enableDebugLogs && !characterGrabDebugLogs) return;
+        Debug.Log(message, this);
     }
 
     private void TryTriggerPickupExpression()
