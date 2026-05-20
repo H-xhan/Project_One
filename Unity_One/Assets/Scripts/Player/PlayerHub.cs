@@ -421,8 +421,13 @@ public class PlayerHub : NetworkBehaviour
                 QueueJumpServerRpc();
         }
 
-        if (attackPressed && CanAttackNow() && (interactModule == null || !interactModule.IsGrabbingCharacter))
-            AttackServerRpc();
+        if (attackPressed)
+        {
+            if (interactModule != null && interactModule.IsGrabbingCharacter)
+                interactModule.RequestThrowCarriedCharacter();
+            else if (CanAttackNow())
+                AttackServerRpc();
+        }
 
         bool consumedInteractForSpinDash = false;
         if (interactPressed &&
@@ -1123,7 +1128,7 @@ public class PlayerHub : NetworkBehaviour
     [Rpc(SendTo.Server)]
     private void AttackServerRpc()
     {
-        if (interactModule != null && interactModule.IsGrabbingCharacter)
+        if (TryConsumeCharacterThrowOrBlockAttackServer())
         {
             _attackBufferedServer = false;
             return;
@@ -1150,7 +1155,7 @@ public class PlayerHub : NetworkBehaviour
 
     private void StartAttackServerInternal()
     {
-        if (interactModule != null && interactModule.IsGrabbingCharacter)
+        if (TryConsumeCharacterThrowOrBlockAttackServer())
             return;
 
         if (!CanAttackNow())
@@ -1274,6 +1279,20 @@ public class PlayerHub : NetworkBehaviour
 
         _attackBufferedServer = false;
         StartAttackServerInternal();
+    }
+
+    private bool TryConsumeCharacterThrowOrBlockAttackServer()
+    {
+        if (interactModule == null)
+            return false;
+
+        if (interactModule.CanThrowCarriedCharacter)
+        {
+            interactModule.ServerTryThrowCarriedCharacter("AttackInput");
+            return true;
+        }
+
+        return interactModule.IsGrabbingCharacter;
     }
 
     [ClientRpc]
