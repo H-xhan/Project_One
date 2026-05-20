@@ -1,8 +1,9 @@
 using System.Collections;
 using System.Collections.Generic;
+using Unity.Netcode;
 using UnityEngine;
 
-public class BombPassGimmick : MonoBehaviour
+public class BombPassGimmick : NetworkBehaviour
 {
     private const string LogPrefix = "[BombPassGimmick]";
     private const float MinBombDuration = 1f;
@@ -143,13 +144,20 @@ public class BombPassGimmick : MonoBehaviour
     private bool _loggedEmptyPlayerMaskWarning;
     private PlayerStatusModule _speedBoostedHolder;
     private PlayerLocomotionModule _speedBoostedLocomotion;
+    private PlayerStatusModule _remoteVisualHolder;
+    private bool _remoteVisualActive;
+    private bool _remoteFinalWarningTriggered;
 
     private void Update()
     {
-        if (_phase == BombPhase.Idle)
+        if (_phase != BombPhase.Idle)
+        {
+            UpdateFollowerVisuals();
             return;
+        }
 
-        UpdateFollowerVisuals();
+        if (_remoteVisualActive)
+            UpdateRemoteFollowerVisuals();
     }
 
     private void OnDisable()
@@ -160,12 +168,23 @@ public class BombPassGimmick : MonoBehaviour
         StopBombPassInternal(false);
     }
 
-    private void OnDestroy()
+    public override void OnNetworkDespawn()
     {
-        if (!Application.isPlaying)
-            return;
+        SendCleanupBombPassVisual("network-despawn");
+        CleanupRemoteBombPassVisual("network-despawn");
+        base.OnNetworkDespawn();
+    }
 
-        ClearHolderSpeedBoost();
+    public override void OnDestroy()
+    {
+        if (Application.isPlaying)
+        {
+            SendCleanupBombPassVisual("destroy");
+            CleanupRemoteBombPassVisual("destroy");
+            ClearHolderSpeedBoost();
+        }
+
+        base.OnDestroy();
     }
 
     [ContextMenu("Debug Start Bomb Pass")]
@@ -233,7 +252,8 @@ public class BombPassGimmick : MonoBehaviour
 
         SetPhase(BombPhase.Spawn);
         ResetVisuals();
-        SetHolder(initialHolder);
+        SendCleanupBombPassVisual("start-reset");
+        SetHolder(initialHolder, true);
         Log($"{LogPrefix} Target assigned: {initialHolder.name}");
         PlayAudio(startAudio);
 
@@ -391,7 +411,7 @@ public class BombPassGimmick : MonoBehaviour
         return !status.IsEliminated && !status.IsKnocked && !status.IsStandingUp;
     }
 
-    private void SetHolder(PlayerStatusModule newHolder)
+    private void SetHolder(PlayerStatusModule newHolder, bool playStartAudioForRemote = false)
     {
         if (!IsValidPlayerStatus(newHolder))
             return;
@@ -432,6 +452,7 @@ public class BombPassGimmick : MonoBehaviour
 
         ApplyHolderSpeedBoost(_currentHolder);
         PlayAudio(passAudio);
+        SendSetBombPassHolderVisual(newHolder, playStartAudioForRemote);
         Log($"{LogPrefix} Holder changed: {newHolder.name}");
     }
 
@@ -507,6 +528,7 @@ public class BombPassGimmick : MonoBehaviour
         }
 
         PlayAudio(warningAudio);
+        SendPlayBombPassFinalWarningVisual();
         Log($"{LogPrefix} Final warning. remaining={_remainingTime:0.00}");
     }
 
@@ -558,6 +580,7 @@ public class BombPassGimmick : MonoBehaviour
         }
 
         PlayAudio(explosionAudio);
+        SendPlayBombPassExplosionVisual(explosionCenter);
 
         if (bombVisual != null)
             bombVisual.SetActive(false);
@@ -568,6 +591,7 @@ public class BombPassGimmick : MonoBehaviour
         if (finalWarningVisual != null)
             finalWarningVisual.SetActive(false);
 
+        SendClearBombPassHolderVisual();
         Log($"{LogPrefix} Explosion. center={explosionCenter}, hits={_explosionHitPlayers.Count}");
     }
 
@@ -654,6 +678,7 @@ public class BombPassGimmick : MonoBehaviour
         _finalWarningTriggered = false;
         ClearRuntimeCaches();
         ResetVisuals();
+        SendCleanupBombPassVisual("finish");
     }
 
     private void StopBombPassInternal(bool logStop)
@@ -696,6 +721,240 @@ public class BombPassGimmick : MonoBehaviour
             explosionVisual.SetActive(false);
     }
 
+    private void SendSetBombPassHolderVisual(PlayerStatusModule holder, bool playStartAudioForRemote)
+    {
+        if (!CanSendBombPassVisualMessage())
+            return;
+
+        if (!TryGetBombPassHolderReference(holder, out NetworkObjectReference holderReference))
+        {
+            SendClearBombPassHolderVisual();
+            Log($"{LogPrefix} Visual holder RPC skipped. reason=no-holder-reference");
+            return;
+        }
+
+        SetBombPassHolderVisualClientRpc(holderReference, playStartAudioForRemote, _finalWarningTriggered);
+        Log($"{LogPrefix} Visual holder RPC sent holder={holder.name}");
+    }
+
+    private void SendClearBombPassHolderVisual()
+    {
+        if (CanSendBombPassVisualMessage())
+            ClearBombPassHolderVisualClientRpc();
+    }
+
+    private void SendPlayBombPassFinalWarningVisual()
+    {
+        if (CanSendBombPassVisualMessage())
+            PlayBombPassFinalWarningVisualClientRpc();
+    }
+
+    private void SendPlayBombPassExplosionVisual(Vector3 explosionPosition)
+    {
+        if (CanSendBombPassVisualMessage())
+            PlayBombPassExplosionVisualClientRpc(explosionPosition);
+    }
+
+    private void SendCleanupBombPassVisual(string reason)
+    {
+        if (CanSendBombPassVisualMessage())
+            CleanupBombPassVisualClientRpc(reason);
+    }
+
+    private bool CanSendBombPassVisualMessage()
+    {
+        return IsServer && IsSpawned;
+    }
+
+    private bool ShouldSkipBombPassVisualOnThisPeer()
+    {
+        return IsServer;
+    }
+
+    private bool TryGetBombPassHolderReference(PlayerStatusModule holder, out NetworkObjectReference holderReference)
+    {
+        holderReference = default;
+        if (holder == null || holder.NetworkObject == null || !holder.NetworkObject.IsSpawned)
+            return false;
+
+        holderReference = new NetworkObjectReference(holder.NetworkObject);
+        return true;
+    }
+
+    [ClientRpc]
+    private void SetBombPassHolderVisualClientRpc(NetworkObjectReference holderReference, bool playStartAudioForRemote, bool finalWarningActive)
+    {
+        if (ShouldSkipBombPassVisualOnThisPeer())
+            return;
+
+        if (!TryResolveBombPassHolder(holderReference, out PlayerStatusModule holder))
+        {
+            ClearRemoteBombPassHolderVisual();
+            Log($"{LogPrefix} Remote holder visual resolved=False");
+            return;
+        }
+
+        _remoteVisualHolder = holder;
+        _remoteVisualActive = true;
+        _remoteFinalWarningTriggered = finalWarningActive;
+        if (!_remoteFinalWarningTriggered && finalWarningVisual != null)
+            finalWarningVisual.SetActive(false);
+
+        UpdateRemoteFollowerVisuals(true);
+        PlayAudio(passAudio);
+
+        if (playStartAudioForRemote)
+            PlayAudio(startAudio);
+
+        Log($"{LogPrefix} Remote holder visual resolved=True holder={holder.name}");
+    }
+
+    [ClientRpc]
+    private void ClearBombPassHolderVisualClientRpc()
+    {
+        if (ShouldSkipBombPassVisualOnThisPeer())
+            return;
+
+        ClearRemoteBombPassHolderVisual();
+        Log($"{LogPrefix} Remote holder visual cleared");
+    }
+
+    [ClientRpc]
+    private void PlayBombPassFinalWarningVisualClientRpc()
+    {
+        if (ShouldSkipBombPassVisualOnThisPeer())
+            return;
+
+        _remoteFinalWarningTriggered = true;
+        Vector3 warningPosition = GetRemoteHolderFollowPosition();
+        if (finalWarningVisual != null)
+        {
+            finalWarningVisual.transform.position = warningPosition;
+            finalWarningVisual.SetActive(true);
+        }
+
+        PlayAudio(warningAudio);
+        Log($"{LogPrefix} Final warning visual RPC");
+    }
+
+    [ClientRpc]
+    private void PlayBombPassExplosionVisualClientRpc(Vector3 explosionPosition)
+    {
+        if (ShouldSkipBombPassVisualOnThisPeer())
+            return;
+
+        if (explosionVisual != null)
+        {
+            explosionVisual.transform.position = explosionPosition;
+            if (explosionVisual.activeSelf)
+                explosionVisual.SetActive(false);
+
+            explosionVisual.SetActive(true);
+        }
+
+        PlayAudio(explosionAudio);
+        ClearRemoteBombPassHolderVisual();
+        Log($"{LogPrefix} Explosion visual RPC pos={explosionPosition}");
+    }
+
+    [ClientRpc]
+    private void CleanupBombPassVisualClientRpc(string reason)
+    {
+        if (ShouldSkipBombPassVisualOnThisPeer())
+            return;
+
+        CleanupRemoteBombPassVisual(reason);
+    }
+
+    private bool TryResolveBombPassHolder(NetworkObjectReference holderReference, out PlayerStatusModule holder)
+    {
+        holder = null;
+        if (!holderReference.TryGet(out NetworkObject holderObject) || holderObject == null)
+            return false;
+
+        holder = holderObject.GetComponentInChildren<PlayerStatusModule>(true);
+        if (holder != null)
+            return true;
+
+        holder = holderObject.GetComponent<PlayerStatusModule>();
+        return holder != null;
+    }
+
+    private void UpdateRemoteFollowerVisuals(bool snap = false)
+    {
+        if (_remoteVisualHolder == null)
+        {
+            ClearRemoteBombPassHolderVisual();
+            return;
+        }
+
+        Vector3 markerPosition = GetHolderFollowPosition(_remoteVisualHolder);
+        float followT = snap ? 1f : Mathf.Clamp01(GetFollowSpeed() * Time.deltaTime);
+
+        if (bombVisual != null)
+        {
+            if (TryGetBombVisualTargetPose(_remoteVisualHolder, out Vector3 bombPosition, out Quaternion bombRotation))
+            {
+                bombVisual.transform.position = snap
+                    ? bombPosition
+                    : Vector3.Lerp(bombVisual.transform.position, bombPosition, followT);
+                bombVisual.transform.rotation = snap
+                    ? bombRotation
+                    : Quaternion.Slerp(bombVisual.transform.rotation, bombRotation, followT);
+            }
+            else if (snap || !bombVisual.activeSelf)
+            {
+                bombVisual.transform.position = markerPosition;
+            }
+
+            if (!bombVisual.activeSelf)
+                bombVisual.SetActive(true);
+        }
+
+        if (targetMarkerVisual != null)
+        {
+            targetMarkerVisual.transform.position = markerPosition;
+            if (!targetMarkerVisual.activeSelf)
+                targetMarkerVisual.SetActive(true);
+        }
+
+        if (_remoteFinalWarningTriggered && finalWarningVisual != null)
+        {
+            finalWarningVisual.transform.position = markerPosition;
+            if (!finalWarningVisual.activeSelf)
+                finalWarningVisual.SetActive(true);
+        }
+    }
+
+    private void ClearRemoteBombPassHolderVisual()
+    {
+        _remoteVisualHolder = null;
+        _remoteVisualActive = false;
+        _remoteFinalWarningTriggered = false;
+
+        if (bombVisual != null)
+        {
+            bombVisual.transform.position = GetBombSpawnPosition();
+            bombVisual.SetActive(false);
+        }
+
+        if (targetMarkerVisual != null)
+            targetMarkerVisual.SetActive(false);
+
+        if (finalWarningVisual != null)
+            finalWarningVisual.SetActive(false);
+    }
+
+    private void CleanupRemoteBombPassVisual(string reason)
+    {
+        ClearRemoteBombPassHolderVisual();
+
+        if (explosionVisual != null)
+            explosionVisual.SetActive(false);
+
+        Log($"{LogPrefix} Remote visual cleanup reason={reason}");
+    }
+
     private int GetPlayerMask()
     {
         if (playerMask.value != 0)
@@ -725,21 +984,31 @@ public class BombPassGimmick : MonoBehaviour
         return _currentHolder != null ? GetHolderFollowPosition(_currentHolder) : GetBombSpawnPosition();
     }
 
+    private Vector3 GetRemoteHolderFollowPosition()
+    {
+        return _remoteVisualHolder != null ? GetHolderFollowPosition(_remoteVisualHolder) : GetBombSpawnPosition();
+    }
+
     private bool TryGetBombVisualTargetPose(out Vector3 position, out Quaternion rotation)
+    {
+        return TryGetBombVisualTargetPose(_currentHolder, out position, out rotation);
+    }
+
+    private bool TryGetBombVisualTargetPose(PlayerStatusModule holder, out Vector3 position, out Quaternion rotation)
     {
         position = GetBombSpawnPosition();
         rotation = bombVisual != null ? bombVisual.transform.rotation : Quaternion.identity;
 
-        if (_currentHolder == null)
+        if (holder == null)
             return false;
 
         if (!useHolderLocalOffset)
         {
-            position = GetHolderFollowPosition(_currentHolder);
+            position = GetHolderFollowPosition(holder);
             return true;
         }
 
-        Transform root = GetHolderRootTransform(_currentHolder);
+        Transform root = GetHolderRootTransform(holder);
         if (root == null)
             return false;
 
