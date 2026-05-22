@@ -227,6 +227,7 @@ public class PlayerLocomotionModule : NetworkBehaviour
     private PlayerInteractModule _interactModule;
     private bool _isSprintingWithStamina;
     private bool _isSpinDashing;
+    private bool _isProcessingSpinDashProfileHit;
     private Vector3 _spinDashDirection;
     private float _spinDashEndTime;
     private float _spinDashCooldownUntil;
@@ -242,7 +243,7 @@ public class PlayerLocomotionModule : NetworkBehaviour
 
     public bool IsGrounded => _cc != null && _cc.isGrounded;
     public float PlanarSpeed => new Vector2(_planarVelocity.x, _planarVelocity.z).magnitude;
-    public bool IsSpinDashing => _isSpinDashing;
+    public bool IsSpinDashing => _isSpinDashing || _isProcessingSpinDashProfileHit;
     public float SpinDashRemainingSeconds => _isSpinDashing ? Mathf.Max(0f, _spinDashEndTime - Time.time) : 0f;
     public float SpinDashCooldownRemainingSeconds => Mathf.Max(0f, _spinDashCooldownUntil - Time.time);
 
@@ -359,12 +360,14 @@ public class PlayerLocomotionModule : NetworkBehaviour
 
     private void OnDisable()
     {
+        _isProcessingSpinDashProfileHit = false;
         ClearSpinDashHitState();
         StopSpinDashVisualFeedback();
     }
 
     private void OnDestroy()
     {
+        _isProcessingSpinDashProfileHit = false;
         ClearSpinDashHitState();
         StopSpinDashFeedbackLocal();
         RestoreSpinDashFeedbackVisualLocal();
@@ -473,6 +476,7 @@ public class PlayerLocomotionModule : NetworkBehaviour
     }
     public void ResetMotionServer()
     {
+        _isProcessingSpinDashProfileHit = false;
         FinishSpinDashServer(false);
         _planarVelocity = Vector3.zero;
         _verticalVelocity = 0f;
@@ -591,10 +595,31 @@ public class PlayerLocomotionModule : NetworkBehaviour
                 direction * GetFiniteNonNegative(spinDashHitImpulse) +
                 Vector3.up * GetFiniteNonNegative(spinDashHitUpImpulse);
 
-            bool recordedContributor = targetStatus.ServerTryApplyCombatKnockback(impulse, actorClientId);
+            bool recordedContributor = ServerApplySpinDashHitKnockbackForProfileRouting(targetStatus, impulse, actorClientId, targetClientId);
             Vector3 hitVfxPosition = GetSpinDashHitVfxPosition(hit, center, targetStatus);
             TriggerSpinDashHitVfx(hitVfxPosition);
             LogSpinDash($"Hit target client={targetClientId} contributor={recordedContributor} impulse={impulse}");
+        }
+    }
+
+    private bool ServerApplySpinDashHitKnockbackForProfileRouting(
+        PlayerStatusModule targetStatus,
+        Vector3 impulse,
+        ulong actorClientId,
+        ulong targetClientId)
+    {
+        bool previousRouting = _isProcessingSpinDashProfileHit;
+
+        try
+        {
+            _isProcessingSpinDashProfileHit = true;
+            LogSpinDash($"Profile routing enabled for hit target={targetClientId}");
+            return targetStatus.ServerTryApplyCombatKnockback(impulse, actorClientId);
+        }
+        finally
+        {
+            _isProcessingSpinDashProfileHit = previousRouting;
+            LogSpinDash("Profile routing restored");
         }
     }
 
@@ -745,11 +770,13 @@ public class PlayerLocomotionModule : NetworkBehaviour
     {
         if (!_isSpinDashing)
         {
+            _isProcessingSpinDashProfileHit = false;
             ClearSpinDashHitState();
             StopSpinDashVisualFeedback();
             return;
         }
 
+        _isProcessingSpinDashProfileHit = false;
         _isSpinDashing = false;
         _spinDashDirection = Vector3.zero;
         _spinDashEndTime = 0f;

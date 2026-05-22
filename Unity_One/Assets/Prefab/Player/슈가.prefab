@@ -880,7 +880,7 @@ MonoBehaviour:
   spinDashDizzyFeedbackDuration: 0.7
   spinDashDizzyWobbleAngle: 8
   spinDashDizzyWobbleSpeed: 18
-  enableSpinDashDebugLogs: 0
+  enableSpinDashDebugLogs: 1
   spinDashStartVfxPrefab: {fileID: 8657207971880792959, guid: 767dcc38277007e4892edfa90f0dba99, type: 3}
   spinDashHitVfxPrefab: {fileID: 8429337220320449845, guid: b611afdeb08996443bf53efa6e779990, type: 3}
   spinDashVfxYOffset: 0.35
@@ -980,7 +980,7 @@ MonoBehaviour:
   enableActiveRagdollHitReaction: 1
   activeRagdollHitImpulseScale: 0
   useProfiledActiveRagdollImpacts: 1
-  activeRagdollProfileDebugLogs: 0
+  activeRagdollProfileDebugLogs: 1
   tryDetectSpinDashImpactFromActor: 1
   dropHeldItemOnKnockback: 1
   dropHeldItemOnKnockbackCooldown: 0.35
@@ -1003,7 +1003,7 @@ MonoBehaviour:
   enableCombatFallContributionTracking: 1
   recentCombatContributorValidSeconds: 4
   countCoinRespawnFallAsKnockOff: 1
-  enableCombatFallContributionDebugLogs: 1
+  enableCombatFallContributionDebugLogs: 0
   enableDebugLogs: 0
   enableTemporaryControlLockDebugLogs: 0
   enableStandUpControlLockDebugLogs: 0
@@ -2902,7 +2902,7 @@ MonoBehaviour:
   impactUnlockDuration: 0.35
   impactUseGravityWhileUnlocked: 1
   activeRagdollImpactDebugLogs: 1
-  enableDebugLogs: 1
+  enableDebugLogs: 0
 --- !u!54 &4312827499112621713
 Rigidbody:
   m_ObjectHideFlags: 0
