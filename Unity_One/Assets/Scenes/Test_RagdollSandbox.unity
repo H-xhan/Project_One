@@ -583,9 +583,9 @@ Rigidbody:
   m_CorrespondingSourceObject: {fileID: 5633996970294903711, guid: bf80e9641ac4abb44b76b94b6b10f3df, type: 3}
   m_PrefabInstance: {fileID: 4066915287360362446}
   m_PrefabAsset: {fileID: 0}
---- !u!54 &8473070557161186221 stripped
+--- !u!54 &8161778571576145404 stripped
 Rigidbody:
-  m_CorrespondingSourceObject: {fileID: 5873927793847788974, guid: bf80e9641ac4abb44b76b94b6b10f3df, type: 3}
+  m_CorrespondingSourceObject: {fileID: 3575832997153355163, guid: bf80e9641ac4abb44b76b94b6b10f3df, type: 3}
   m_PrefabInstance: {fileID: 4066915287360362446}
   m_PrefabAsset: {fileID: 0}
 --- !u!143 &8696110822535955656 stripped
@@ -609,7 +609,7 @@ MonoBehaviour:
   animator: {fileID: 4066915287360362448}
   rootRigidbody: {fileID: 4312827500748744501}
   characterController: {fileID: 8696110822535955656}
-  impulseTargetRigidbody: {fileID: 8473070557161186221}
+  impulseTargetRigidbody: {fileID: 8161778571576145404}
   managedRigidbodies: []
   autoCollectReferences: 1
   disableCharacterControllerOnStart: 1
@@ -623,6 +623,10 @@ MonoBehaviour:
   torqueImpulse: 4
   showOnGuiHelp: 1
   debugLogs: 1
+  guiFontSize: 24
+  guiBoxWidth: 420
+  guiBoxHeight: 300
+  allowTargetCycling: 1
 --- !u!1660057539 &9223372036854775807
 SceneRoots:
   m_ObjectHideFlags: 0

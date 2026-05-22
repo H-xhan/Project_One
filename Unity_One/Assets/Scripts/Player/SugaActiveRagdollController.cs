@@ -20,6 +20,14 @@ using UnityEngine.InputSystem;
 // - SetLimp: parts should behave close to passive ragdoll; upright torque is reduced to limpUprightScale.
 // - ApplyForwardHit: applies impulse to hitTargetRigidbody or Body/Core, enters Hit, then recovers to Normal.
 // - Keep enablePrototypeInput off while testing with existing PlayerLocomotion/CharacterController to avoid controller conflict.
+public enum RagdollImpactProfile
+{
+    General,
+    SpinDash,
+    Throw,
+    Gimmick
+}
+
 public class SugaActiveRagdollController : MonoBehaviour
 {
     public enum RagdollState
@@ -203,6 +211,73 @@ public class SugaActiveRagdollController : MonoBehaviour
     [Tooltip("테스트 피격 impulse를 적용할 Rigidbody입니다. 비워두면 Body/Core Rigidbody를 사용합니다. 대상이 isKinematic이면 AddForce가 적용되지 않습니다.")]
     [SerializeField] private Rigidbody hitTargetRigidbody;
 
+    [Header("Profiled Impact")]
+    [SerializeField, Tooltip("상황별 active ragdoll impact profile을 사용할지 여부입니다.")]
+    private bool enableProfiledRagdollImpacts = true;
+
+    [SerializeField, Tooltip("General hit profile의 기본 target Rigidbody 이름입니다.")]
+    private string ragdollGeneralTargetName = "spine";
+
+    [SerializeField, Tooltip("SpinDash hit profile의 기본 target Rigidbody 이름입니다.")]
+    private string ragdollSpinDashTargetName = "spine";
+
+    [SerializeField, Tooltip("Throw profile의 기본 target Rigidbody 이름입니다.")]
+    private string ragdollThrowTargetName = "hips";
+
+    [SerializeField, Tooltip("Gimmick profile의 기본 target Rigidbody 이름입니다.")]
+    private string ragdollGimmickTargetName = "spine";
+
+    [SerializeField, Tooltip("General hit profile의 전방 impulse입니다.")]
+    private float generalForwardImpulse = 6f;
+
+    [SerializeField, Tooltip("General hit profile의 상방 impulse입니다.")]
+    private float generalUpImpulse = 2f;
+
+    [SerializeField, Tooltip("General hit profile의 torque impulse입니다.")]
+    private float generalTorqueImpulse = 4f;
+
+    [SerializeField, Tooltip("SpinDash hit profile의 전방 impulse입니다.")]
+    private float spinDashForwardImpulse = 8f;
+
+    [SerializeField, Tooltip("SpinDash hit profile의 상방 impulse입니다.")]
+    private float spinDashUpImpulse = 2.5f;
+
+    [SerializeField, Tooltip("SpinDash hit profile의 torque impulse입니다.")]
+    private float spinDashTorqueImpulse = 5f;
+
+    [SerializeField, Tooltip("Throw profile의 전방 impulse입니다.")]
+    private float throwForwardImpulse = 12f;
+
+    [SerializeField, Tooltip("Throw profile의 상방 impulse입니다.")]
+    private float throwUpImpulse = 4f;
+
+    [SerializeField, Tooltip("Throw profile의 torque impulse입니다.")]
+    private float throwTorqueImpulse = 4f;
+
+    [SerializeField, Tooltip("Gimmick profile의 전방 impulse입니다.")]
+    private float gimmickForwardImpulse = 6f;
+
+    [SerializeField, Tooltip("Gimmick profile의 상방 impulse입니다.")]
+    private float gimmickUpImpulse = 2f;
+
+    [SerializeField, Tooltip("Gimmick profile의 torque impulse입니다.")]
+    private float gimmickTorqueImpulse = 4f;
+
+    [SerializeField, Tooltip("너무 작은 impulse라도 최소한 보이는 반응을 만들기 위한 최소값입니다.")]
+    private float minimumVisibleRagdollImpulse = 2f;
+
+    [SerializeField, Tooltip("target Rigidbody가 kinematic이면 impulse 적용을 위해 짧게 non-kinematic으로 풀지 여부입니다.")]
+    private bool temporaryUnlockTargetRigidbodyForImpact = true;
+
+    [SerializeField, Tooltip("임시 non-kinematic 상태를 유지할 시간입니다.")]
+    private float impactUnlockDuration = 0.35f;
+
+    [SerializeField, Tooltip("임시 non-kinematic 상태에서 gravity를 사용할지 여부입니다.")]
+    private bool impactUseGravityWhileUnlocked = true;
+
+    [SerializeField, Tooltip("Active ragdoll impact profile 디버그 로그를 출력할지 여부입니다.")]
+    private bool activeRagdollImpactDebugLogs = false;
+
     [Header("Debug")]
     [Tooltip("Suga Active Ragdoll 디버그 로그를 출력할지 여부입니다.")]
     [SerializeField] private bool enableDebugLogs = false;
@@ -237,6 +312,14 @@ public class SugaActiveRagdollController : MonoBehaviour
     private bool _originalCoreIsKinematic;
     private bool _coreKinematicAnchorApplied;
     private bool _loggedMissingCoreRootAnchor;
+    private readonly Dictionary<string, Rigidbody> _ragdollBodyByLowerName = new Dictionary<string, Rigidbody>();
+    private readonly Dictionary<Rigidbody, bool> _originalKinematicByBody = new Dictionary<Rigidbody, bool>();
+    private readonly Dictionary<Rigidbody, bool> _originalUseGravityByBody = new Dictionary<Rigidbody, bool>();
+    private readonly Dictionary<Rigidbody, float> _temporaryUnlockUntilByBody = new Dictionary<Rigidbody, float>();
+    private readonly List<Rigidbody> _temporaryUnlockBodies = new List<Rigidbody>();
+    private Rigidbody[] _ragdollImpactBodies = new Rigidbody[0];
+    private Coroutine _temporaryUnlockCoroutine;
+    private bool _impactBodyCacheLogged;
 
     public RagdollState CurrentState => currentState;
 
@@ -272,6 +355,7 @@ public class SugaActiveRagdollController : MonoBehaviour
         CacheInitialCoreLocalPose();
         CacheParts();
         CacheManagedRigidbodies();
+        CacheRagdollImpactBodies();
         ApplyInitialMassPresetIfNeeded();
         ApplyTuningImmediate(GetTargetTuning());
         LogSetupWarningsOnce();
@@ -285,6 +369,7 @@ public class SugaActiveRagdollController : MonoBehaviour
         RestoreAnimatorValues();
         _stateBlend = GetStateStrengthScale(currentState);
         _currentTuning = GetTargetTuning();
+        EnsureRagdollImpactBodyCache();
         UpdateRagdollRuntimeMode(true);
         UpdateSkinnedMeshCullingGuardForState(currentState);
         UpdateAnimatorControlForState(currentState);
@@ -297,6 +382,7 @@ public class SugaActiveRagdollController : MonoBehaviour
 
     private void OnDisable()
     {
+        RestoreTemporaryUnlockedImpactBodies();
         ExitCoreKinematicAnchor(true);
         RestoreSkinnedMeshCullingGuard(true);
         RestoreAnimatorToOriginalState();
@@ -306,6 +392,7 @@ public class SugaActiveRagdollController : MonoBehaviour
 
     private void OnDestroy()
     {
+        RestoreTemporaryUnlockedImpactBodies();
         ExitCoreKinematicAnchor(true);
         RestoreSkinnedMeshCullingGuard(true);
         RestoreAnimatorToOriginalState();
@@ -362,10 +449,15 @@ public class SugaActiveRagdollController : MonoBehaviour
 
     public void ApplyHit(Vector3 impulse)
     {
-        if (!IsFinite(impulse))
+        ApplyGeneralImpact(impulse);
+    }
+
+    public bool ApplyProfiledImpact(RagdollImpactProfile profile, Vector3 sourceImpulse)
+    {
+        if (!IsFinite(sourceImpulse))
         {
-            Warn("ApplyHit impulse가 유효하지 않아 테스트 피격을 무시했습니다.");
-            return;
+            ImpactLog($"Impact skipped reason=invalid-impulse profile={profile} impulse={sourceImpulse}");
+            return false;
         }
 
         RegisterRuntimeApplyHitAnimatorRequest();
@@ -375,16 +467,37 @@ public class SugaActiveRagdollController : MonoBehaviour
             UpdateAnimatorControlForState(currentState);
             UpdateRagdollRuntimeMode();
             EnterCoreKinematicAnchor();
-            ApplyHitImpulse(impulse);
+            bool applied = ApplyImpactImpulse(profile, sourceImpulse);
             Log($"[SUGA_ACTIVE_RAGDOLL] ApplyHit kept {currentState} state.");
-            return;
+            return applied;
         }
 
         bool restartingHitRecovery = currentState == RagdollState.Hit && _hitRecoverAt > 0f;
         SetState(RagdollState.Hit);
-        ScheduleHitRecovery(impulse, restartingHitRecovery);
-        ApplyHitImpulse(impulse);
-        Log($"[SUGA_ACTIVE_RAGDOLL] Hit impulse:{impulse}");
+        ScheduleHitRecovery(sourceImpulse, restartingHitRecovery);
+        bool impactApplied = ApplyImpactImpulse(profile, sourceImpulse);
+        Log($"[SUGA_ACTIVE_RAGDOLL] Hit impulse:{sourceImpulse}");
+        return impactApplied;
+    }
+
+    public bool ApplyGeneralImpact(Vector3 sourceImpulse)
+    {
+        return ApplyProfiledImpact(RagdollImpactProfile.General, sourceImpulse);
+    }
+
+    public bool ApplySpinDashImpact(Vector3 sourceImpulse)
+    {
+        return ApplyProfiledImpact(RagdollImpactProfile.SpinDash, sourceImpulse);
+    }
+
+    public bool ApplyThrowImpact(Vector3 sourceImpulse)
+    {
+        return ApplyProfiledImpact(RagdollImpactProfile.Throw, sourceImpulse);
+    }
+
+    public bool ApplyGimmickImpact(Vector3 sourceImpulse)
+    {
+        return ApplyProfiledImpact(RagdollImpactProfile.Gimmick, sourceImpulse);
     }
 
     public void SetState(RagdollState nextState)
@@ -914,24 +1027,259 @@ public class SugaActiveRagdollController : MonoBehaviour
 
     private void ApplyHitImpulse(Vector3 impulse)
     {
+        ApplyImpactImpulse(RagdollImpactProfile.General, impulse);
+    }
+
+    private bool ApplyImpactImpulse(RagdollImpactProfile profile, Vector3 sourceImpulse)
+    {
+        if (!enableProfiledRagdollImpacts)
+            return ApplyLegacyHitImpulse(sourceImpulse);
+
+        RagdollImpactSettings settings = GetImpactSettings(profile);
+        Rigidbody target = ResolveImpactTarget(settings.targetName);
+        if (target == null)
+        {
+            ImpactLog($"Impact skipped reason=no-target profile={profile}");
+            return false;
+        }
+
+        Vector3 direction = ResolveImpactDirection(sourceImpulse);
+        Vector3 impulse = BuildProfiledImpulse(settings, direction, sourceImpulse);
+        Vector3 torque = transform.right * Mathf.Max(0f, settings.torqueImpulse);
+        if (!IsFinite(impulse) || !IsFinite(torque))
+        {
+            ImpactLog($"Impact skipped reason=invalid-result profile={profile} target={target.name}");
+            return false;
+        }
+
+        if (!EnsureRigidbodyCanReceiveImpact(target))
+        {
+            ImpactLog($"Impact skipped reason=kinematic target={target.name} profile={profile}");
+            return false;
+        }
+
+        target.WakeUp();
+        target.AddForce(impulse, ForceMode.Impulse);
+
+        if (torque.sqrMagnitude > 0.0001f)
+            target.AddTorque(torque, ForceMode.Impulse);
+
+        ImpactLog($"Impact profile={profile} target={target.name} impulse={impulse} torque={torque}");
+        return true;
+    }
+
+    private bool ApplyLegacyHitImpulse(Vector3 impulse)
+    {
         Rigidbody target = hitTargetRigidbody != null ? hitTargetRigidbody : coreRigidbody;
         if (target == null)
         {
             Warn("ApplyHit 대상 Rigidbody가 없습니다. hitTargetRigidbody 또는 Body/Core Rigidbody를 연결하세요.");
+            return false;
         }
         else if (ShouldSkipDynamicRigidbody(target))
         {
             Log("[SUGA_ACTIVE_RAGDOLL] ApplyHit impulse skipped for kinematic core anchor.");
+            return false;
         }
         else if (target.isKinematic)
         {
             Warn($"ApplyHit 대상 Rigidbody '{target.name}'가 isKinematic=true라 impulse가 적용되지 않습니다.");
+            return false;
         }
         else
         {
             target.WakeUp();
             target.AddForce(impulse, ForceMode.Impulse);
+            return true;
         }
+    }
+
+    private RagdollImpactSettings GetImpactSettings(RagdollImpactProfile profile)
+    {
+        switch (profile)
+        {
+            case RagdollImpactProfile.SpinDash:
+                return new RagdollImpactSettings(
+                    ragdollSpinDashTargetName,
+                    spinDashForwardImpulse,
+                    spinDashUpImpulse,
+                    spinDashTorqueImpulse);
+            case RagdollImpactProfile.Throw:
+                return new RagdollImpactSettings(
+                    ragdollThrowTargetName,
+                    throwForwardImpulse,
+                    throwUpImpulse,
+                    throwTorqueImpulse);
+            case RagdollImpactProfile.Gimmick:
+                return new RagdollImpactSettings(
+                    ragdollGimmickTargetName,
+                    gimmickForwardImpulse,
+                    gimmickUpImpulse,
+                    gimmickTorqueImpulse);
+            default:
+                return new RagdollImpactSettings(
+                    ragdollGeneralTargetName,
+                    generalForwardImpulse,
+                    generalUpImpulse,
+                    generalTorqueImpulse);
+        }
+    }
+
+    private Vector3 ResolveImpactDirection(Vector3 sourceImpulse)
+    {
+        Vector3 direction = sourceImpulse;
+        direction.y = 0f;
+
+        if (!IsFinite(direction) || direction.sqrMagnitude <= 0.0001f)
+        {
+            direction = Vector3.ProjectOnPlane(transform.forward, Vector3.up);
+            if (!IsFinite(direction) || direction.sqrMagnitude <= 0.0001f)
+                direction = Vector3.forward;
+        }
+
+        return direction.normalized;
+    }
+
+    private Vector3 BuildProfiledImpulse(RagdollImpactSettings settings, Vector3 direction, Vector3 sourceImpulse)
+    {
+        float forward = Mathf.Max(0f, settings.forwardImpulse);
+        float up = Mathf.Max(0f, settings.upImpulse);
+        float minimum = Mathf.Max(0f, minimumVisibleRagdollImpulse);
+
+        Vector3 impulse = direction * forward + Vector3.up * up;
+        if (minimum > 0f && sourceImpulse.magnitude < minimum && impulse.magnitude < minimum)
+            impulse = direction * minimum;
+
+        return impulse;
+    }
+
+    private bool EnsureRigidbodyCanReceiveImpact(Rigidbody target)
+    {
+        if (target == null)
+            return false;
+
+        if (_temporaryUnlockUntilByBody.ContainsKey(target))
+        {
+            float duration = Mathf.Max(0.02f, impactUnlockDuration);
+            _temporaryUnlockUntilByBody[target] = Time.time + duration;
+            if (target.isKinematic)
+                target.isKinematic = false;
+            target.useGravity = impactUseGravityWhileUnlocked;
+            EnsureTemporaryUnlockCoroutine();
+            return true;
+        }
+
+        if (!target.isKinematic)
+            return true;
+
+        if (!temporaryUnlockTargetRigidbodyForImpact)
+            return false;
+
+        _originalKinematicByBody[target] = target.isKinematic;
+        _originalUseGravityByBody[target] = target.useGravity;
+        if (!_temporaryUnlockBodies.Contains(target))
+            _temporaryUnlockBodies.Add(target);
+
+        target.isKinematic = false;
+        target.useGravity = impactUseGravityWhileUnlocked;
+        _temporaryUnlockUntilByBody[target] = Time.time + Mathf.Max(0.02f, impactUnlockDuration);
+        EnsureTemporaryUnlockCoroutine();
+
+        ImpactLog($"Temporarily unlocked target={target.name} duration={Mathf.Max(0.02f, impactUnlockDuration):0.###}");
+        return true;
+    }
+
+    private void EnsureTemporaryUnlockCoroutine()
+    {
+        if (_temporaryUnlockCoroutine == null && isActiveAndEnabled)
+            _temporaryUnlockCoroutine = StartCoroutine(RestoreTemporaryUnlocksWhenExpired());
+    }
+
+    private IEnumerator RestoreTemporaryUnlocksWhenExpired()
+    {
+        while (_temporaryUnlockUntilByBody.Count > 0)
+        {
+            float now = Time.time;
+            for (int i = _temporaryUnlockBodies.Count - 1; i >= 0; i--)
+            {
+                Rigidbody rb = _temporaryUnlockBodies[i];
+                if (rb == null)
+                {
+                    RemoveTemporaryUnlockBodyAt(i);
+                    continue;
+                }
+
+                if (!_temporaryUnlockUntilByBody.TryGetValue(rb, out float restoreAt))
+                {
+                    RemoveTemporaryUnlockBodyAt(i);
+                    continue;
+                }
+
+                if (now >= restoreAt)
+                    RestoreTemporaryUnlockedBody(rb);
+            }
+
+            yield return null;
+        }
+
+        _temporaryUnlockCoroutine = null;
+    }
+
+    private void RestoreTemporaryUnlockedImpactBodies()
+    {
+        if (_temporaryUnlockCoroutine != null)
+        {
+            StopCoroutine(_temporaryUnlockCoroutine);
+            _temporaryUnlockCoroutine = null;
+        }
+
+        for (int i = _temporaryUnlockBodies.Count - 1; i >= 0; i--)
+        {
+            Rigidbody rb = _temporaryUnlockBodies[i];
+            if (rb != null)
+                RestoreTemporaryUnlockedBody(rb);
+            else
+                RemoveTemporaryUnlockBodyAt(i);
+        }
+    }
+
+    private void RestoreTemporaryUnlockedBody(Rigidbody rb)
+    {
+        if (rb == null)
+            return;
+
+        bool originalKinematic;
+        if (_originalKinematicByBody.TryGetValue(rb, out originalKinematic))
+            rb.isKinematic = originalKinematic;
+
+        bool originalUseGravity;
+        if (_originalUseGravityByBody.TryGetValue(rb, out originalUseGravity))
+            rb.useGravity = originalUseGravity;
+
+        int index = _temporaryUnlockBodies.IndexOf(rb);
+        if (index >= 0)
+            _temporaryUnlockBodies.RemoveAt(index);
+
+        _temporaryUnlockUntilByBody.Remove(rb);
+        _originalKinematicByBody.Remove(rb);
+        _originalUseGravityByBody.Remove(rb);
+
+        ImpactLog($"Restored target={rb.name} kinematic={rb.isKinematic} useGravity={rb.useGravity}");
+    }
+
+    private void RemoveTemporaryUnlockBodyAt(int index)
+    {
+        if (index < 0 || index >= _temporaryUnlockBodies.Count)
+            return;
+
+        Rigidbody rb = _temporaryUnlockBodies[index];
+        _temporaryUnlockBodies.RemoveAt(index);
+        if (rb == null)
+            return;
+
+        _temporaryUnlockUntilByBody.Remove(rb);
+        _originalKinematicByBody.Remove(rb);
+        _originalUseGravityByBody.Remove(rb);
     }
 
     private void ReadPrototypeInput()
@@ -1545,6 +1893,184 @@ public class SugaActiveRagdollController : MonoBehaviour
             _managedRigidbodyOriginalKinematic[i] = _managedRigidbodies[i] != null && _managedRigidbodies[i].isKinematic;
     }
 
+    private void EnsureRagdollImpactBodyCache()
+    {
+        if (_ragdollImpactBodies == null || _ragdollImpactBodies.Length == 0)
+            CacheRagdollImpactBodies();
+        else
+            LogRagdollImpactBodyCacheOnce();
+    }
+
+    private void CacheRagdollImpactBodies()
+    {
+        Rigidbody[] bodies = GetComponentsInChildren<Rigidbody>(true);
+        _ragdollImpactBodies = bodies ?? new Rigidbody[0];
+        _ragdollBodyByLowerName.Clear();
+
+        Rigidbody rootRigidbody = GetComponent<Rigidbody>();
+        for (int i = 0; i < _ragdollImpactBodies.Length; i++)
+        {
+            Rigidbody rb = _ragdollImpactBodies[i];
+            if (rb == null)
+                continue;
+
+            string key = NormalizeRigidbodyName(rb.name);
+            if (string.IsNullOrEmpty(key))
+                continue;
+
+            Rigidbody existing;
+            if (!_ragdollBodyByLowerName.TryGetValue(key, out existing) || existing == rootRigidbody && rb != rootRigidbody)
+                _ragdollBodyByLowerName[key] = rb;
+        }
+
+        LogRagdollImpactBodyCacheOnce();
+    }
+
+    private void LogRagdollImpactBodyCacheOnce()
+    {
+        if (_impactBodyCacheLogged || !activeRagdollImpactDebugLogs)
+            return;
+
+        _impactBodyCacheLogged = true;
+        Rigidbody general = ResolveImpactTarget(ragdollGeneralTargetName);
+        Rigidbody spinDash = ResolveImpactTarget(ragdollSpinDashTargetName);
+        Rigidbody throwTarget = ResolveImpactTarget(ragdollThrowTargetName);
+        ImpactLog(
+            $"Impact body cache count={CountImpactBodies()} " +
+            $"general={GetRigidbodyDebugName(general)} spinDash={GetRigidbodyDebugName(spinDash)} throw={GetRigidbodyDebugName(throwTarget)}");
+    }
+
+    private Rigidbody ResolveImpactTarget(string targetName)
+    {
+        EnsureRagdollImpactBodyCacheWithoutLogging();
+
+        Rigidbody target;
+        if (TryResolveNamedImpactTarget(targetName, out target))
+            return target;
+
+        if (!IsTargetName(targetName, "spine") && TryResolveNamedImpactTarget("spine", out target))
+            return target;
+
+        if (!IsTargetName(targetName, "hips") && TryResolveNamedImpactTarget("hips", out target))
+            return target;
+
+        Rigidbody child = GetFirstChildImpactRigidbody();
+        if (child != null)
+            return child;
+
+        return GetComponent<Rigidbody>();
+    }
+
+    private void EnsureRagdollImpactBodyCacheWithoutLogging()
+    {
+        if (_ragdollImpactBodies != null && _ragdollImpactBodies.Length > 0)
+            return;
+
+        Rigidbody[] bodies = GetComponentsInChildren<Rigidbody>(true);
+        _ragdollImpactBodies = bodies ?? new Rigidbody[0];
+        _ragdollBodyByLowerName.Clear();
+
+        Rigidbody rootRigidbody = GetComponent<Rigidbody>();
+        for (int i = 0; i < _ragdollImpactBodies.Length; i++)
+        {
+            Rigidbody rb = _ragdollImpactBodies[i];
+            if (rb == null)
+                continue;
+
+            string key = NormalizeRigidbodyName(rb.name);
+            if (string.IsNullOrEmpty(key))
+                continue;
+
+            Rigidbody existing;
+            if (!_ragdollBodyByLowerName.TryGetValue(key, out existing) || existing == rootRigidbody && rb != rootRigidbody)
+                _ragdollBodyByLowerName[key] = rb;
+        }
+    }
+
+    private bool TryResolveNamedImpactTarget(string targetName, out Rigidbody target)
+    {
+        target = null;
+        string normalized = NormalizeRigidbodyName(targetName);
+        if (string.IsNullOrEmpty(normalized))
+            return false;
+
+        if (_ragdollBodyByLowerName.TryGetValue(normalized, out target) && target != null)
+            return true;
+
+        Rigidbody rootRigidbody = GetComponent<Rigidbody>();
+        for (int i = 0; i < _ragdollImpactBodies.Length; i++)
+        {
+            Rigidbody rb = _ragdollImpactBodies[i];
+            if (rb == null || rb == rootRigidbody)
+                continue;
+
+            string bodyName = NormalizeRigidbodyName(rb.name);
+            if (bodyName.Contains(normalized))
+            {
+                target = rb;
+                return true;
+            }
+        }
+
+        for (int i = 0; i < _ragdollImpactBodies.Length; i++)
+        {
+            Rigidbody rb = _ragdollImpactBodies[i];
+            if (rb == null)
+                continue;
+
+            string bodyName = NormalizeRigidbodyName(rb.name);
+            if (bodyName.Contains(normalized))
+            {
+                target = rb;
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private Rigidbody GetFirstChildImpactRigidbody()
+    {
+        for (int i = 0; i < _ragdollImpactBodies.Length; i++)
+        {
+            Rigidbody rb = _ragdollImpactBodies[i];
+            if (rb != null && rb.transform != transform)
+                return rb;
+        }
+
+        return null;
+    }
+
+    private int CountImpactBodies()
+    {
+        if (_ragdollImpactBodies == null)
+            return 0;
+
+        int count = 0;
+        for (int i = 0; i < _ragdollImpactBodies.Length; i++)
+        {
+            if (_ragdollImpactBodies[i] != null)
+                count++;
+        }
+
+        return count;
+    }
+
+    private static bool IsTargetName(string value, string expected)
+    {
+        return NormalizeRigidbodyName(value) == NormalizeRigidbodyName(expected);
+    }
+
+    private static string NormalizeRigidbodyName(string value)
+    {
+        return string.IsNullOrWhiteSpace(value) ? string.Empty : value.Trim().ToLowerInvariant();
+    }
+
+    private static string GetRigidbodyDebugName(Rigidbody rb)
+    {
+        return rb != null ? rb.name : "None";
+    }
+
     private static void AddManagedRigidbody(List<Rigidbody> managedRigidbodies, Rigidbody rb)
     {
         if (rb == null || managedRigidbodies.Contains(rb))
@@ -1844,6 +2370,14 @@ public class SugaActiveRagdollController : MonoBehaviour
         }
     }
 
+    private void ImpactLog(string message)
+    {
+        if (!activeRagdollImpactDebugLogs)
+            return;
+
+        Debug.Log($"[SugaRagdoll] {message}", this);
+    }
+
     private void Log(string message)
     {
         if (!enableDebugLogs)
@@ -1855,6 +2389,22 @@ public class SugaActiveRagdollController : MonoBehaviour
     private void Warn(string message)
     {
         Debug.LogWarning($"[SUGA_ACTIVE_RAGDOLL] {message}", this);
+    }
+
+    private readonly struct RagdollImpactSettings
+    {
+        public readonly string targetName;
+        public readonly float forwardImpulse;
+        public readonly float upImpulse;
+        public readonly float torqueImpulse;
+
+        public RagdollImpactSettings(string targetName, float forwardImpulse, float upImpulse, float torqueImpulse)
+        {
+            this.targetName = targetName;
+            this.forwardImpulse = forwardImpulse;
+            this.upImpulse = upImpulse;
+            this.torqueImpulse = torqueImpulse;
+        }
     }
 }
 
