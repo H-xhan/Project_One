@@ -866,7 +866,6 @@ public class PlayerInteractModule : NetworkBehaviour
         Vector3 releasePosition = GetCharacterThrowReleasePosition(throwDirection);
         Quaternion releaseRotation = Quaternion.LookRotation(throwDirection, Vector3.up);
         Vector3 impulse = throwDirection * Mathf.Max(0f, characterThrowForwardImpulse) + Vector3.up * Mathf.Max(0f, characterThrowUpImpulse);
-        ulong actorClientId = OwnerClientId;
         string targetName = GetCharacterGrabDebugName(targetStatus, targetInteract);
 
         CharacterGrabLog($"[PlayerInteract] Character throw started target={targetName} reason={throwReason}");
@@ -876,7 +875,11 @@ public class PlayerInteractModule : NetworkBehaviour
         targetInteract.SafeClearCharacterGrabState("Throw", false);
         targetInteract._regrabImmuneUntil = Time.time + Mathf.Max(0f, characterThrowRegrabImmunitySeconds);
 
-        bool appliedKnockback = targetStatus.ServerTryApplyCombatKnockback(impulse, actorClientId);
+        CharacterGrabLog($"[PlayerInteract] Character throw knockback profile=Throw target={targetName}");
+        bool appliedKnockback = targetStatus.ServerTryApplyThrowCombatKnockback(impulse, OwnerClientId);
+        if (!appliedKnockback)
+            CharacterGrabLog($"[PlayerInteract] Character throw knockback failed target={targetName}");
+
         CharacterGrabLog($"[PlayerInteract] Character throw impulse={impulse} applied={appliedKnockback}");
         CharacterGrabLog($"[PlayerInteract] Character throw completed target={targetName}");
         return appliedKnockback;
