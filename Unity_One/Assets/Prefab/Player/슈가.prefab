@@ -820,6 +820,13 @@ MonoBehaviour:
   characterCarrySetTargetRigidbodyKinematic: 1
   characterCarryFaceGrabberForward: 1
   characterCarryGroundReleaseYOffset: 0.05
+  enableCharacterThrow: 1
+  characterThrowForwardImpulse: 14
+  characterThrowUpImpulse: 3
+  characterThrowReleaseForwardOffset: 0.75
+  characterThrowReleaseUpOffset: 0.35
+  characterThrowRegrabImmunitySeconds: 0.75
+  characterThrowUseCarryAnchorDirection: 1
   enableDebugLogs: 0
 --- !u!114 &8954747350643904218
 MonoBehaviour:
@@ -972,9 +979,15 @@ MonoBehaviour:
   triggerHitWhileKnocked: 0
   enableActiveRagdollHitReaction: 1
   activeRagdollHitImpulseScale: 0
+  useProfiledActiveRagdollImpacts: 1
+  activeRagdollProfileDebugLogs: 0
+  tryDetectSpinDashImpactFromActor: 1
   dropHeldItemOnKnockback: 1
   dropHeldItemOnKnockbackCooldown: 0.35
   enableDropHeldItemOnKnockbackDebugLogs: 0
+  releaseCharacterGrabOnKnockback: 1
+  releaseCharacterGrabOnElimination: 1
+  characterGrabReleaseDebugLogs: 0
   eliminationY: 3
   useRagdollFocusForElimination: 1
   ragdollFocusEliminationYOffset: 3
@@ -2867,7 +2880,29 @@ MonoBehaviour:
   limpUprightScale: 0
   testForwardHitImpulse: {x: 0, y: 1.6, z: -5.8}
   hitTargetRigidbody: {fileID: 8473070558796784137}
-  enableDebugLogs: 0
+  enableProfiledRagdollImpacts: 1
+  ragdollGeneralTargetName: spine
+  ragdollSpinDashTargetName: spine
+  ragdollThrowTargetName: hips
+  ragdollGimmickTargetName: spine
+  generalForwardImpulse: 6
+  generalUpImpulse: 2
+  generalTorqueImpulse: 4
+  spinDashForwardImpulse: 8
+  spinDashUpImpulse: 2.5
+  spinDashTorqueImpulse: 5
+  throwForwardImpulse: 12
+  throwUpImpulse: 4
+  throwTorqueImpulse: 4
+  gimmickForwardImpulse: 6
+  gimmickUpImpulse: 2
+  gimmickTorqueImpulse: 4
+  minimumVisibleRagdollImpulse: 2
+  temporaryUnlockTargetRigidbodyForImpact: 1
+  impactUnlockDuration: 0.35
+  impactUseGravityWhileUnlocked: 1
+  activeRagdollImpactDebugLogs: 1
+  enableDebugLogs: 1
 --- !u!54 &4312827499112621713
 Rigidbody:
   m_ObjectHideFlags: 0

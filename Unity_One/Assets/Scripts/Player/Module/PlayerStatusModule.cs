@@ -3,6 +3,12 @@ using UnityEngine;
 
 public class PlayerStatusModule : NetworkBehaviour, IDamageable
 {
+    private enum ActiveRagdollImpactSource
+    {
+        General,
+        SpinDash
+    }
+
     [Header("Knockback")]
     [Tooltip("넉백/다운 시 물리를 적용할 루트 Rigidbody")]
     [SerializeField] private Rigidbody rootRigidbody;
@@ -178,6 +184,15 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
     [Tooltip("Active Ragdoll 피격 반응에 전달할 넉백 힘 배율입니다.")]
     [SerializeField] private float activeRagdollHitImpulseScale = 1f;
 
+    [Tooltip("PlayerStatusModule에서 SugaActiveRagdollController profile impact API를 사용할지 여부입니다.")]
+    [SerializeField] private bool useProfiledActiveRagdollImpacts = true;
+
+    [Tooltip("PlayerStatusModule의 active ragdoll profile routing 로그를 출력할지 여부입니다.")]
+    [SerializeField] private bool activeRagdollProfileDebugLogs = false;
+
+    [Tooltip("actorClientId 또는 기존 context로 SpinDash hit를 식별할 수 있으면 SpinDash profile로 라우팅합니다.")]
+    [SerializeField] private bool tryDetectSpinDashImpactFromActor = true;
+
     [Header("Knockback Auto Drop")]
     [Tooltip("공격이나 맵 기믹 넉백으로 플레이어가 강제로 날아갈 때 들고 있는 아이템을 자동으로 떨어뜨릴지 여부입니다.")]
     [SerializeField] private bool dropHeldItemOnKnockback = true;
@@ -295,7 +310,7 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
     private bool hasLoggedEliminationGateState;
     private bool hasReachedSafePlayingPosition;
     private GameStateManager.GameState lastLoggedGameState;
-    private SugaActiveRagdollController _activeRagdollController;
+    private SugaActiveRagdollController _cachedSugaRagdollController;
     private bool hasLoggedMissingActiveRagdollController;
     private Vector3 _lastRagdollFocusForRootSync;
     private float _lastRagdollFocusForRootSyncTime;
@@ -482,7 +497,8 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
             return false;
 
         bool recordedContributor = ServerRecordRecentCombatFallContributor(actorClientId);
-        ApplyKnockbackServerInternal(impulse, false);
+        ActiveRagdollImpactSource impactSource = ResolveCombatActiveRagdollImpactSource(actorClientId);
+        ApplyKnockbackServerInternal(impulse, false, impactSource);
         return recordedContributor;
     }
 
@@ -527,7 +543,7 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
         return true;
     }
 
-    private void ApplyKnockbackServerInternal(Vector3 impulse, bool clearCombatContributor)
+    private void ApplyKnockbackServerInternal(Vector3 impulse, bool clearCombatContributor, ActiveRagdollImpactSource impactSource = ActiveRagdollImpactSource.General)
     {
         if (!IsServer) return;
         if (isEliminated) return;
@@ -548,7 +564,7 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
         ServerReleaseCharacterGrabForStatusEvent("Knockback", false);
         ServerTryDropHeldItemBecauseOfKnockback("Knockback");
         BeginKnockback(impulse);
-        TryApplyActiveRagdollHit(impulse);
+        TryApplyActiveRagdollHit(impulse, impactSource);
     }
 
     public void ForceRecoverServer()
@@ -594,7 +610,7 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
             gameStateManager = FindFirstObjectByType<GameStateManager>();
 
         ResolveRoundMissionManager();
-        ResolveActiveRagdollController();
+        ResolveSugaActiveRagdollController();
         rootTransform = rootNetObj != null ? rootNetObj.transform : transform.root;
     }
 
@@ -604,31 +620,40 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
             _roundMissionManager = FindFirstObjectByType<RoundMissionManager>();
     }
 
-    private SugaActiveRagdollController ResolveActiveRagdollController()
+    private SugaActiveRagdollController ResolveSugaActiveRagdollController()
     {
-        if (_activeRagdollController != null)
-            return _activeRagdollController;
+        if (_cachedSugaRagdollController != null)
+            return _cachedSugaRagdollController;
 
-        _activeRagdollController = GetComponent<SugaActiveRagdollController>();
+        _cachedSugaRagdollController = GetComponent<SugaActiveRagdollController>();
 
-        if (_activeRagdollController == null)
-            _activeRagdollController = GetComponentInParent<SugaActiveRagdollController>();
+        if (_cachedSugaRagdollController == null)
+            _cachedSugaRagdollController = GetComponentInParent<SugaActiveRagdollController>();
 
-        if (_activeRagdollController == null)
-            _activeRagdollController = GetComponentInChildren<SugaActiveRagdollController>(true);
+        if (_cachedSugaRagdollController == null)
+            _cachedSugaRagdollController = GetComponentInChildren<SugaActiveRagdollController>(true);
 
-        if (_activeRagdollController != null)
+        if (_cachedSugaRagdollController != null)
             hasLoggedMissingActiveRagdollController = false;
 
-        return _activeRagdollController;
+        return _cachedSugaRagdollController;
     }
 
     private void TryApplyActiveRagdollHit(Vector3 impulse)
     {
+        TryApplyActiveRagdollHit(impulse, ActiveRagdollImpactSource.General);
+    }
+
+    private void TryApplyActiveRagdollHit(Vector3 impulse, ActiveRagdollImpactSource source)
+    {
         if (!enableActiveRagdollHitReaction)
             return;
 
-        SugaActiveRagdollController controller = ResolveActiveRagdollController();
+        Vector3 ragdollImpulse = impulse * activeRagdollHitImpulseScale;
+        if (TryApplyProfiledActiveRagdollHit(ragdollImpulse, source))
+            return;
+
+        SugaActiveRagdollController controller = ResolveSugaActiveRagdollController();
         if (controller == null)
         {
             if (!hasLoggedMissingActiveRagdollController)
@@ -640,9 +665,82 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
             return;
         }
 
-        Vector3 ragdollImpulse = impulse * activeRagdollHitImpulseScale;
         controller.ApplyHit(ragdollImpulse);
         Log("[PlayerStatus] Active ragdoll hit reaction triggered.");
+    }
+
+    private bool TryApplyProfiledActiveRagdollHit(Vector3 impulse, ActiveRagdollImpactSource source)
+    {
+        if (!useProfiledActiveRagdollImpacts)
+            return false;
+
+        SugaActiveRagdollController controller = ResolveSugaActiveRagdollController();
+        if (controller == null)
+        {
+            LogActiveRagdollProfile("[PlayerStatus] Active ragdoll profile skipped reason=no-controller");
+            return false;
+        }
+
+        bool applied = source == ActiveRagdollImpactSource.SpinDash
+            ? controller.ApplySpinDashImpact(impulse)
+            : controller.ApplyGeneralImpact(impulse);
+
+        LogActiveRagdollProfile($"[PlayerStatus] Active ragdoll profile={source} impulse={impulse} applied={applied}");
+        return true;
+    }
+
+    private ActiveRagdollImpactSource ResolveCombatActiveRagdollImpactSource(ulong actorClientId)
+    {
+        if (TryResolveSpinDashImpactSourceFromActor(actorClientId))
+            return ActiveRagdollImpactSource.SpinDash;
+
+        return ActiveRagdollImpactSource.General;
+    }
+
+    private bool TryResolveSpinDashImpactSourceFromActor(ulong actorClientId)
+    {
+        if (!tryDetectSpinDashImpactFromActor)
+        {
+            LogActiveRagdollProfile("[PlayerStatus] SpinDash source detection disabled; using General");
+            return false;
+        }
+
+        if (!TryResolveActorLocomotionModule(actorClientId, out PlayerLocomotionModule actorLocomotion))
+        {
+            LogActiveRagdollProfile("[PlayerStatus] SpinDash source unavailable; using General");
+            return false;
+        }
+
+        if (!actorLocomotion.IsSpinDashing)
+            return false;
+
+        LogActiveRagdollProfile("[PlayerStatus] SpinDash source detected from actor IsSpinDashing.");
+        return true;
+    }
+
+    private bool TryResolveActorLocomotionModule(ulong actorClientId, out PlayerLocomotionModule actorLocomotion)
+    {
+        actorLocomotion = null;
+
+        if (actorClientId == ulong.MaxValue)
+            return false;
+
+        NetworkManager networkManager = NetworkManager.Singleton;
+        if (networkManager == null || !networkManager.IsListening)
+            return false;
+
+        if (!networkManager.ConnectedClients.TryGetValue(actorClientId, out var actorClient) || actorClient == null)
+            return false;
+
+        NetworkObject actorObject = actorClient.PlayerObject;
+        if (actorObject == null)
+            return false;
+
+        actorLocomotion = actorObject.GetComponentInChildren<PlayerLocomotionModule>(true);
+        if (actorLocomotion == null)
+            actorLocomotion = actorObject.GetComponentInParent<PlayerLocomotionModule>();
+
+        return actorLocomotion != null;
     }
 
     private bool CanStartKnockbackServer()
@@ -1160,7 +1258,7 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
         if (!useRagdollFocusForElimination)
             return rootY;
 
-        SugaActiveRagdollController controller = ResolveActiveRagdollController();
+        SugaActiveRagdollController controller = ResolveSugaActiveRagdollController();
         if (controller == null)
             return rootY;
 
@@ -1707,7 +1805,7 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
 
     private bool TryCacheRagdollFocusForRootSync(bool requireActive)
     {
-        SugaActiveRagdollController controller = ResolveActiveRagdollController();
+        SugaActiveRagdollController controller = ResolveSugaActiveRagdollController();
         if (controller == null)
             return false;
 
@@ -2186,6 +2284,14 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
     private void Log(string message)
     {
         if (!enableDebugLogs)
+            return;
+
+        Debug.Log(message, this);
+    }
+
+    private void LogActiveRagdollProfile(string message)
+    {
+        if (!activeRagdollProfileDebugLogs && !enableDebugLogs)
             return;
 
         Debug.Log(message, this);
