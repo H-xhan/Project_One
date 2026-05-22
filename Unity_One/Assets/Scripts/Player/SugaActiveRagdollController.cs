@@ -888,7 +888,7 @@ public class SugaActiveRagdollController : MonoBehaviour
     private void ClearManagedRigidbodyVelocities()
     {
         for (int i = 0; i < _managedRigidbodies.Length; i++)
-            ClearRigidbodyVelocity(_managedRigidbodies[i]);
+            TryClearRigidbodyVelocity(_managedRigidbodies[i]);
     }
 
     private void ActivateRagdollRuntime()
@@ -1248,6 +1248,8 @@ public class SugaActiveRagdollController : MonoBehaviour
         if (rb == null)
             return;
 
+        TryClearRigidbodyVelocity(rb);
+
         bool originalKinematic;
         if (_originalKinematicByBody.TryGetValue(rb, out originalKinematic))
             rb.isKinematic = originalKinematic;
@@ -1502,8 +1504,7 @@ public class SugaActiveRagdollController : MonoBehaviour
             _hasOriginalCoreKinematicState = true;
         }
 
-        SetLinearVelocity(coreRigidbody, Vector3.zero);
-        coreRigidbody.angularVelocity = Vector3.zero;
+        TryClearRigidbodyVelocity(coreRigidbody);
         coreRigidbody.isKinematic = true;
 
         if (snapCoreToRootOnRagdollActivation)
@@ -1580,11 +1581,10 @@ public class SugaActiveRagdollController : MonoBehaviour
 
         if (coreRigidbody != null)
         {
-            SetLinearVelocity(coreRigidbody, Vector3.zero);
-            coreRigidbody.angularVelocity = Vector3.zero;
-
             if (restoreOriginalState && _hasOriginalCoreKinematicState)
                 coreRigidbody.isKinematic = _originalCoreIsKinematic;
+
+            TryClearRigidbodyVelocity(coreRigidbody);
         }
 
         _coreKinematicAnchorApplied = false;
@@ -1614,7 +1614,7 @@ public class SugaActiveRagdollController : MonoBehaviour
         if (maxDistance > 0f && distance >= maxDistance)
         {
             nextPosition = GetCoreRootAnchorCorrectionPosition(coreRigidbody.position, targetPosition, distance);
-            ClearRigidbodyVelocity(coreRigidbody);
+            TryClearRigidbodyVelocity(coreRigidbody);
             Log("[SUGA_ACTIVE_RAGDOLL] Core root anchor max-distance correction applied.");
         }
         else if (dampCoreVelocityWhileAnchored)
@@ -1657,7 +1657,7 @@ public class SugaActiveRagdollController : MonoBehaviour
         }
 
         if (correctedPosition || dampCoreVelocityWhileAnchored)
-            ClearRigidbodyVelocity(coreRigidbody);
+            TryClearRigidbodyVelocity(coreRigidbody);
     }
 
     private Vector3 GetCoreRootAnchorCorrectionPosition(Vector3 currentPosition, Vector3 targetPosition, float distance)
@@ -1726,22 +1726,22 @@ public class SugaActiveRagdollController : MonoBehaviour
         float maxVelocity = Mathf.Max(0f, coreRootAnchorMaxVelocity);
         if (maxVelocity <= 0f)
         {
-            ClearRigidbodyVelocity(coreRigidbody);
+            TryClearRigidbodyVelocity(coreRigidbody);
             return;
         }
 
         Vector3 velocity = GetLinearVelocity(coreRigidbody);
         if (!IsFinite(velocity))
         {
-            SetLinearVelocity(coreRigidbody, Vector3.zero);
+            TrySetLinearVelocity(coreRigidbody, Vector3.zero);
         }
         else if (velocity.magnitude > maxVelocity)
         {
-            SetLinearVelocity(coreRigidbody, Vector3.ClampMagnitude(velocity, maxVelocity));
+            TrySetLinearVelocity(coreRigidbody, Vector3.ClampMagnitude(velocity, maxVelocity));
         }
 
         if (!IsFinite(coreRigidbody.angularVelocity))
-            coreRigidbody.angularVelocity = Vector3.zero;
+            TrySetAngularVelocity(coreRigidbody, Vector3.zero);
     }
 
     private Vector3 GetMoveDirection()
@@ -2275,16 +2275,26 @@ public class SugaActiveRagdollController : MonoBehaviour
 #endif
     }
 
-    private static void SetLinearVelocity(Rigidbody rb, Vector3 velocity)
+    private static bool TrySetLinearVelocity(Rigidbody rb, Vector3 velocity)
     {
-        if (rb == null)
-            return;
+        if (rb == null || rb.isKinematic)
+            return false;
 
 #if UNITY_6000_0_OR_NEWER
         rb.linearVelocity = velocity;
 #else
         rb.velocity = velocity;
 #endif
+        return true;
+    }
+
+    private static bool TrySetAngularVelocity(Rigidbody rb, Vector3 angularVelocity)
+    {
+        if (rb == null || rb.isKinematic)
+            return false;
+
+        rb.angularVelocity = angularVelocity;
+        return true;
     }
 
     private static void SanitizeRigidbodyVelocity(Rigidbody rb)
@@ -2296,19 +2306,20 @@ public class SugaActiveRagdollController : MonoBehaviour
             return;
 
         if (!IsFinite(GetLinearVelocity(rb)))
-            SetLinearVelocity(rb, Vector3.zero);
+            TrySetLinearVelocity(rb, Vector3.zero);
 
         if (!IsFinite(rb.angularVelocity))
-            rb.angularVelocity = Vector3.zero;
+            TrySetAngularVelocity(rb, Vector3.zero);
     }
 
-    private static void ClearRigidbodyVelocity(Rigidbody rb)
+    private static bool TryClearRigidbodyVelocity(Rigidbody rb)
     {
         if (rb == null || rb.isKinematic)
-            return;
+            return false;
 
-        SetLinearVelocity(rb, Vector3.zero);
-        rb.angularVelocity = Vector3.zero;
+        TrySetLinearVelocity(rb, Vector3.zero);
+        TrySetAngularVelocity(rb, Vector3.zero);
+        return true;
     }
 
     private static void SetRigidbodyDamping(Rigidbody rb, float linearDamping, float angularDamping)

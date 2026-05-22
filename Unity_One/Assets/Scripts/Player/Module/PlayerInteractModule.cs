@@ -275,10 +275,11 @@ public class PlayerInteractModule : NetworkBehaviour
         CleanupCharacterGrabOnLifecycle("disable");
     }
 
-    private void OnDestroy()
+    public override void OnDestroy()
     {
         ClearExternalHeldItemPoseOverrideInternal("OnDestroy", false);
         CleanupCharacterGrabOnLifecycle("destroy");
+        base.OnDestroy();
     }
 
     private void AutoFindRefs()

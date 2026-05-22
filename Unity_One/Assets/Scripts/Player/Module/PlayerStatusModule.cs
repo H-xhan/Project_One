@@ -7,7 +7,8 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
     {
         General,
         SpinDash,
-        Throw
+        Throw,
+        Gimmick
     }
 
     [Header("Knockback")]
@@ -60,9 +61,6 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
 
     [Tooltip("기상 애니메이션 중 CharacterController를 계속 끌지")]
     [SerializeField] private bool disableControllerDuringStandUp = true;
-
-    [Tooltip("애니메이션 이벤트가 누락됐을 때 강제로 standing으로 복귀시키는 최대 대기 시간(초)")]
-    [SerializeField] private float standUpFallbackTime = 3.6f;
 
     [Tooltip("Stand-up 애니메이션이 이 normalized time 이상 진행된 뒤에만 조작 잠금을 풀 수 있습니다.")]
     [SerializeField] private float standUpFinishNormalizedTime = 0.98f;
@@ -503,6 +501,17 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
         return ServerTryApplyCombatKnockbackInternal(impulse, actorClientId, true, ActiveRagdollImpactSource.Throw);
     }
 
+    public bool ServerTryApplyGimmickKnockback(Vector3 impulse)
+    {
+        return ServerTryApplyGimmickKnockback(impulse, ulong.MaxValue);
+    }
+
+    public bool ServerTryApplyGimmickKnockback(Vector3 impulse, ulong actorClientId)
+    {
+        LogActiveRagdollProfile($"[PlayerStatus] Gimmick knockback requested actor={actorClientId}");
+        return ServerTryApplyCombatKnockbackInternal(impulse, actorClientId, true, ActiveRagdollImpactSource.Gimmick);
+    }
+
     private bool ServerTryApplyCombatKnockbackInternal(
         Vector3 impulse,
         ulong actorClientId,
@@ -711,6 +720,9 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
                 break;
             case ActiveRagdollImpactSource.Throw:
                 applied = controller.ApplyThrowImpact(impulse);
+                break;
+            case ActiveRagdollImpactSource.Gimmick:
+                applied = controller.ApplyGimmickImpact(impulse);
                 break;
             default:
                 applied = controller.ApplyGeneralImpact(impulse);

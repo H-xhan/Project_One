@@ -190,9 +190,6 @@ public class PlayerLocomotionModule : NetworkBehaviour
     [Tooltip("이 값보다 작은 전진/회전 입력은 무시합니다.")]
     [SerializeField] private float moveFacingInputDeadzone = 0.01f;
 
-    [Tooltip("정지 상태에서만 적용할 수동 yaw 입력 배율입니다.")]
-    [SerializeField] private float idleYawInputScale = 0.35f;
-
     [Header("Body Separation")]
     [Tooltip("플레이어 몸 분리 검사에 사용할 충돌 레이어 마스크입니다.")]
     [SerializeField] private LayerMask bodyBlockerMask;
@@ -365,12 +362,13 @@ public class PlayerLocomotionModule : NetworkBehaviour
         StopSpinDashVisualFeedback();
     }
 
-    private void OnDestroy()
+    public override void OnDestroy()
     {
         _isProcessingSpinDashProfileHit = false;
         ClearSpinDashHitState();
         StopSpinDashFeedbackLocal();
         RestoreSpinDashFeedbackVisualLocal();
+        base.OnDestroy();
     }
 
     public bool TickServer(Vector2 moveInput, float yawDelta, bool jumpPressed, bool sprintHeld)

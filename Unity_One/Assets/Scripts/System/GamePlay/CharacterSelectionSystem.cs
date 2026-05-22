@@ -155,7 +155,7 @@ public class CharacterSelectionSystem : NetworkBehaviour
         base.OnNetworkDespawn();
     }
 
-    private void OnDestroy()
+    public override void OnDestroy()
     {
         UnregisterNetworkManagerCallbacks();
         UnsubscribeSelectionList();
@@ -166,6 +166,8 @@ public class CharacterSelectionSystem : NetworkBehaviour
             selectedCharacters.Dispose();
             selectedCharacters = null;
         }
+
+        base.OnDestroy();
     }
 
     private void Update()

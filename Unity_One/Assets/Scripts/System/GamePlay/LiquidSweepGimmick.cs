@@ -24,31 +24,31 @@ public class LiquidSweepGimmick : NetworkBehaviour
     [System.Serializable]
     private struct SweepLane
     {
-        [Tooltip("스윕 경로 이름입니다. 디버그와 구분용입니다.")]
+        [SerializeField, Tooltip("스윕 경로 이름입니다. 디버그와 구분용입니다.")]
         public string name;
 
-        [Tooltip("이 스윕 경로의 시작 위치입니다. 비어 있으면 기본 Sweep Origin을 사용합니다.")]
+        [SerializeField, Tooltip("이 스윕 경로의 시작 위치입니다. 비어 있으면 기본 Sweep Origin을 사용합니다.")]
         public Transform origin;
 
-        [Tooltip("이 스윕 경로의 진행 방향입니다.")]
+        [SerializeField, Tooltip("이 스윕 경로의 진행 방향입니다.")]
         public Vector3 direction;
 
-        [Tooltip("이 스윕 경로의 이동 거리입니다. 0 이하이면 기본 Sweep Distance를 사용합니다.")]
+        [SerializeField, Tooltip("이 스윕 경로의 이동 거리입니다. 0 이하이면 기본 Sweep Distance를 사용합니다.")]
         public float distance;
 
-        [Tooltip("이 스윕 경로의 폭입니다. 0 이하이면 기본 Sweep Width를 사용합니다.")]
+        [SerializeField, Tooltip("이 스윕 경로의 폭입니다. 0 이하이면 기본 Sweep Width를 사용합니다.")]
         public float width;
 
-        [Tooltip("이 스윕 경로의 앞뒤 두께입니다. 0 이하이면 기본 Sweep Depth를 사용합니다.")]
+        [SerializeField, Tooltip("이 스윕 경로의 앞뒤 두께입니다. 0 이하이면 기본 Sweep Depth를 사용합니다.")]
         public float depth;
 
-        [Tooltip("이 스윕 경로의 잔여 미끄럼 구역 중심입니다. 비어 있으면 스윕 경로 중앙을 사용합니다.")]
+        [SerializeField, Tooltip("이 스윕 경로의 잔여 미끄럼 구역 중심입니다. 비어 있으면 스윕 경로 중앙을 사용합니다.")]
         public Transform residueCenter;
 
-        [Tooltip("이 스윕 경로의 잔여 미끄럼 구역 크기입니다. X/Z가 0 이하이면 기본 Residue Area Size를 사용합니다.")]
+        [SerializeField, Tooltip("이 스윕 경로의 잔여 미끄럼 구역 크기입니다. X/Z가 0 이하이면 기본 Residue Area Size를 사용합니다.")]
         public Vector3 residueSize;
 
-        [Tooltip("이 경로가 랜덤 선택될 가중치입니다. 0 이하이면 선택되지 않습니다.")]
+        [SerializeField, Tooltip("이 경로가 랜덤 선택될 가중치입니다. 0 이하이면 선택되지 않습니다.")]
         public float weight;
     }
 
