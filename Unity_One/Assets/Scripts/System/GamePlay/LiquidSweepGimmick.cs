@@ -467,9 +467,9 @@ public class LiquidSweepGimmick : NetworkBehaviour
                 continue;
             }
 
-            LogSourceDebug(SourceSweep, $"Applying knockback to {status.name} impulse={impulse}, hitPlayerOnlyOncePerSweep={hitPlayerOnlyOncePerSweep}, {FormatStatusState(status)}");
-            status.ApplyKnockbackServer(impulse);
-            LogSourceDebug(SourceSweep, $"Applied knockback to {status.name}");
+            LogSourceDebug(SourceSweep, $"Requesting Gimmick knockback for {status.name} impulse={impulse}, hitPlayerOnlyOncePerSweep={hitPlayerOnlyOncePerSweep}, {FormatStatusState(status)}");
+            status.ServerTryApplyGimmickKnockback(impulse);
+            LogSourceDebug(SourceSweep, $"Requested Gimmick knockback for {status.name}");
             _sweepTickPlayers.Add(status);
             _sweepHitPlayers.Add(status);
             Log($"{LogPrefix} Sweep hit player: {status.name}, impulse:{impulse}");
