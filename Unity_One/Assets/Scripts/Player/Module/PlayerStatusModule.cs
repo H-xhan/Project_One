@@ -6,7 +6,8 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
     private enum ActiveRagdollImpactSource
     {
         General,
-        SpinDash
+        SpinDash,
+        Throw
     }
 
     [Header("Knockback")]
@@ -493,11 +494,32 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
 
     public bool ServerTryApplyCombatKnockback(Vector3 impulse, ulong actorClientId)
     {
+        return ServerTryApplyCombatKnockbackInternal(impulse, actorClientId, false, ActiveRagdollImpactSource.General);
+    }
+
+    public bool ServerTryApplyThrowCombatKnockback(Vector3 impulse, ulong actorClientId)
+    {
+        LogActiveRagdollProfile($"[PlayerStatus] Throw combat knockback requested actor={actorClientId}");
+        return ServerTryApplyCombatKnockbackInternal(impulse, actorClientId, true, ActiveRagdollImpactSource.Throw);
+    }
+
+    private bool ServerTryApplyCombatKnockbackInternal(
+        Vector3 impulse,
+        ulong actorClientId,
+        bool hasExplicitImpactSource,
+        ActiveRagdollImpactSource explicitImpactSource)
+    {
         if (!CanStartKnockbackServer())
             return false;
 
         bool recordedContributor = ServerRecordRecentCombatFallContributor(actorClientId);
-        ActiveRagdollImpactSource impactSource = ResolveCombatActiveRagdollImpactSource(actorClientId);
+        ActiveRagdollImpactSource impactSource = hasExplicitImpactSource
+            ? explicitImpactSource
+            : ResolveCombatActiveRagdollImpactSource(actorClientId);
+
+        if (hasExplicitImpactSource)
+            LogActiveRagdollProfile($"[PlayerStatus] Active ragdoll explicit profile={impactSource}");
+
         ApplyKnockbackServerInternal(impulse, false, impactSource);
         return recordedContributor;
     }
@@ -681,9 +703,19 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
             return false;
         }
 
-        bool applied = source == ActiveRagdollImpactSource.SpinDash
-            ? controller.ApplySpinDashImpact(impulse)
-            : controller.ApplyGeneralImpact(impulse);
+        bool applied;
+        switch (source)
+        {
+            case ActiveRagdollImpactSource.SpinDash:
+                applied = controller.ApplySpinDashImpact(impulse);
+                break;
+            case ActiveRagdollImpactSource.Throw:
+                applied = controller.ApplyThrowImpact(impulse);
+                break;
+            default:
+                applied = controller.ApplyGeneralImpact(impulse);
+                break;
+        }
 
         LogActiveRagdollProfile($"[PlayerStatus] Active ragdoll profile={source} impulse={impulse} applied={applied}");
         return true;
