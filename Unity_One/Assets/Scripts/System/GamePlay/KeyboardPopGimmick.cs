@@ -376,9 +376,9 @@ public class KeyboardPopGimmick : NetworkBehaviour
                     horizontalDirection.Normalize();
 
                 Vector3 impulse = horizontalDirection * knockbackForce + Vector3.up * upwardForce;
-                status.ApplyKnockbackServer(impulse);
+                status.ServerTryApplyGimmickKnockback(impulse);
                 _hitPlayers.Add(status);
-                Log($"{LogPrefix} Hit player: {status.name}, key:{key.name}, impulse:{impulse}");
+                Log($"{LogPrefix} Gimmick knockback requested target={status.name}, key:{key.name}, impulse:{impulse}");
             }
         }
     }
