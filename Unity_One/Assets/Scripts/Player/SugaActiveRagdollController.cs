@@ -263,6 +263,58 @@ public class SugaActiveRagdollController : MonoBehaviour
     [SerializeField, Tooltip("Gimmick profile의 torque impulse입니다.")]
     private float gimmickTorqueImpulse = 4f;
 
+    [Header("Demo Impact Tuning Override")]
+    [SerializeField, Tooltip("6월 시연용으로 profile별 impact 값을 기존 Inspector 값 대신 데모 튜닝값으로 적용합니다.")]
+    private bool enableDemoImpactTuningOverride = true;
+
+    [SerializeField, Tooltip("Demo General hit profile의 전방 impulse입니다.")]
+    private float demoGeneralForwardImpulse = 8f;
+
+    [SerializeField, Tooltip("Demo General hit profile의 상방 impulse입니다.")]
+    private float demoGeneralUpImpulse = 2.5f;
+
+    [SerializeField, Tooltip("Demo General hit profile의 torque impulse입니다.")]
+    private float demoGeneralTorqueImpulse = 6f;
+
+    [SerializeField, Tooltip("Demo General hit profile의 temporary unlock duration입니다.")]
+    private float demoGeneralUnlockDuration = 0.35f;
+
+    [SerializeField, Tooltip("Demo SpinDash hit profile의 전방 impulse입니다.")]
+    private float demoSpinDashForwardImpulse = 14f;
+
+    [SerializeField, Tooltip("Demo SpinDash hit profile의 상방 impulse입니다.")]
+    private float demoSpinDashUpImpulse = 4f;
+
+    [SerializeField, Tooltip("Demo SpinDash hit profile의 torque impulse입니다.")]
+    private float demoSpinDashTorqueImpulse = 9f;
+
+    [SerializeField, Tooltip("Demo SpinDash hit profile의 temporary unlock duration입니다.")]
+    private float demoSpinDashUnlockDuration = 0.42f;
+
+    [SerializeField, Tooltip("Demo Throw profile의 전방 impulse입니다.")]
+    private float demoThrowForwardImpulse = 18f;
+
+    [SerializeField, Tooltip("Demo Throw profile의 상방 impulse입니다.")]
+    private float demoThrowUpImpulse = 6f;
+
+    [SerializeField, Tooltip("Demo Throw profile의 torque impulse입니다.")]
+    private float demoThrowTorqueImpulse = 8f;
+
+    [SerializeField, Tooltip("Demo Throw profile의 temporary unlock duration입니다.")]
+    private float demoThrowUnlockDuration = 0.45f;
+
+    [SerializeField, Tooltip("Demo Gimmick profile의 전방 impulse입니다.")]
+    private float demoGimmickForwardImpulse = 12f;
+
+    [SerializeField, Tooltip("Demo Gimmick profile의 상방 impulse입니다.")]
+    private float demoGimmickUpImpulse = 4f;
+
+    [SerializeField, Tooltip("Demo Gimmick profile의 torque impulse입니다.")]
+    private float demoGimmickTorqueImpulse = 8f;
+
+    [SerializeField, Tooltip("Demo Gimmick profile의 temporary unlock duration입니다.")]
+    private float demoGimmickUnlockDuration = 0.42f;
+
     [SerializeField, Tooltip("너무 작은 impulse라도 최소한 보이는 반응을 만들기 위한 최소값입니다.")]
     private float minimumVisibleRagdollImpulse = 2f;
 
@@ -1052,7 +1104,8 @@ public class SugaActiveRagdollController : MonoBehaviour
             return false;
         }
 
-        if (!EnsureRigidbodyCanReceiveImpact(target))
+        float unlockDuration = ResolveImpactUnlockDuration(settings.unlockDuration);
+        if (!EnsureRigidbodyCanReceiveImpact(target, unlockDuration))
         {
             ImpactLog($"Impact skipped reason=kinematic target={target.name} profile={profile}");
             return false;
@@ -1064,7 +1117,7 @@ public class SugaActiveRagdollController : MonoBehaviour
         if (torque.sqrMagnitude > 0.0001f)
             target.AddTorque(torque, ForceMode.Impulse);
 
-        ImpactLog($"Impact profile={profile} target={target.name} impulse={impulse} torque={torque}");
+        ImpactLog($"Impact profile={profile} target={target.name} impulse={impulse} torque={torque} demoOverride={settings.demoOverride} unlock={unlockDuration:0.###}");
         return true;
     }
 
@@ -1096,6 +1149,9 @@ public class SugaActiveRagdollController : MonoBehaviour
 
     private RagdollImpactSettings GetImpactSettings(RagdollImpactProfile profile)
     {
+        if (enableDemoImpactTuningOverride)
+            return GetDemoImpactSettings(profile);
+
         switch (profile)
         {
             case RagdollImpactProfile.SpinDash:
@@ -1103,25 +1159,72 @@ public class SugaActiveRagdollController : MonoBehaviour
                     ragdollSpinDashTargetName,
                     spinDashForwardImpulse,
                     spinDashUpImpulse,
-                    spinDashTorqueImpulse);
+                    spinDashTorqueImpulse,
+                    impactUnlockDuration,
+                    false);
             case RagdollImpactProfile.Throw:
                 return new RagdollImpactSettings(
                     ragdollThrowTargetName,
                     throwForwardImpulse,
                     throwUpImpulse,
-                    throwTorqueImpulse);
+                    throwTorqueImpulse,
+                    impactUnlockDuration,
+                    false);
             case RagdollImpactProfile.Gimmick:
                 return new RagdollImpactSettings(
                     ragdollGimmickTargetName,
                     gimmickForwardImpulse,
                     gimmickUpImpulse,
-                    gimmickTorqueImpulse);
+                    gimmickTorqueImpulse,
+                    impactUnlockDuration,
+                    false);
             default:
                 return new RagdollImpactSettings(
                     ragdollGeneralTargetName,
                     generalForwardImpulse,
                     generalUpImpulse,
-                    generalTorqueImpulse);
+                    generalTorqueImpulse,
+                    impactUnlockDuration,
+                    false);
+        }
+    }
+
+    private RagdollImpactSettings GetDemoImpactSettings(RagdollImpactProfile profile)
+    {
+        switch (profile)
+        {
+            case RagdollImpactProfile.SpinDash:
+                return new RagdollImpactSettings(
+                    ragdollSpinDashTargetName,
+                    demoSpinDashForwardImpulse,
+                    demoSpinDashUpImpulse,
+                    demoSpinDashTorqueImpulse,
+                    demoSpinDashUnlockDuration,
+                    true);
+            case RagdollImpactProfile.Throw:
+                return new RagdollImpactSettings(
+                    ragdollThrowTargetName,
+                    demoThrowForwardImpulse,
+                    demoThrowUpImpulse,
+                    demoThrowTorqueImpulse,
+                    demoThrowUnlockDuration,
+                    true);
+            case RagdollImpactProfile.Gimmick:
+                return new RagdollImpactSettings(
+                    ragdollGimmickTargetName,
+                    demoGimmickForwardImpulse,
+                    demoGimmickUpImpulse,
+                    demoGimmickTorqueImpulse,
+                    demoGimmickUnlockDuration,
+                    true);
+            default:
+                return new RagdollImpactSettings(
+                    ragdollGeneralTargetName,
+                    demoGeneralForwardImpulse,
+                    demoGeneralUpImpulse,
+                    demoGeneralTorqueImpulse,
+                    demoGeneralUnlockDuration,
+                    true);
         }
     }
 
@@ -1153,14 +1256,25 @@ public class SugaActiveRagdollController : MonoBehaviour
         return impulse;
     }
 
-    private bool EnsureRigidbodyCanReceiveImpact(Rigidbody target)
+    private float ResolveImpactUnlockDuration(float profileUnlockDuration)
+    {
+        float fallback = IsFinite(impactUnlockDuration) && impactUnlockDuration > 0f
+            ? Mathf.Max(0.02f, impactUnlockDuration)
+            : 0.02f;
+        if (!IsFinite(profileUnlockDuration) || profileUnlockDuration <= 0f)
+            return fallback;
+
+        return Mathf.Max(0.02f, profileUnlockDuration);
+    }
+
+    private bool EnsureRigidbodyCanReceiveImpact(Rigidbody target, float unlockDuration)
     {
         if (target == null)
             return false;
 
+        float duration = ResolveImpactUnlockDuration(unlockDuration);
         if (_temporaryUnlockUntilByBody.ContainsKey(target))
         {
-            float duration = Mathf.Max(0.02f, impactUnlockDuration);
             _temporaryUnlockUntilByBody[target] = Time.time + duration;
             if (target.isKinematic)
                 target.isKinematic = false;
@@ -1182,10 +1296,10 @@ public class SugaActiveRagdollController : MonoBehaviour
 
         target.isKinematic = false;
         target.useGravity = impactUseGravityWhileUnlocked;
-        _temporaryUnlockUntilByBody[target] = Time.time + Mathf.Max(0.02f, impactUnlockDuration);
+        _temporaryUnlockUntilByBody[target] = Time.time + duration;
         EnsureTemporaryUnlockCoroutine();
 
-        ImpactLog($"Temporarily unlocked target={target.name} duration={Mathf.Max(0.02f, impactUnlockDuration):0.###}");
+        ImpactLog($"Temporarily unlocked target={target.name} duration={duration:0.###}");
         return true;
     }
 
@@ -2408,13 +2522,23 @@ public class SugaActiveRagdollController : MonoBehaviour
         public readonly float forwardImpulse;
         public readonly float upImpulse;
         public readonly float torqueImpulse;
+        public readonly float unlockDuration;
+        public readonly bool demoOverride;
 
-        public RagdollImpactSettings(string targetName, float forwardImpulse, float upImpulse, float torqueImpulse)
+        public RagdollImpactSettings(
+            string targetName,
+            float forwardImpulse,
+            float upImpulse,
+            float torqueImpulse,
+            float unlockDuration,
+            bool demoOverride)
         {
             this.targetName = targetName;
             this.forwardImpulse = forwardImpulse;
             this.upImpulse = upImpulse;
             this.torqueImpulse = torqueImpulse;
+            this.unlockDuration = unlockDuration;
+            this.demoOverride = demoOverride;
         }
     }
 }

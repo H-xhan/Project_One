@@ -566,8 +566,8 @@ public class BombPassGimmick : NetworkBehaviour
             if (status == _currentHolder)
                 impulse *= GetHolderExplosionMultiplier();
 
-            status.ApplyKnockbackServer(impulse);
-            Log($"{LogPrefix} Explosion hit: {status.name}, impulse={impulse}");
+            status.ServerTryApplyGimmickKnockback(impulse);
+            Log($"{LogPrefix} Gimmick explosion knockback requested target={status.name}, impulse={impulse}");
         }
 
         if (explosionVisual != null)
