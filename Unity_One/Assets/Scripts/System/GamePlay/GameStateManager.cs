@@ -1,6 +1,8 @@
+using System.Collections;
 using System.Collections.Generic;
 using Unity.Netcode;
 using UnityEngine;
+using UnityEngine.EventSystems;
 
 public class GameStateManager : NetworkBehaviour
 {
@@ -55,6 +57,21 @@ public class GameStateManager : NetworkBehaviour
     [SerializeField, Tooltip("Playing 중 커서 lock이 풀렸을 때 재적용하는 최소 간격입니다.")]
     private float cursorLockRefreshInterval = 0.25f;
 
+    [SerializeField, Tooltip("Playing 진입 직후 커서 lock/hide를 짧은 시간 동안 반복 적용할지 여부입니다.")]
+    private bool enablePlayingCursorLockRetry = true;
+
+    [SerializeField, Tooltip("Playing 커서 lock 재시도를 유지할 최대 시간(초)입니다.")]
+    private float playingCursorLockRetryDuration = 0.75f;
+
+    [SerializeField, Tooltip("Playing 커서 lock 재시도 사이의 간격(초)입니다.")]
+    private float playingCursorLockRetryInterval = 0.1f;
+
+    [SerializeField, Tooltip("Playing 진입 시 남아 있는 UI 선택 상태를 해제할지 여부입니다.")]
+    private bool clearSelectedUiOnPlaying = true;
+
+    [SerializeField, Tooltip("커서 lock/hide 보강 로그를 출력할지 여부입니다.")]
+    private bool cursorDebugLogs = false;
+
     [Header("라운드 결과")]
     [SerializeField, Tooltip("Playing 상태에서 마지막 생존자 승리 판정을 사용할지 여부입니다.")]
     private bool enableLastSurvivorWinCheck = true;
@@ -108,6 +125,8 @@ public class GameStateManager : NetworkBehaviour
     private readonly List<ulong> _roundParticipantClientIds = new List<ulong>();
     private float _nextSurvivorCheckTime;
     private float _nextCursorLockRefreshAt;
+    private Coroutine _playingCursorLockRetryRoutine;
+    private int _lastPlayingCursorLockRetryStartFrame = -1;
     private bool _roundResultResolved;
     private bool _isStateValueChangeSubscribed;
 
@@ -143,6 +162,7 @@ public class GameStateManager : NetworkBehaviour
     public override void OnNetworkDespawn()
     {
         UnsubscribeGameStateCursorEvents();
+        StopPlayingCursorLockRetry("network-despawn");
         if (unlockCursorOutsidePlaying)
             SetCursorLocked(false, "network-despawn");
 
@@ -152,6 +172,7 @@ public class GameStateManager : NetworkBehaviour
     public override void OnDestroy()
     {
         UnsubscribeGameStateCursorEvents();
+        StopPlayingCursorLockRetry("destroy");
         base.OnDestroy();
     }
 
@@ -255,7 +276,7 @@ public class GameStateManager : NetworkBehaviour
         CaptureRoundParticipantsServer();
 
         StateValue.Value = (int)GameState.Playing;
-        ApplyCursorStateForCurrentGameState("enter-playing");
+        HandleEnteredPlayingForCursor("enter-playing");
         StateTimer.Value = playSeconds;
         _nextSurvivorCheckTime = Time.unscaledTime + Mathf.Max(0f, survivorCheckInterval);
         BeginRoundMissionsServer();
@@ -489,16 +510,44 @@ public class GameStateManager : NetworkBehaviour
 
     private void HandleStateValueChangedForCursor(int previousStateValue, int newStateValue)
     {
-        ApplyCursorStateForGameState((GameState)newStateValue, "state-changed");
+        GameState newState = (GameState)newStateValue;
+        if (newState == GameState.Playing)
+        {
+            HandleEnteredPlayingForCursor("state-changed");
+            return;
+        }
+
+        ApplyCursorStateForGameState(newState, "state-changed");
     }
 
     private void OnApplicationFocus(bool hasFocus)
     {
-        if (!hasFocus || !reapplyCursorLockOnFocus)
+        if (!hasFocus)
+        {
+            StopPlayingCursorLockRetry("focus-lost");
+            return;
+        }
+
+        if (!reapplyCursorLockOnFocus)
             return;
 
         if (GetState() == GameState.Playing)
-            ApplyCursorStateForGameState(GameState.Playing, "focus");
+            ReapplyPlayingCursorAfterFocusReturn("focus");
+    }
+
+    private void OnApplicationPause(bool pauseStatus)
+    {
+        if (pauseStatus)
+        {
+            StopPlayingCursorLockRetry("pause");
+            return;
+        }
+
+        if (!reapplyCursorLockOnFocus)
+            return;
+
+        if (GetState() == GameState.Playing)
+            ReapplyPlayingCursorAfterFocusReturn("pause-resume");
     }
 
     private void RefreshCursorLockIfNeeded()
@@ -508,6 +557,8 @@ public class GameStateManager : NetworkBehaviour
         if (GetState() != GameState.Playing)
             return;
         if (ShouldSkipCursorApi())
+            return;
+        if (!Application.isFocused)
             return;
         if (Time.unscaledTime < _nextCursorLockRefreshAt)
             return;
@@ -530,12 +581,147 @@ public class GameStateManager : NetworkBehaviour
 
         if (ShouldLockCursorForState(state))
         {
+            if (!Application.isFocused)
+                return;
+
             SetCursorLocked(true, reason);
         }
         else if (ShouldUnlockCursorForState(state))
         {
+            StopPlayingCursorLockRetry("state-changed");
             SetCursorLocked(false, reason);
         }
+        else if (state != GameState.Playing)
+        {
+            StopPlayingCursorLockRetry("state-changed");
+        }
+    }
+
+    private void HandleEnteredPlayingForCursor(string reason)
+    {
+        ClearSelectedUiOnPlayingIfNeeded();
+        ApplyCursorStateForGameState(GameState.Playing, reason);
+        StartPlayingCursorLockRetry(reason);
+    }
+
+    private void ReapplyPlayingCursorAfterFocusReturn(string reason)
+    {
+        ApplyCursorStateForGameState(GameState.Playing, reason);
+        StartPlayingCursorLockRetry(reason);
+    }
+
+    private void ClearSelectedUiOnPlayingIfNeeded()
+    {
+        if (!clearSelectedUiOnPlaying)
+            return;
+
+        EventSystem eventSystem = EventSystem.current;
+        if (eventSystem == null || eventSystem.currentSelectedGameObject == null)
+            return;
+
+        eventSystem.SetSelectedGameObject(null);
+        CursorLog("[GameState] Cleared selected UI on Playing");
+    }
+
+    private void StartPlayingCursorLockRetry(string reason)
+    {
+        if (!enablePlayingCursorLockRetry)
+            return;
+        if (!autoLockCursorOnPlaying)
+            return;
+        if (GetState() != GameState.Playing)
+            return;
+        if (ShouldSkipCursorApi())
+            return;
+        if (!Application.isFocused)
+            return;
+
+        if (_playingCursorLockRetryRoutine != null &&
+            _lastPlayingCursorLockRetryStartFrame == Time.frameCount)
+        {
+            return;
+        }
+
+        StopPlayingCursorLockRetry("restart");
+        _lastPlayingCursorLockRetryStartFrame = Time.frameCount;
+        _playingCursorLockRetryRoutine = StartCoroutine(PlayingCursorLockRetryRoutine());
+        CursorLog($"[GameState] Cursor lock retry start source={reason}");
+    }
+
+    private void StopPlayingCursorLockRetry(string reason)
+    {
+        if (_playingCursorLockRetryRoutine == null)
+            return;
+
+        StopCoroutine(_playingCursorLockRetryRoutine);
+        _playingCursorLockRetryRoutine = null;
+        CursorLog($"[GameState] Cursor lock retry stop reason={reason}");
+    }
+
+    private IEnumerator PlayingCursorLockRetryRoutine()
+    {
+        yield return new WaitForEndOfFrame();
+        if (!CanContinuePlayingCursorLockRetry(out string stopReason))
+        {
+            CompletePlayingCursorLockRetry(stopReason);
+            yield break;
+        }
+
+        ApplyCursorStateForGameState(GameState.Playing, "retry-end-frame");
+
+        float retryEndAt = Time.unscaledTime + GetPlayingCursorLockRetryDuration();
+        float retryInterval = GetPlayingCursorLockRetryInterval();
+        while (Time.unscaledTime < retryEndAt)
+        {
+            float remaining = retryEndAt - Time.unscaledTime;
+            yield return new WaitForSecondsRealtime(Mathf.Min(retryInterval, remaining));
+
+            if (!CanContinuePlayingCursorLockRetry(out stopReason))
+            {
+                CompletePlayingCursorLockRetry(stopReason);
+                yield break;
+            }
+
+            ApplyCursorStateForGameState(GameState.Playing, "retry");
+        }
+
+        CompletePlayingCursorLockRetry("completed");
+    }
+
+    private bool CanContinuePlayingCursorLockRetry(out string stopReason)
+    {
+        if (!enablePlayingCursorLockRetry)
+        {
+            stopReason = "disabled";
+            return false;
+        }
+
+        if (GetState() != GameState.Playing)
+        {
+            stopReason = "state-changed";
+            return false;
+        }
+
+        if (ShouldSkipCursorApi())
+        {
+            stopReason = "cursor-api-skipped";
+            return false;
+        }
+
+        if (!Application.isFocused)
+        {
+            stopReason = "focus-lost";
+            return false;
+        }
+
+        stopReason = null;
+        return true;
+    }
+
+    private void CompletePlayingCursorLockRetry(string reason)
+    {
+        _playingCursorLockRetryRoutine = null;
+        CursorLog($"[GameState] Cursor lock retry stop reason={reason}");
     }
 
     private bool ShouldLockCursorForState(GameState state)
@@ -563,12 +749,22 @@ public class GameStateManager : NetworkBehaviour
             _nextCursorLockRefreshAt = Time.unscaledTime + GetCursorLockRefreshInterval();
 
         if (!alreadyApplied)
-            Log($"[GameStateManager] Cursor {(locked ? "locked" : "unlocked")} reason={reason}");
+            CursorLog($"[GameState] Cursor lock apply source={reason} lock={targetLockState} visible={Cursor.visible} focused={Application.isFocused}");
     }
 
     private float GetCursorLockRefreshInterval()
     {
         return Mathf.Max(0.01f, cursorLockRefreshInterval);
+    }
+
+    private float GetPlayingCursorLockRetryDuration()
+    {
+        return Mathf.Max(0f, playingCursorLockRetryDuration);
+    }
+
+    private float GetPlayingCursorLockRetryInterval()
+    {
+        return Mathf.Max(0.01f, playingCursorLockRetryInterval);
     }
 
     private bool ShouldSkipCursorApi()
@@ -586,6 +782,14 @@ public class GameStateManager : NetworkBehaviour
     private void Log(string message)
     {
         if (!enableDebugLogs)
+            return;
+
+        Debug.Log(message, this);
+    }
+
+    private void CursorLog(string message)
+    {
+        if (!cursorDebugLogs)
             return;
 
         Debug.Log(message, this);

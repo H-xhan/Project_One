@@ -190,6 +190,18 @@ public class PlayerLocomotionModule : NetworkBehaviour
     [Tooltip("이 값보다 작은 전진/회전 입력은 무시합니다.")]
     [SerializeField] private float moveFacingInputDeadzone = 0.01f;
 
+    [SerializeField, Tooltip("일반 이동 중 WASD는 이동, 마우스 X 입력은 캐릭터 yaw 회전으로 사용합니다.")]
+    private bool enableMouseFacingMovement = true;
+
+    [SerializeField, Tooltip("마우스 X yawDelta에 곱할 회전 감도입니다.")]
+    private float mouseYawSensitivity = 1f;
+
+    [SerializeField, Tooltip("한 Tick에서 마우스 입력으로 적용할 최대 yaw 회전 각도입니다.")]
+    private float maxMouseYawDegreesPerTick = 30f;
+
+    [SerializeField, Tooltip("이 값보다 작은 WASD 이동 입력은 무시합니다.")]
+    private float movementInputDeadzone = 0.05f;
+
     [Header("Body Separation")]
     [Tooltip("플레이어 몸 분리 검사에 사용할 충돌 레이어 마스크입니다.")]
     [SerializeField] private LayerMask bodyBlockerMask;
@@ -219,6 +231,7 @@ public class PlayerLocomotionModule : NetworkBehaviour
     private readonly Dictionary<string, float> _externalMoveSpeedMultipliers = new Dictionary<string, float>();
     private float _movementReferenceYaw;
     private bool _movementReferenceYawCaptured;
+    private float _nextMouseFacingYawDebugLogTime;
     private PlayerHub _playerHub;
     private PlayerStatusModule _statusModule;
     private PlayerInteractModule _interactModule;
@@ -376,7 +389,6 @@ public class PlayerLocomotionModule : NetworkBehaviour
         if (_cc == null) return false;
         bool didJump = false;
         float dt = Time.deltaTime;
-        float forwardInput = GetForwardInput(moveInput.y);
         float turnInput = GetTurnInput(moveInput.x);
         bool spinDashActive = IsSpinDashActive();
         bool blockNormalInputMovementThisTick = false;
@@ -402,9 +414,18 @@ public class PlayerLocomotionModule : NetworkBehaviour
             !blockNormalInputMovementThisTick &&
             CanUseNormalMovementByStatusServer();
 
-        // 1. 회전 처리 (A/D 탱크 회전)
-        if (canUseNormalInputMovement && Mathf.Abs(turnInput) > 0f)
-            ApplyTurnInput(turnInput, dt);
+        // 1. 회전 처리
+        if (canUseNormalInputMovement)
+        {
+            if (enableMouseFacingMovement)
+            {
+                ApplyMouseYawDelta(yawDelta);
+            }
+            else if (Mathf.Abs(turnInput) > 0f)
+            {
+                ApplyTurnInput(turnInput, dt);
+            }
+        }
 
         // 2. 점프 및 중력 처리
         bool grounded = IsGrounded;
@@ -432,8 +453,8 @@ public class PlayerLocomotionModule : NetworkBehaviour
         }
         else
         {
-            bool hasMoveInput = canUseNormalInputMovement && Mathf.Abs(forwardInput) > 0f;
-            Vector3 inputDir = hasMoveInput ? GetMoveFacingDirection(moveInput) : Vector3.zero;
+            Vector3 inputDir = canUseNormalInputMovement ? GetMoveFacingDirection(moveInput) : Vector3.zero;
+            bool hasMoveInput = inputDir.sqrMagnitude > 0.0001f;
 
             // 3. 이동 속도 계산 (핵심 수정!)
             bool shouldApplySprint = ShouldApplySprint(sprintHeld && canUseNormalInputMovement, hasMoveInput, dt);
@@ -442,7 +463,7 @@ public class PlayerLocomotionModule : NetworkBehaviour
             if (hasMoveInput)
                 targetSpeed *= GetExternalMoveSpeedMultiplier();
 
-            // 전진/후진 입력이 없으면 목표 속도는 0
+            // 이동 입력이 없으면 목표 속도는 0
             if (!hasMoveInput) targetSpeed = 0;
 
             Vector3 desiredVelocity = inputDir * targetSpeed;
@@ -1615,6 +1636,27 @@ public class PlayerLocomotionModule : NetworkBehaviour
         _cc.transform.Rotate(0f, turnStep, 0f);
     }
 
+    private void ApplyMouseYawDelta(float yawDelta)
+    {
+        if (_cc == null || !IsFiniteFloat(yawDelta))
+            return;
+
+        float appliedYaw = yawDelta * mouseYawSensitivity * Mathf.Max(0f, yawScale);
+        float maxYaw = GetFiniteNonNegative(maxMouseYawDegreesPerTick);
+        appliedYaw = Mathf.Clamp(appliedYaw, -maxYaw, maxYaw);
+
+        if (Mathf.Abs(appliedYaw) <= 0f)
+            return;
+
+        _cc.transform.Rotate(0f, appliedYaw, 0f);
+
+        if (enableSpinDashDebugLogs && Time.time >= _nextMouseFacingYawDebugLogTime)
+        {
+            LogLocomotion($"Mouse facing yawDelta={yawDelta:0.###} appliedYaw={appliedYaw:0.###}");
+            _nextMouseFacingYawDebugLogTime = Time.time + 1f;
+        }
+    }
+
     private void CaptureMovementReferenceYawIfNeeded()
     {
         if (_movementReferenceYawCaptured || _cc == null)
@@ -1629,11 +1671,47 @@ public class PlayerLocomotionModule : NetworkBehaviour
         if (_cc == null)
             return Vector3.zero;
 
+        if (enableMouseFacingMovement)
+        {
+            Vector2 movementInput = GetMovementInput(moveInput);
+            if (movementInput.sqrMagnitude <= 0f)
+                return Vector3.zero;
+
+            Vector3 forward = _cc.transform.forward;
+            Vector3 right = _cc.transform.right;
+            forward.y = 0f;
+            right.y = 0f;
+
+            if (forward.sqrMagnitude <= 0.0001f || right.sqrMagnitude <= 0.0001f)
+                return Vector3.zero;
+
+            Vector3 moveDirection = forward.normalized * movementInput.y + right.normalized * movementInput.x;
+            moveDirection.y = 0f;
+
+            if (moveDirection.sqrMagnitude <= 0.0001f || !IsFiniteVector(moveDirection))
+                return Vector3.zero;
+
+            return Vector3.ClampMagnitude(moveDirection, 1f);
+        }
+
         float forwardInput = GetForwardInput(moveInput.y);
         if (Mathf.Abs(forwardInput) <= 0f)
             return Vector3.zero;
 
         return _cc.transform.forward * forwardInput;
+    }
+
+    private Vector2 GetMovementInput(Vector2 moveInput)
+    {
+        if (!IsFiniteVector(moveInput))
+            return Vector2.zero;
+
+        Vector2 clampedInput = Vector2.ClampMagnitude(moveInput, 1f);
+        float deadzone = Mathf.Max(0f, movementInputDeadzone);
+        if (clampedInput.sqrMagnitude <= deadzone * deadzone)
+            return Vector2.zero;
+
+        return clampedInput;
     }
 
     private bool ShouldApplySprint(bool sprintHeld, bool hasMoveInput, float dt)
@@ -1804,6 +1882,11 @@ public class PlayerLocomotionModule : NetworkBehaviour
         return IsFiniteFloat(value.x) && IsFiniteFloat(value.y) && IsFiniteFloat(value.z);
     }
 
+    private static bool IsFiniteVector(Vector2 value)
+    {
+        return IsFiniteFloat(value.x) && IsFiniteFloat(value.y);
+    }
+
     private static float GetFiniteNonNegative(float value)
     {
         return IsFiniteFloat(value) ? Mathf.Max(0f, value) : 0f;
@@ -1972,6 +2055,9 @@ public class PlayerLocomotionModule : NetworkBehaviour
         jumpStaminaCost = Mathf.Max(0f, jumpStaminaCost);
         jumpMinimumStaminaToStart = Mathf.Max(0f, jumpMinimumStaminaToStart);
         characterGrabberJumpMultiplier = Mathf.Max(0f, characterGrabberJumpMultiplier);
+        mouseYawSensitivity = IsFiniteFloat(mouseYawSensitivity) ? mouseYawSensitivity : 0f;
+        maxMouseYawDegreesPerTick = GetFiniteNonNegative(maxMouseYawDegreesPerTick);
+        movementInputDeadzone = Mathf.Clamp01(GetFiniteNonNegative(movementInputDeadzone));
         spinDashStaminaCost = GetFiniteNonNegative(spinDashStaminaCost);
         spinDashDuration = GetFiniteNonNegative(spinDashDuration);
         spinDashSpeed = GetFiniteNonNegative(spinDashSpeed);
