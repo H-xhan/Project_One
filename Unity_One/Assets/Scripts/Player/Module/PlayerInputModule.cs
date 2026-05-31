@@ -1,23 +1,9 @@
 using Unity.Netcode;
 using UnityEngine;
 using UnityEngine.InputSystem;
-using UnityEngine.SceneManagement;
 
 public class PlayerInputModule : MonoBehaviour
 {
-    [Header("Cursor")]
-    [Tooltip("시작 시 커서를 잠글지 여부 (인게임 기본은 true 권장)")]
-    [SerializeField] private bool defaultCursorLocked = true;
-
-    [Tooltip("커서 잠금 토글 허용 여부 (로비에서 UI 클릭 필요하면 true 권장)")]
-    [SerializeField] private bool allowCursorToggle = true;
-
-    [Tooltip("커서 잠금 토글 키")]
-    [SerializeField] private Key toggleCursorKey = Key.Escape;
-
-    [Tooltip("해당 씬에서는 시작 시 커서를 강제로 풀어둠 (예: RoomLobby, MainMenu)")]
-    [SerializeField] private string[] forceCursorUnlockedScenes = new[] { "RoomLobby", "MainMenu" };
-
     [Header("Mouse")]
     [Tooltip("마우스 X 감도")]
     [SerializeField] private float mouseSensitivityX = 2.0f;
@@ -27,9 +13,6 @@ public class PlayerInputModule : MonoBehaviour
 
     [Tooltip("이 값보다 작은 마우스 델타는 0으로 처리")]
     [SerializeField] private float mouseDeadzone = 0.5f;
-
-    [Tooltip("커서 잠금 직후 이 시간 동안 마우스 델타를 무시")]
-    [SerializeField] private float ignoreMouseDeltaAfterLock = 0.2f;
 
     [Tooltip("프레임당 허용할 최대 마우스 델타")]
     [SerializeField] private float maxMouseDeltaPerFrame = 80f;
@@ -51,29 +34,12 @@ public class PlayerInputModule : MonoBehaviour
     [SerializeField] private Key dropKey = Key.G;
 
     private NetworkObject _netObj;
-    private bool _cursorLocked;
-    private bool _cursorInitDone;
-    private float _ignoreMouseUntil;
 
-    public bool IsCursorLocked => _cursorLocked;
+    public bool IsCursorLocked => Cursor.lockState == CursorLockMode.Locked;
 
     private void Awake()
     {
         _netObj = GetComponent<NetworkObject>();
-    }
-
-    private void Update()
-    {
-        if (!IsLocalOwner())
-            return;
-
-        if (!_cursorInitDone)
-            InitCursorStateForScene();
-
-        if (allowCursorToggle && Keyboard.current != null && Keyboard.current[toggleCursorKey].wasPressedThisFrame)
-        {
-            SetCursorLock(!_cursorLocked);
-        }
     }
 
     private bool IsLocalOwner()
@@ -86,38 +52,6 @@ public class PlayerInputModule : MonoBehaviour
             return true;
 
         return _netObj.IsOwner;
-    }
-
-    private void InitCursorStateForScene()
-    {
-        bool startLocked = defaultCursorLocked;
-
-        string sceneName = SceneManager.GetActiveScene().name;
-        if (forceCursorUnlockedScenes != null)
-        {
-            for (int i = 0; i < forceCursorUnlockedScenes.Length; i++)
-            {
-                if (!string.IsNullOrWhiteSpace(forceCursorUnlockedScenes[i]) &&
-                    forceCursorUnlockedScenes[i] == sceneName)
-                {
-                    startLocked = false;
-                    break;
-                }
-            }
-        }
-
-        SetCursorLock(startLocked);
-        _cursorInitDone = true;
-    }
-
-    private void SetCursorLock(bool locked)
-    {
-        _cursorLocked = locked;
-        Cursor.lockState = locked ? CursorLockMode.Locked : CursorLockMode.None;
-        Cursor.visible = !locked;
-
-        // 커서 잠금/해제 직후 델타 튐 방지
-        _ignoreMouseUntil = Time.unscaledTime + Mathf.Max(0f, ignoreMouseDeltaAfterLock);
     }
 
     public void ReadInputs(
@@ -165,9 +99,7 @@ public class PlayerInputModule : MonoBehaviour
         pitchDelta = 0f;
 
         bool canReadMouseLook =
-            _cursorLocked &&
-            mouse != null &&
-            Time.unscaledTime >= _ignoreMouseUntil;
+            mouse != null;
 
         if (canReadMouseLook)
         {
