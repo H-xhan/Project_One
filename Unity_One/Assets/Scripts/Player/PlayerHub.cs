@@ -16,6 +16,7 @@ public class PlayerHub : NetworkBehaviour
     [Tooltip("기본 세미 고정 쿼터뷰 피치 각도입니다. 값이 클수록 더 아래를 내려다봅니다.")]
     [SerializeField] private float defaultQuarterViewPitch = 28f;
 
+#pragma warning disable 0414 // Preserve serialized legacy recenter settings without using auto recenter.
     [Tooltip("입력이 없을 때 기본 쿼터뷰 구도로 복귀하는 속도입니다.")]
     [SerializeField] private float cameraPitchReturnSpeed = 4f;
 
@@ -36,6 +37,7 @@ public class PlayerHub : NetworkBehaviour
 
     [Tooltip("정지 중 yaw가 기본 방향으로 복귀하는 속도입니다.")]
     [SerializeField] private float cameraYawReturnSpeed = 45f;
+#pragma warning restore 0414
 
     [Tooltip("이동 중 장면 가독성을 위해 현재 카메라 로컬 위치에 추가할 프레이밍 오프셋입니다.")]
     [SerializeField] private Vector3 cameraMoveFramingOffset = new Vector3(0f, 0.2f, -0.35f);
@@ -186,6 +188,8 @@ public class PlayerHub : NetworkBehaviour
     [Tooltip("현재 게임 상태를 확인할 매니저입니다. 비워두면 씬에서 자동 탐색합니다.")]
     [SerializeField] private GameStateManager gameStateManager;
 
+    private ReadySystem _readySystem;
+
     public bool IsCursorLocked => inputModule != null && inputModule.IsCursorLocked;
 
     public CharacterController CharacterController => GetComponentInChildren<CharacterController>(true);
@@ -297,6 +301,7 @@ public class PlayerHub : NetworkBehaviour
         if (coinWalletModule == null) coinWalletModule = GetComponentInChildren<PlayerCoinWalletModule>(true);
         if (staminaModule == null) staminaModule = GetComponentInChildren<PlayerStaminaModule>(true);
         if (gameStateManager == null) gameStateManager = FindFirstObjectByType<GameStateManager>();
+        if (_readySystem == null) _readySystem = FindFirstObjectByType<ReadySystem>();
     }
 
     private SugaActiveRagdollController ResolveActiveRagdollController()
@@ -345,18 +350,63 @@ public class PlayerHub : NetworkBehaviour
     }
     private bool IsPlayingState()
     {
+        return TryGetGameState(out GameStateManager.GameState state) &&
+               state == GameStateManager.GameState.Playing;
+    }
+
+    private bool AllowOwnerLookInput()
+    {
+        if (!TryGetGameState(out GameStateManager.GameState state))
+            return false;
+
+        if (state == GameStateManager.GameState.Playing ||
+            state == GameStateManager.GameState.Countdown)
+            return true;
+
+        if (state != GameStateManager.GameState.Lobby)
+            return false;
+
+        ReadySystem ready = ResolveReadySystem();
+        return ready != null && ready.IsLocalReady();
+    }
+
+    private bool AllowServerLookInput()
+    {
+        if (!TryGetGameState(out GameStateManager.GameState state))
+            return false;
+
+        if (state == GameStateManager.GameState.Playing ||
+            state == GameStateManager.GameState.Countdown)
+            return true;
+
+        if (state != GameStateManager.GameState.Lobby)
+            return false;
+
+        ReadySystem ready = ResolveReadySystem();
+        return ready != null && ready.IsClientReady(OwnerClientId);
+    }
+
+    private bool TryGetGameState(out GameStateManager.GameState state)
+    {
         if (gameStateManager == null)
             gameStateManager = FindFirstObjectByType<GameStateManager>();
 
         if (gameStateManager == null)
+        {
+            state = default;
             return false;
+        }
 
-        return gameStateManager.GetState() == GameStateManager.GameState.Playing;
+        state = gameStateManager.GetState();
+        return true;
     }
 
-    private bool AllowLookInput()
+    private ReadySystem ResolveReadySystem()
     {
-        return IsPlayingState();
+        if (_readySystem == null)
+            _readySystem = FindFirstObjectByType<ReadySystem>();
+
+        return _readySystem;
     }
 
     private void Update()
@@ -380,7 +430,7 @@ public class PlayerHub : NetworkBehaviour
             out bool dropPressed
         );
 
-        bool allowLook = AllowLookInput();
+        bool allowLook = AllowOwnerLookInput();
 
         if (!allowLook)
         {
@@ -586,13 +636,6 @@ public class PlayerHub : NetworkBehaviour
 
         float scaledPitchDelta = pitchDelta * Mathf.Max(0f, manualPitchInputScale);
         _cameraPitchVelocity -= scaledPitchDelta;
-
-        if (Mathf.Abs(pitchDelta) <= Mathf.Max(0f, cameraPitchInputDeadzone))
-        {
-            float targetPitch = GetClampedDefaultQuarterViewPitch();
-            float recenterStep = Mathf.Max(0f, cameraPitchReturnSpeed) * Time.deltaTime;
-            _cameraPitchVelocity = Mathf.MoveTowards(_cameraPitchVelocity, targetPitch, recenterStep);
-        }
 
         _cameraPitchVelocity = Mathf.Clamp(_cameraPitchVelocity, bottomClamp, topClamp);
         UpdateCameraLocalPosition();
@@ -1075,12 +1118,7 @@ public class PlayerHub : NetworkBehaviour
         if (Mathf.Abs(yawDelta) > Mathf.Max(0f, cameraYawInputDeadzone))
             return scaledYawDelta;
 
-        if (moveInput.sqrMagnitude > 0.001f)
-            return 0f;
-
-        float yawError = Mathf.DeltaAngle(GetStablePlayerYaw(), _defaultQuarterViewYaw);
-        float yawReturnStep = Mathf.Max(0f, cameraYawReturnSpeed) * Time.deltaTime;
-        return Mathf.Clamp(yawError, -yawReturnStep, yawReturnStep);
+        return 0f;
     }
 
     private void TickServer()
@@ -1088,7 +1126,7 @@ public class PlayerHub : NetworkBehaviour
         if (CharacterController == null || !CharacterController.enabled) return;
 
         bool jumped = false;
-        float serverYawDelta = AllowLookInput() ? _yawDelta : 0f;
+        float serverYawDelta = AllowServerLookInput() ? _yawDelta : 0f;
 
         if (locomotionModule != null)
             jumped = locomotionModule.TickServer(_moveInput, serverYawDelta, _jumpPressed, _sprintHeld);

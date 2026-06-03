@@ -1,0 +1,18 @@
+﻿removed_index,removed_original_name,kept_index,reason
+11,input_011.png,1,near duplicate of top HUD status bar
+13,input_013.png,37,near duplicate of room-code tag; kept tighter crop
+21,input_021.png,52,near duplicate of blank logo/title panel
+24,input_024.png,37,near duplicate of room-code tag; kept tighter crop
+32,input_032.png,1,near duplicate of top HUD status bar
+33,input_033.png,12,near duplicate of main menu board; kept cleaner original aspect
+39,input_039.png,16,near duplicate of green ready button
+40,input_040.png,15,near duplicate of yellow start/play button
+41,input_041.png,31,near duplicate of title strip
+48,input_048.png,37,near duplicate of room-code tag; kept tighter crop
+57,input_057.png,119,near duplicate of gold paperclip; kept dedicated icon version
+67,input_067.png,66,near duplicate of pinned note card
+69,input_069.png,27,near duplicate of gold coin/paw icon
+109,input_109.png,103,near duplicate of selection check badge
+110,input_110.png,16,near duplicate of green ready button
+125,input_125.png,124,near duplicate of cream color chip
+126,input_126.png,123,near duplicate of navy color chip
