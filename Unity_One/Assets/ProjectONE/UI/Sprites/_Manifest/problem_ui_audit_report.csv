@@ -1,0 +1,8 @@
+﻿file_name,path,found,width,height,texture_type,sprite_import_mode,alpha_is_transparency,compression,max_size,mipmap_enabled,category_hint,suggested_action
+004_top_button_notice.png,Assets/ProjectONE/UI/Sprites/Buttons/004_top_button_notice.png,True,762,818,Sprite,Single,True,Uncompressed,4096,False,Buttons,keep_if_visual_ok
+008_mission_card_blank_stamp.png,Assets/ProjectONE/UI/Sprites/HUD/008_mission_card_blank_stamp.png,True,1233,847,Sprite,Single,True,Uncompressed,4096,False,HUD,test_with_text_then_fix_or_regenerate
+010_stamina_bar_full.png,Assets/ProjectONE/UI/Sprites/HUD/010_stamina_bar_full.png,True,2247,328,Sprite,Single,True,Uncompressed,4096,False,HUD,regenerate_recommended
+025_ready_status_panel.png,Assets/ProjectONE/UI/Sprites/HUD/025_ready_status_panel.png,True,1317,572,Sprite,Single,True,Uncompressed,4096,False,HUD,fix_noise_then_retest
+042_long_blank_paper_banner_tape.png,Assets/ProjectONE/UI/Sprites/Panels/042_long_blank_paper_banner_tape.png,True,2020,392,Sprite,Single,True,Uncompressed,4096,False,Panels,keep_if_visual_ok
+046_long_blank_pill_panel.png,Assets/ProjectONE/UI/Sprites/Panels/046_long_blank_pill_panel.png,True,1675,485,Sprite,Single,True,Uncompressed,4096,False,Panels,fix_noise_if_used_as_text_background
+047_long_blank_rounded_label.png,Assets/ProjectONE/UI/Sprites/Panels/047_long_blank_rounded_label.png,True,1572,485,Sprite,Single,True,Uncompressed,4096,False,Panels,fix_noise_if_used_as_text_background

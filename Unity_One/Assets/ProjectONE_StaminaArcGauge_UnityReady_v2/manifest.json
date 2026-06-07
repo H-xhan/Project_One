@@ -1,0 +1,19 @@
+{
+  "source_background": "/mnt/data/스태미나 게이지 배경 UI.png",
+  "source_fill": "/mnt/data/스태미나 게이지 UI.png",
+  "full_canvas_size": [
+    1254,
+    1254
+  ],
+  "cropped_aligned_bounds_xyxy": [
+    342,
+    19,
+    944,
+    1161
+  ],
+  "cropped_aligned_size": [
+    602,
+    1142
+  ],
+  "notes": "Fill image was re-shaped from the blue channel area of the background so it overlays only the blue gauge region."
+}

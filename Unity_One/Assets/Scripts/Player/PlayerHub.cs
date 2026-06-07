@@ -45,6 +45,21 @@ public class PlayerHub : NetworkBehaviour
     [Tooltip("카메라 로컬 위치가 목표 프레이밍으로 따라가는 속도입니다.")]
     [SerializeField] private float cameraPositionBlendSpeed = 6f;
 
+    [Tooltip("카메라 위치가 목표 위치로 즉시 이동하지 않고 부드럽게 따라가도록 합니다.")]
+    [SerializeField] private bool enableCameraPositionSmoothing = true;
+
+    [Tooltip("카메라 위치 smoothing 시간입니다. 낮을수록 즉시 반응합니다.")]
+    [SerializeField] private float cameraPositionSmoothTime = 0.08f;
+
+    [Tooltip("목표 위치와 너무 멀어지면 smoothing하지 않고 즉시 스냅합니다.")]
+    [SerializeField] private float cameraPositionMaxSmoothDistance = 4f;
+
+    [Tooltip("오브젝트 가림 방지로 카메라가 플레이어 쪽으로 가까워질 때는 즉시 반영합니다.")]
+    [SerializeField] private bool cameraObstructionSnapInward = true;
+
+    [Tooltip("카메라 smoothing 디버그 로그를 출력합니다.")]
+    [SerializeField] private bool cameraSmoothingDebugLogs = false;
+
     [Header("Ragdoll Camera Focus")]
     [SerializeField, Tooltip("Ragdoll 활성 중 카메라가 Ragdoll 중심 위치를 따라가게 할지 여부입니다.")]
     private bool useRagdollFocusForCamera = true;
@@ -119,6 +134,10 @@ public class PlayerHub : NetworkBehaviour
     private bool _cameraRootYawOffsetCaptured;
     private Vector3 _cameraCurrentLocalPosition;
     private bool _cameraLocalPositionInitialized;
+    private Vector3 _cameraPositionSmoothVelocity;
+    private bool _hasSmoothedCameraPosition;
+    private bool _cameraSmoothingWasSnappingLastFrame;
+    private string _lastCameraSmoothingSnapReason;
     private bool _cameraWasObstructedLastFrame;
     private SugaActiveRagdollController _activeRagdollController;
     private bool _activeRagdollControllerResolveAttempted;
@@ -238,6 +257,22 @@ public class PlayerHub : NetworkBehaviour
 
         //if (!ShouldSkipInitialSpawnRoutine())
         //StartCoroutine(SpawnPosRoutine());
+    }
+
+    public override void OnNetworkDespawn()
+    {
+        ResetCameraPositionSmoothingState();
+        base.OnNetworkDespawn();
+    }
+
+    private void OnDisable()
+    {
+        ResetCameraPositionSmoothingState();
+    }
+
+    private void OnDestroy()
+    {
+        ResetCameraPositionSmoothingState();
     }
 
     private IEnumerator SpawnPosRoutine()
@@ -846,18 +881,7 @@ public class PlayerHub : NetworkBehaviour
         bool obstructed;
         targetLocalPosition = GetObstructionAdjustedCameraLocalPosition(targetLocalPosition, out obstructed);
 
-        if (!_cameraLocalPositionInitialized)
-        {
-            _cameraCurrentLocalPosition = targetLocalPosition;
-            _cameraLocalPositionInitialized = true;
-        }
-        else
-        {
-            float positionStep = GetCameraPositionBlendSpeed(targetLocalPosition, obstructed) * Time.deltaTime;
-            _cameraCurrentLocalPosition = Vector3.MoveTowards(_cameraCurrentLocalPosition, targetLocalPosition, positionStep);
-        }
-
-        cameraRoot.transform.position = GetCameraWorldPositionFromLocal(_cameraCurrentLocalPosition);
+        ApplyCameraLocalPosition(targetLocalPosition, obstructed, "update");
         _cameraWasObstructedLastFrame = obstructed;
     }
 
@@ -870,9 +894,147 @@ public class PlayerHub : NetworkBehaviour
         Vector3 targetLocalPosition = GetTargetCameraLocalPosition();
         targetLocalPosition += UpdateRagdollCameraFocusLocalOffset();
         _cameraCurrentLocalPosition = GetObstructionAdjustedCameraLocalPosition(targetLocalPosition, out obstructed);
-        _cameraLocalPositionInitialized = true;
-        cameraRoot.transform.position = GetCameraWorldPositionFromLocal(_cameraCurrentLocalPosition);
+        SnapCameraLocalPosition(_cameraCurrentLocalPosition, "immediate", false);
         _cameraWasObstructedLastFrame = obstructed;
+    }
+
+    private void ApplyCameraLocalPosition(Vector3 targetLocalPosition, bool obstructed, string reason)
+    {
+        if (cameraRoot == null)
+        {
+            ResetCameraPositionSmoothingState();
+            return;
+        }
+
+        float deltaTime = Time.deltaTime;
+        if (ShouldSnapCameraLocalPosition(targetLocalPosition, obstructed, deltaTime, out string snapReason, out bool logSnap))
+        {
+            SnapCameraLocalPosition(targetLocalPosition, snapReason, logSnap);
+            return;
+        }
+
+        float smoothTime = Mathf.Max(0.0001f, GetFiniteNonNegative(cameraPositionSmoothTime));
+        float maxSpeed = Mathf.Max(0f, GetCameraPositionBlendSpeed(targetLocalPosition, obstructed));
+        _cameraCurrentLocalPosition = Vector3.SmoothDamp(
+            _cameraCurrentLocalPosition,
+            targetLocalPosition,
+            ref _cameraPositionSmoothVelocity,
+            smoothTime,
+            maxSpeed,
+            deltaTime
+        );
+
+        if (!IsFiniteVector3(_cameraCurrentLocalPosition))
+        {
+            SnapCameraLocalPosition(targetLocalPosition, reason, false);
+            return;
+        }
+
+        _cameraLocalPositionInitialized = true;
+        _hasSmoothedCameraPosition = true;
+        ClearCameraSmoothingSnapLogState();
+        cameraRoot.transform.position = GetCameraWorldPositionFromLocal(_cameraCurrentLocalPosition);
+    }
+
+    private bool ShouldSnapCameraLocalPosition(Vector3 targetLocalPosition, bool obstructed, float deltaTime, out string snapReason, out bool logSnap)
+    {
+        snapReason = null;
+        logSnap = false;
+
+        if (!_cameraLocalPositionInitialized || !_hasSmoothedCameraPosition)
+        {
+            snapReason = "first-frame";
+            logSnap = true;
+            return true;
+        }
+
+        if (!enableCameraPositionSmoothing)
+        {
+            snapReason = "smoothing-disabled";
+            return true;
+        }
+
+        if (!IsFiniteFloat(deltaTime) || deltaTime <= 0f)
+        {
+            snapReason = "invalid-delta-time";
+            return true;
+        }
+
+        if (GetFiniteNonNegative(cameraPositionSmoothTime) <= 0f)
+        {
+            snapReason = "smooth-time-zero";
+            return true;
+        }
+
+        if (cameraObstructionSnapInward && IsCameraObstructionMovingInward(targetLocalPosition, obstructed))
+        {
+            snapReason = "obstruction-inward";
+            logSnap = true;
+            return true;
+        }
+
+        float maxSmoothDistance = GetFiniteNonNegative(cameraPositionMaxSmoothDistance);
+        if (Vector3.Distance(_cameraCurrentLocalPosition, targetLocalPosition) > maxSmoothDistance)
+        {
+            snapReason = "max-distance";
+            logSnap = true;
+            return true;
+        }
+
+        return false;
+    }
+
+    private bool IsCameraObstructionMovingInward(Vector3 targetLocalPosition, bool obstructed)
+    {
+        if (!obstructed || !_cameraLocalPositionInitialized)
+            return false;
+
+        float currentDistance = GetCameraDistanceFromObstructionOrigin(_cameraCurrentLocalPosition);
+        float targetDistance = GetCameraDistanceFromObstructionOrigin(targetLocalPosition);
+        if (!IsFiniteFloat(currentDistance) || !IsFiniteFloat(targetDistance))
+            return false;
+
+        return targetDistance + 0.01f < currentDistance;
+    }
+
+    private void SnapCameraLocalPosition(Vector3 targetLocalPosition, string reason, bool logSnap)
+    {
+        _cameraCurrentLocalPosition = targetLocalPosition;
+        _cameraLocalPositionInitialized = true;
+        _hasSmoothedCameraPosition = true;
+        _cameraPositionSmoothVelocity = Vector3.zero;
+        cameraRoot.transform.position = GetCameraWorldPositionFromLocal(_cameraCurrentLocalPosition);
+
+        if (logSnap)
+            LogCameraSmoothingSnap(reason);
+        else
+            ClearCameraSmoothingSnapLogState();
+    }
+
+    private void ResetCameraPositionSmoothingState()
+    {
+        _cameraPositionSmoothVelocity = Vector3.zero;
+        _hasSmoothedCameraPosition = false;
+        ClearCameraSmoothingSnapLogState();
+    }
+
+    private void LogCameraSmoothingSnap(string reason)
+    {
+        if (!cameraSmoothingDebugLogs)
+            return;
+
+        if (_cameraSmoothingWasSnappingLastFrame && _lastCameraSmoothingSnapReason == reason)
+            return;
+
+        Debug.Log($"[PlayerHub] Camera smoothing snap reason={reason}", this);
+        _cameraSmoothingWasSnappingLastFrame = true;
+        _lastCameraSmoothingSnapReason = reason;
+    }
+
+    private void ClearCameraSmoothingSnapLogState()
+    {
+        _cameraSmoothingWasSnappingLastFrame = false;
+        _lastCameraSmoothingSnapReason = null;
     }
 
     private Vector3 GetObstructionAdjustedCameraLocalPosition(Vector3 targetLocalPosition, out bool obstructed)
