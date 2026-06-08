@@ -11,13 +11,23 @@ public class CharacterFollowStaminaHUD : MonoBehaviour
         WorldSpaceAnchor,
         StabilizedWorldAnchor,
         ScreenLockedWorldAnchor,
-        CharacterScreenAnchor
+        CharacterScreenAnchor,
+        PrefabAttachedLocalOwner
     }
 
     public enum FollowOffsetMode
     {
         ScreenOffset,
         CameraRelativeWorldOffset
+    }
+
+    public enum VisualLockMode
+    {
+        None,
+        LockedInitialWorldRotation,
+        ScreenFacingUpright,
+        CameraFacingFixedScale,
+        TargetYawLocalRotation
     }
 
     [Header("UI")]
@@ -73,6 +83,68 @@ public class CharacterFollowStaminaHUD : MonoBehaviour
 
     [SerializeField, Tooltip("WorldSpaceAnchor 모드의 SmoothDamp에 unscaled delta time을 사용할지 여부입니다.")]
     private bool useUnscaledTime = false;
+
+    [Header("Visual Lock")]
+    [SerializeField, Tooltip("월드 공간 계열 UI의 시각 회전 고정 방식입니다. None은 기존 회전 동작을 유지합니다.")]
+    private VisualLockMode visualLockMode = VisualLockMode.TargetYawLocalRotation;
+
+    [SerializeField, Tooltip("켜면 WorldSpaceAnchor, StabilizedWorldAnchor, World Space Canvas의 ScreenLockedWorldAnchor에서만 Visual Lock을 적용합니다.")]
+    private bool applyVisualLockInWorldModesOnly = true;
+
+    [SerializeField, Tooltip("켜면 최초 루트 local scale을 저장하고 계속 유지해 캐릭터 이동이나 카메라 회전으로 UI 크기가 바뀌지 않게 합니다.")]
+    private bool keepVisualScale = true;
+
+    [SerializeField, Tooltip("켜면 OnEnable 또는 첫 바인딩 시점의 루트 local scale을 Visual Lock 기준 scale로 저장합니다.")]
+    private bool captureInitialVisualScaleOnEnable = true;
+
+    [SerializeField, Tooltip("켜면 OnEnable 또는 첫 바인딩 시점의 루트 world rotation을 LockedInitialWorldRotation 기준 회전으로 저장합니다.")]
+    private bool captureInitialWorldRotationOnEnable = true;
+
+    [SerializeField, Tooltip("captureInitialWorldRotationOnEnable이 꺼져 있을 때 사용할 고정 world rotation Euler 값입니다.")]
+    private Vector3 lockedWorldRotationEuler = Vector3.zero;
+
+    [SerializeField, Tooltip("켜면 월드 공간 Visual Lock 적용 중 followRect의 local rotation을 identity로 유지해 내부 fill UI가 따로 기울지 않게 합니다.")]
+    private bool resetFollowRectLocalRotation = true;
+
+    [SerializeField, Tooltip("켜면 Visual Lock이 활성화된 모드에서 기존 billboard 회전 로직을 건너뛰어 이중 회전을 막습니다.")]
+    private bool disableLegacyBillboardWhenVisualLocked = true;
+
+    [SerializeField, Tooltip("켜면 ScreenFacingUpright에서 카메라 회전을 기준으로 UI를 카메라 평면과 평행하게 맞춥니다.")]
+    private bool screenFacingUseCameraRotation = true;
+
+    [SerializeField, Tooltip("켜면 ScreenFacingUpright 결과에 Y축 180도 회전을 더해 앞뒤 뒤집힘을 보정합니다.")]
+    private bool screenFacingFlipForward = false;
+
+    [SerializeField, Tooltip("켜면 ScreenFacingUpright에서 roll 기울기를 제거하고 월드 up 기준으로 똑바로 세웁니다.")]
+    private bool screenFacingUprightOnly = true;
+
+    [SerializeField, Tooltip("Visual Lock 회전을 부드럽게 따라가는 시간입니다. 0이면 즉시 적용합니다.")]
+    private float visualRotationSmoothTime = 0f;
+
+    [SerializeField, Tooltip("Visual Lock 관련 상태 변경 로그를 출력할지 여부입니다. 매 프레임 로그는 출력하지 않습니다.")]
+    private bool visualLockDebugLogs = false;
+
+    [Header("Target Visual Rotation")]
+    [SerializeField, Tooltip("캐릭터의 yaw 회전만 따라가고 pitch/roll은 무시합니다.")]
+    private bool targetVisualYawOnly = true;
+
+    [SerializeField, Tooltip("캐릭터 기준으로 스태미나 UI가 바라볼 로컬 회전 보정값입니다.")]
+    private Vector3 targetVisualLocalEuler = Vector3.zero;
+
+    [SerializeField, Tooltip("UI 앞뒤가 반대로 보이면 180도 보정을 적용합니다.")]
+    private bool targetVisualFlipForward = false;
+
+    [SerializeField, Tooltip("켜면 바인딩 시점의 UI world rotation을 캐릭터 local rotation으로 변환해 저장합니다.")]
+    private bool captureTargetVisualLocalRotationOnBind = false;
+
+    [SerializeField, Tooltip("Follow Rect의 local rotation을 identity로 유지합니다.")]
+    private bool targetVisualResetFollowRectLocalRotation = true;
+
+    [SerializeField, Tooltip("UI local scale을 초기값으로 유지합니다.")]
+    private bool targetVisualKeepScale = true;
+
+    [SerializeField, Tooltip("캐릭터 회전을 따라갈 때 rotation smoothing 시간입니다. 0이면 즉시 적용합니다.")]
+    private float targetVisualRotationSmoothTime = 0f;
 
     [Header("World Anchor Stabilization")]
     [SerializeField, Tooltip("StabilizedWorldAnchor 모드에서 작은 흔들림을 안정화할지 여부입니다. 꺼두면 기존 WorldSpaceAnchor 방식으로 동작합니다.")]
@@ -189,6 +261,28 @@ public class CharacterFollowStaminaHUD : MonoBehaviour
     [SerializeField, Tooltip("활성화 시 로컬 플레이어를 자동으로 찾아 바인딩할지 여부입니다.")]
     private bool autoBindLocalPlayer = true;
 
+    [Header("Prefab Attached Local Owner")]
+    [SerializeField, Tooltip("프리팹 하위에 붙은 경우 부모 PlayerHub를 기준으로 바인딩합니다.")]
+    private bool attachedUseParentPlayerHub = true;
+
+    [SerializeField, Tooltip("local owner 플레이어일 때만 UI를 표시합니다.")]
+    private bool attachedOwnerOnly = true;
+
+    [SerializeField, Tooltip("프리팹 부착 모드에서는 위치 추적을 하지 않습니다.")]
+    private bool attachedDisablePositionFollow = true;
+
+    [SerializeField, Tooltip("프리팹 부착 모드에서는 회전/billboard 보정을 하지 않습니다.")]
+    private bool attachedDisableRotationFollow = true;
+
+    [SerializeField, Tooltip("프리팹에 저장된 localPosition/localRotation/localScale을 유지합니다.")]
+    private bool attachedKeepLocalTransform = true;
+
+    [SerializeField, Tooltip("non-owner 인스턴스에서는 UI를 숨깁니다.")]
+    private bool attachedHideOnNonOwner = true;
+
+    [SerializeField, Tooltip("프리팹 부착 모드 디버그 로그를 출력합니다.")]
+    private bool attachedDebugLogs = false;
+
     [Header("Visibility")]
     [SerializeField, Tooltip("로컬 플레이어를 찾지 못했을 때 UI를 숨길지 여부입니다.")]
     private bool hideWhenNoLocalPlayer = true;
@@ -220,18 +314,41 @@ public class CharacterFollowStaminaHUD : MonoBehaviour
     private Vector3 _worldFollowVelocity;
     private float _worldVerticalVelocity;
     private Vector3 _initialWorldAnchorLossyScale;
+    private Vector3 _initialVisualLocalScale;
+    private Quaternion _initialVisualWorldRotation;
+    private Quaternion _capturedTargetVisualLocalRotation;
+    private Vector3 _attachedRootLocalPosition;
+    private Quaternion _attachedRootLocalRotation;
+    private Vector3 _attachedRootLocalScale;
+    private Vector3 _attachedFollowLocalPosition;
+    private Quaternion _attachedFollowLocalRotation;
+    private Vector3 _attachedFollowLocalScale;
     private float _nextBindAttemptTime;
     private float _visibleUntil;
     private float _lastRatio = -1f;
     private bool _hasSnappedToTarget;
     private bool _hasInitialWorldAnchorScale;
+    private bool _hasInitialVisualScale;
+    private bool _hasInitialVisualWorldRotation;
+    private bool _hasCapturedTargetVisualLocalRotation;
+    private bool _hasLoggedVisualLockApplied;
+    private bool _hasLoggedCameraFacingFlipForward;
+    private bool _hasLoggedTargetVisualFlipForward;
+    private bool _hasAttachedRootLocalTransform;
+    private bool _hasAttachedFollowLocalTransform;
+    private bool _prefabAttachedHiddenForNonOwner;
+    private bool _hasLoggedPrefabAttachedParentFound;
+    private bool _hasLoggedPrefabAttachedHiddenNonOwner;
+    private bool _hasLoggedPrefabAttachedOwnerBound;
     private bool _loggedWaitingForLocalPlayer;
     private bool _characterScreenTargetInView = true;
     private PresentationMode _lastPresentationMode;
+    private VisualLockMode _lastLoggedVisualLockMode = VisualLockMode.None;
 
     private void Awake()
     {
         ResolveRefs();
+        CaptureAttachedLocalTransforms();
         ApplyMissingLocalPlayerState();
     }
 
@@ -243,8 +360,22 @@ public class CharacterFollowStaminaHUD : MonoBehaviour
         _worldFollowVelocity = Vector3.zero;
         _worldVerticalVelocity = 0f;
         _hasInitialWorldAnchorScale = false;
+        _hasInitialVisualScale = false;
+        _hasInitialVisualWorldRotation = false;
+        _hasCapturedTargetVisualLocalRotation = false;
+        _hasLoggedVisualLockApplied = false;
+        _hasLoggedCameraFacingFlipForward = false;
+        _hasLoggedTargetVisualFlipForward = false;
+        _prefabAttachedHiddenForNonOwner = false;
+        _hasLoggedPrefabAttachedParentFound = false;
+        _hasLoggedPrefabAttachedHiddenNonOwner = false;
+        _hasLoggedPrefabAttachedOwnerBound = false;
+        _lastLoggedVisualLockMode = VisualLockMode.None;
         _characterScreenTargetInView = true;
         _lastPresentationMode = presentationMode;
+        CaptureAttachedLocalTransforms();
+        RestoreAttachedLocalTransforms();
+        TryCaptureInitialVisualState(ResolveWorldAnchorTransform(), true);
 
         if (autoBindLocalPlayer)
             TryBindLocalPlayer();
@@ -278,6 +409,15 @@ public class CharacterFollowStaminaHUD : MonoBehaviour
 
     private void LateUpdate()
     {
+        if (IsPrefabAttachedMode())
+        {
+            if (_lastPresentationMode != presentationMode)
+                ResetPresentationModeState();
+
+            RestoreAttachedLocalTransforms();
+            return;
+        }
+
         UpdateFollowPosition();
     }
 
@@ -313,9 +453,61 @@ public class CharacterFollowStaminaHUD : MonoBehaviour
             staminaText = GetComponentInChildren<TMP_Text>(true);
     }
 
+    private bool IsPrefabAttachedMode()
+    {
+        return presentationMode == PresentationMode.PrefabAttachedLocalOwner;
+    }
+
+    private void CaptureAttachedLocalTransforms()
+    {
+        if (!attachedKeepLocalTransform)
+            return;
+
+        if (!_hasAttachedRootLocalTransform && root != null)
+        {
+            _attachedRootLocalPosition = root.localPosition;
+            _attachedRootLocalRotation = root.localRotation;
+            _attachedRootLocalScale = root.localScale;
+            _hasAttachedRootLocalTransform = true;
+        }
+
+        if (!_hasAttachedFollowLocalTransform && followRect != null)
+        {
+            _attachedFollowLocalPosition = followRect.localPosition;
+            _attachedFollowLocalRotation = followRect.localRotation;
+            _attachedFollowLocalScale = followRect.localScale;
+            _hasAttachedFollowLocalTransform = true;
+        }
+    }
+
+    private void RestoreAttachedLocalTransforms()
+    {
+        if (!IsPrefabAttachedMode() || !attachedKeepLocalTransform)
+            return;
+
+        if (_hasAttachedRootLocalTransform && root != null)
+        {
+            root.localPosition = _attachedRootLocalPosition;
+            root.localRotation = _attachedRootLocalRotation;
+            root.localScale = _attachedRootLocalScale;
+        }
+
+        if (_hasAttachedFollowLocalTransform && followRect != null)
+        {
+            followRect.localPosition = _attachedFollowLocalPosition;
+            followRect.localRotation = _attachedFollowLocalRotation;
+            followRect.localScale = _attachedFollowLocalScale;
+        }
+    }
+
     private void TryBindLocalPlayer()
     {
         _nextBindAttemptTime = Time.unscaledTime + Mathf.Max(0f, rebindInterval);
+
+        if (IsPrefabAttachedMode() && TryBindPrefabAttachedParentPlayer())
+            return;
+
+        _prefabAttachedHiddenForNonOwner = false;
 
         NetworkObject playerObject;
         PlayerHub playerHub = ResolveLocalPlayerHub(out playerObject);
@@ -332,6 +524,8 @@ public class CharacterFollowStaminaHUD : MonoBehaviour
             _boundPlayerHub = playerHub;
             _targetTransform = playerHub.transform != null ? playerHub.transform : playerObject.transform;
             _localPlayerCamera = ResolveLocalPlayerCamera(playerHub);
+            TryCaptureInitialVisualState(ResolveWorldAnchorTransform(), true);
+            TryCaptureTargetVisualLocalRotation(ResolveWorldAnchorTransform());
             ApplyMissingLocalPlayerState();
             Log("Waiting for local player stamina.");
             return;
@@ -342,10 +536,94 @@ public class CharacterFollowStaminaHUD : MonoBehaviour
         _localPlayerCamera = ResolveLocalPlayerCamera(playerHub);
         _loggedWaitingForLocalPlayer = false;
         _hasSnappedToTarget = false;
+        TryCaptureInitialVisualState(ResolveWorldAnchorTransform(), true);
+        TryCaptureTargetVisualLocalRotation(ResolveWorldAnchorTransform());
 
         BindStaminaModule(staminaModule);
         Log("Local player bound.");
         LogFollowMode();
+    }
+
+    private bool TryBindPrefabAttachedParentPlayer()
+    {
+        if (!attachedUseParentPlayerHub)
+            return false;
+
+        PlayerHub parentHub = GetComponentInParent<PlayerHub>(true);
+        if (parentHub == null)
+            return false;
+
+        LogPrefabAttachedParentFound();
+
+        if (ShouldRequirePrefabAttachedLocalOwner() && !IsPrefabAttachedLocalOwner(parentHub))
+        {
+            ApplyPrefabAttachedNonOwnerState();
+            LogPrefabAttachedHiddenNonOwner();
+            return true;
+        }
+
+        _prefabAttachedHiddenForNonOwner = false;
+
+        PlayerStaminaModule staminaModule = parentHub.GetComponentInChildren<PlayerStaminaModule>(true);
+        if (staminaModule == null)
+        {
+            _boundPlayerHub = parentHub;
+            _targetTransform = parentHub.transform;
+            _localPlayerCamera = ResolveLocalPlayerCamera(parentHub);
+            ApplyMissingLocalPlayerState();
+            LogPrefabAttached("Prefab attached waiting for owner stamina.");
+            return true;
+        }
+
+        _boundPlayerHub = parentHub;
+        _targetTransform = parentHub.transform;
+        _localPlayerCamera = ResolveLocalPlayerCamera(parentHub);
+        _loggedWaitingForLocalPlayer = false;
+        _hasSnappedToTarget = false;
+
+        BindStaminaModule(staminaModule);
+        LogPrefabAttachedOwnerBound();
+        LogFollowMode();
+        return true;
+    }
+
+    private void ApplyPrefabAttachedNonOwnerState()
+    {
+        UnbindStaminaModule();
+        _boundPlayerHub = null;
+        _targetTransform = null;
+        _localPlayerCamera = null;
+        _hasSnappedToTarget = false;
+        _followVelocity = Vector2.zero;
+        _worldFollowVelocity = Vector3.zero;
+        _worldVerticalVelocity = 0f;
+        _prefabAttachedHiddenForNonOwner = true;
+        _lastRatio = -1f;
+
+        RefreshStaminaUI(false);
+        SetVisible(false);
+    }
+
+    private bool ShouldRequirePrefabAttachedLocalOwner()
+    {
+        return attachedOwnerOnly || attachedHideOnNonOwner;
+    }
+
+    private bool IsPrefabAttachedLocalOwner(PlayerHub playerHub)
+    {
+        if (playerHub == null)
+            return false;
+
+        if (playerHub.IsOwner)
+            return true;
+
+        if (!playerHub.IsSpawned)
+            return false;
+
+        NetworkManager networkManager = NetworkManager.Singleton;
+        return networkManager != null &&
+               networkManager.IsListening &&
+               playerHub.OwnerClientId == networkManager.LocalClientId;
     }
 
     private PlayerHub ResolveLocalPlayerHub(out NetworkObject playerObject)
@@ -420,6 +698,7 @@ public class CharacterFollowStaminaHUD : MonoBehaviour
         _worldFollowVelocity = Vector3.zero;
         _worldVerticalVelocity = 0f;
         _hasInitialWorldAnchorScale = false;
+        _hasCapturedTargetVisualLocalRotation = false;
         _characterScreenTargetInView = true;
         _lastRatio = -1f;
     }
@@ -478,15 +757,7 @@ public class CharacterFollowStaminaHUD : MonoBehaviour
     private void UpdateFollowPosition()
     {
         if (_lastPresentationMode != presentationMode)
-        {
-            _followVelocity = Vector2.zero;
-            _worldFollowVelocity = Vector3.zero;
-            _worldVerticalVelocity = 0f;
-            _hasSnappedToTarget = false;
-            _hasInitialWorldAnchorScale = false;
-            SetCharacterScreenTargetInView(true);
-            _lastPresentationMode = presentationMode;
-        }
+            ResetPresentationModeState();
 
         if (presentationMode == PresentationMode.WorldSpaceAnchor)
         {
@@ -517,6 +788,21 @@ public class CharacterFollowStaminaHUD : MonoBehaviour
         }
 
         UpdateScreenSpaceFollowPosition();
+    }
+
+    private void ResetPresentationModeState()
+    {
+        _followVelocity = Vector2.zero;
+        _worldFollowVelocity = Vector3.zero;
+        _worldVerticalVelocity = 0f;
+        _hasSnappedToTarget = false;
+        _hasInitialWorldAnchorScale = false;
+        _hasLoggedVisualLockApplied = false;
+        _hasLoggedCameraFacingFlipForward = false;
+        _hasLoggedTargetVisualFlipForward = false;
+        _lastLoggedVisualLockMode = VisualLockMode.None;
+        SetCharacterScreenTargetInView(true);
+        _lastPresentationMode = presentationMode;
     }
 
     private void UpdateWorldSpaceAnchorPosition()
@@ -561,8 +847,14 @@ public class CharacterFollowStaminaHUD : MonoBehaviour
             _hasSnappedToTarget = true;
         }
 
-        ApplyBillboard(anchorTransform, false, false);
+        Camera camera = ResolveWorldCamera();
+        ApplyVisualLock(anchorTransform, camera);
+
+        if (!ShouldSuppressLegacyBillboard())
+            ApplyBillboard(anchorTransform, false, false);
+
         ApplyWorldAnchorScale(anchorTransform);
+        ApplyVisualScale(anchorTransform);
     }
 
     private void UpdateStabilizedWorldAnchorPosition()
@@ -610,8 +902,13 @@ public class CharacterFollowStaminaHUD : MonoBehaviour
             _hasSnappedToTarget = true;
         }
 
-        ApplyBillboard(anchorTransform, true, !snappedPosition);
+        ApplyVisualLock(anchorTransform, camera);
+
+        if (!ShouldSuppressLegacyBillboard())
+            ApplyBillboard(anchorTransform, true, !snappedPosition);
+
         ApplyWorldAnchorScale(anchorTransform);
+        ApplyVisualScale(anchorTransform);
     }
 
     private void UpdateScreenLockedWorldAnchorPosition()
@@ -664,12 +961,18 @@ public class CharacterFollowStaminaHUD : MonoBehaviour
             _hasSnappedToTarget = true;
         }
 
-        if (screenLockedUseCameraRotation)
-            ApplyScreenLockedRotation(anchorTransform, camera, !snappedPosition);
-        else
-            ApplyBillboard(anchorTransform, true, !snappedPosition);
+        ApplyVisualLock(anchorTransform, camera);
+
+        if (!ShouldSuppressLegacyBillboard())
+        {
+            if (screenLockedUseCameraRotation)
+                ApplyScreenLockedRotation(anchorTransform, camera, !snappedPosition);
+            else
+                ApplyBillboard(anchorTransform, true, !snappedPosition);
+        }
 
         ApplyWorldAnchorScale(anchorTransform);
+        ApplyVisualScale(anchorTransform);
     }
 
     private void UpdateScreenSpaceFollowPosition()
@@ -1038,6 +1341,369 @@ public class CharacterFollowStaminaHUD : MonoBehaviour
         return Quaternion.LookRotation(normalizedForward, up);
     }
 
+    private void TryCaptureInitialVisualState(Transform anchorTransform, bool respectOnEnableFlags)
+    {
+        if (anchorTransform == null)
+            return;
+
+        if (!respectOnEnableFlags || captureInitialVisualScaleOnEnable)
+            TryCaptureInitialVisualScale(anchorTransform);
+
+        if (!respectOnEnableFlags || captureInitialWorldRotationOnEnable)
+            TryCaptureInitialVisualWorldRotation(anchorTransform);
+    }
+
+    private void TryCaptureInitialVisualScale(Transform anchorTransform)
+    {
+        if (!ShouldKeepVisualScale() || _hasInitialVisualScale || anchorTransform == null)
+            return;
+
+        _initialVisualLocalScale = anchorTransform.localScale;
+        _hasInitialVisualScale = true;
+        LogVisualLock("Captured visual scale.");
+    }
+
+    private void TryCaptureInitialVisualWorldRotation(Transform anchorTransform)
+    {
+        if (_hasInitialVisualWorldRotation || anchorTransform == null)
+            return;
+
+        _initialVisualWorldRotation = anchorTransform.rotation;
+        _hasInitialVisualWorldRotation = true;
+        LogVisualLock("Captured world rotation.");
+    }
+
+    private bool ApplyVisualLock(Transform anchorTransform, Camera camera)
+    {
+        if (anchorTransform == null || !ShouldApplyVisualLock())
+            return false;
+
+        if (visualLockMode == VisualLockMode.LockedInitialWorldRotation)
+        {
+            Quaternion targetRotation = GetLockedInitialWorldRotation(anchorTransform);
+            ApplyVisualRotation(anchorTransform, targetRotation);
+            ResetFollowRectVisualLocalRotation(anchorTransform);
+            LogVisualLockApplied();
+            return true;
+        }
+
+        if (visualLockMode == VisualLockMode.ScreenFacingUpright)
+        {
+            if (!TryGetScreenFacingVisualRotation(anchorTransform, camera, out Quaternion targetRotation))
+                return false;
+
+            ApplyVisualRotation(anchorTransform, targetRotation);
+            ResetFollowRectVisualLocalRotation(anchorTransform);
+            LogVisualLockApplied();
+            return true;
+        }
+
+        if (visualLockMode == VisualLockMode.CameraFacingFixedScale)
+        {
+            if (!TryGetCameraFacingFixedScaleRotation(anchorTransform, camera, out Quaternion targetRotation))
+                return false;
+
+            ApplyVisualRotation(anchorTransform, targetRotation);
+            ResetFollowRectVisualLocalRotation(anchorTransform);
+            LogVisualLockApplied();
+            LogCameraFacingFlipForward();
+            return true;
+        }
+
+        if (visualLockMode == VisualLockMode.TargetYawLocalRotation)
+        {
+            if (!TryGetTargetYawLocalRotation(anchorTransform, out Quaternion targetRotation))
+                return false;
+
+            ApplyTargetVisualRotation(anchorTransform, targetRotation);
+            ResetTargetVisualFollowRectLocalRotation(anchorTransform);
+            LogVisualLockApplied();
+            LogTargetVisualFlipForward();
+            return true;
+        }
+
+        return false;
+    }
+
+    private Quaternion GetLockedInitialWorldRotation(Transform anchorTransform)
+    {
+        if (captureInitialWorldRotationOnEnable)
+        {
+            TryCaptureInitialVisualWorldRotation(anchorTransform);
+            return _hasInitialVisualWorldRotation ? _initialVisualWorldRotation : anchorTransform.rotation;
+        }
+
+        return Quaternion.Euler(lockedWorldRotationEuler);
+    }
+
+    private bool TryGetScreenFacingVisualRotation(Transform anchorTransform, Camera camera, out Quaternion rotation)
+    {
+        rotation = Quaternion.identity;
+        if (camera == null)
+            return false;
+
+        if (screenFacingUseCameraRotation && !screenFacingUprightOnly)
+        {
+            rotation = camera.transform.rotation;
+        }
+        else
+        {
+            Vector3 forward = screenFacingUseCameraRotation
+                ? camera.transform.forward
+                : anchorTransform.position - camera.transform.position;
+
+            if (forward.sqrMagnitude <= 0.000001f)
+                forward = camera.transform.forward;
+
+            if (forward.sqrMagnitude <= 0.000001f)
+                return false;
+
+            Vector3 normalizedForward = forward.normalized;
+            Vector3 up = screenFacingUprightOnly ? Vector3.up : camera.transform.up;
+            if (up.sqrMagnitude <= 0.000001f)
+                up = Vector3.up;
+
+            if (screenFacingUprightOnly && Mathf.Abs(Vector3.Dot(normalizedForward, up.normalized)) > 0.98f)
+                up = camera.transform.up.sqrMagnitude > 0.000001f ? camera.transform.up : Vector3.up;
+
+            rotation = Quaternion.LookRotation(normalizedForward, up.normalized);
+        }
+
+        if (screenFacingFlipForward)
+            rotation *= Quaternion.Euler(0f, 180f, 0f);
+
+        return true;
+    }
+
+    private bool TryGetCameraFacingFixedScaleRotation(Transform anchorTransform, Camera camera, out Quaternion rotation)
+    {
+        rotation = Quaternion.identity;
+        if (anchorTransform == null || camera == null)
+            return false;
+
+        Vector3 toCamera = camera.transform.position - anchorTransform.position;
+        if (toCamera.sqrMagnitude <= 0.000001f)
+            return false;
+
+        Vector3 forward = -toCamera.normalized;
+        Vector3 up = Vector3.up;
+        if (Mathf.Abs(Vector3.Dot(forward, up)) > 0.98f)
+            up = camera.transform.up.sqrMagnitude > 0.000001f ? camera.transform.up : Vector3.up;
+
+        rotation = Quaternion.LookRotation(forward, up.normalized);
+
+        if (screenFacingFlipForward)
+            rotation *= Quaternion.Euler(0f, 180f, 0f);
+
+        return true;
+    }
+
+    private bool TryGetTargetYawLocalRotation(Transform anchorTransform, out Quaternion rotation)
+    {
+        rotation = Quaternion.identity;
+        if (anchorTransform == null || _targetTransform == null)
+            return false;
+
+        Quaternion targetBaseRotation = GetTargetVisualBaseRotation();
+        Quaternion localCorrection = GetTargetVisualLocalCorrection(anchorTransform, targetBaseRotation);
+        rotation = targetBaseRotation * localCorrection;
+        return true;
+    }
+
+    private Quaternion GetTargetVisualBaseRotation()
+    {
+        if (_targetTransform == null)
+            return Quaternion.identity;
+
+        if (targetVisualYawOnly)
+            return Quaternion.Euler(0f, _targetTransform.eulerAngles.y, 0f);
+
+        return _targetTransform.rotation;
+    }
+
+    private Quaternion GetTargetVisualLocalCorrection(Transform anchorTransform, Quaternion targetBaseRotation)
+    {
+        Quaternion localCorrection = Quaternion.Euler(targetVisualLocalEuler);
+        if (captureTargetVisualLocalRotationOnBind)
+        {
+            TryCaptureTargetVisualLocalRotation(anchorTransform, targetBaseRotation);
+            if (_hasCapturedTargetVisualLocalRotation)
+                localCorrection = _capturedTargetVisualLocalRotation;
+        }
+
+        if (targetVisualFlipForward)
+            localCorrection *= Quaternion.Euler(0f, 180f, 0f);
+
+        return localCorrection;
+    }
+
+    private void TryCaptureTargetVisualLocalRotation(Transform anchorTransform)
+    {
+        if (anchorTransform == null || _targetTransform == null)
+            return;
+
+        TryCaptureTargetVisualLocalRotation(anchorTransform, GetTargetVisualBaseRotation());
+    }
+
+    private void TryCaptureTargetVisualLocalRotation(Transform anchorTransform, Quaternion targetBaseRotation)
+    {
+        if (!captureTargetVisualLocalRotationOnBind ||
+            _hasCapturedTargetVisualLocalRotation ||
+            anchorTransform == null ||
+            _targetTransform == null)
+        {
+            return;
+        }
+
+        _capturedTargetVisualLocalRotation = Quaternion.Inverse(targetBaseRotation) * anchorTransform.rotation;
+        _hasCapturedTargetVisualLocalRotation = true;
+        LogVisualLock("Captured target local visual rotation.");
+    }
+
+    private void ApplyTargetVisualRotation(Transform anchorTransform, Quaternion targetRotation)
+    {
+        if (targetVisualRotationSmoothTime <= 0f)
+        {
+            anchorTransform.rotation = targetRotation;
+            return;
+        }
+
+        float rotationT = GetSmoothingFactor(GetWorldAnchorDeltaTime(), targetVisualRotationSmoothTime);
+        anchorTransform.rotation = Quaternion.Slerp(anchorTransform.rotation, targetRotation, rotationT);
+    }
+
+    private void ResetTargetVisualFollowRectLocalRotation(Transform anchorTransform)
+    {
+        if (!targetVisualResetFollowRectLocalRotation || !IsTargetVisualWorldMode())
+            return;
+
+        if (followRect == null || followRect.transform == anchorTransform)
+            return;
+
+        followRect.localRotation = Quaternion.identity;
+    }
+
+    private void ApplyVisualRotation(Transform anchorTransform, Quaternion targetRotation)
+    {
+        if (visualRotationSmoothTime <= 0f)
+        {
+            anchorTransform.rotation = targetRotation;
+            return;
+        }
+
+        float rotationT = GetSmoothingFactor(GetWorldAnchorDeltaTime(), visualRotationSmoothTime);
+        anchorTransform.rotation = Quaternion.Slerp(anchorTransform.rotation, targetRotation, rotationT);
+    }
+
+    private void ResetFollowRectVisualLocalRotation(Transform anchorTransform)
+    {
+        if (!resetFollowRectLocalRotation || !IsWorldSpaceVisualMode())
+            return;
+
+        if (followRect == null || followRect.transform == anchorTransform)
+            return;
+
+        followRect.localRotation = Quaternion.identity;
+    }
+
+    private bool ShouldApplyVisualLock()
+    {
+        if (visualLockMode == VisualLockMode.None)
+            return false;
+
+        if (visualLockMode == VisualLockMode.TargetYawLocalRotation)
+            return IsTargetVisualWorldMode();
+
+        if (visualLockMode == VisualLockMode.CameraFacingFixedScale)
+            return IsWorldSpaceVisualMode();
+
+        if (!applyVisualLockInWorldModesOnly)
+            return true;
+
+        return IsWorldSpaceVisualMode();
+    }
+
+    private bool ShouldSuppressLegacyBillboard()
+    {
+        if (visualLockMode == VisualLockMode.TargetYawLocalRotation)
+            return IsTargetVisualWorldMode();
+
+        return disableLegacyBillboardWhenVisualLocked && ShouldApplyVisualLock();
+    }
+
+    private bool IsWorldSpaceVisualMode()
+    {
+        if (presentationMode == PresentationMode.WorldSpaceAnchor ||
+            presentationMode == PresentationMode.StabilizedWorldAnchor)
+        {
+            return true;
+        }
+
+        if (presentationMode == PresentationMode.ScreenLockedWorldAnchor)
+            return targetCanvas != null && targetCanvas.renderMode == RenderMode.WorldSpace;
+
+        return false;
+    }
+
+    private bool IsTargetVisualWorldMode()
+    {
+        return presentationMode == PresentationMode.WorldSpaceAnchor ||
+               presentationMode == PresentationMode.StabilizedWorldAnchor;
+    }
+
+    private void ApplyVisualScale(Transform anchorTransform)
+    {
+        if (!ShouldKeepVisualScale() || anchorTransform == null || !ShouldApplyVisualLock())
+            return;
+
+        if (!_hasInitialVisualScale)
+            TryCaptureInitialVisualScale(anchorTransform);
+
+        if (!_hasInitialVisualScale)
+            return;
+
+        anchorTransform.localScale = _initialVisualLocalScale;
+    }
+
+    private bool ShouldKeepVisualScale()
+    {
+        return keepVisualScale ||
+               (visualLockMode == VisualLockMode.TargetYawLocalRotation && targetVisualKeepScale);
+    }
+
+    private void LogVisualLockApplied()
+    {
+        if (_hasLoggedVisualLockApplied && _lastLoggedVisualLockMode == visualLockMode)
+            return;
+
+        _hasLoggedVisualLockApplied = true;
+        _lastLoggedVisualLockMode = visualLockMode;
+        if (visualLockMode == VisualLockMode.TargetYawLocalRotation)
+            LogVisualLock("TargetYawLocalRotation applied.");
+        else if (visualLockMode == VisualLockMode.CameraFacingFixedScale)
+            LogVisualLock("CameraFacingFixedScale applied.");
+        else
+            LogVisualLock($"Visual lock mode={visualLockMode} applied.");
+    }
+
+    private void LogCameraFacingFlipForward()
+    {
+        if (!screenFacingFlipForward || _hasLoggedCameraFacingFlipForward)
+            return;
+
+        _hasLoggedCameraFacingFlipForward = true;
+        LogVisualLock("Camera facing flip forward enabled.");
+    }
+
+    private void LogTargetVisualFlipForward()
+    {
+        if (!targetVisualFlipForward || _hasLoggedTargetVisualFlipForward)
+            return;
+
+        _hasLoggedTargetVisualFlipForward = true;
+        LogVisualLock("Target visual flip forward enabled.");
+    }
+
     private void CacheWorldAnchorScale(Transform anchorTransform)
     {
         if (!keepWorldScale || _hasInitialWorldAnchorScale || anchorTransform == null)
@@ -1156,6 +1822,12 @@ public class CharacterFollowStaminaHUD : MonoBehaviour
 
     private void RefreshVisibility()
     {
+        if (IsPrefabAttachedMode() && _prefabAttachedHiddenForNonOwner)
+        {
+            SetVisible(false);
+            return;
+        }
+
         if (_boundStaminaModule == null)
         {
             SetVisible(!hideWhenNoLocalPlayer);
@@ -1192,6 +1864,13 @@ public class CharacterFollowStaminaHUD : MonoBehaviour
     private void ApplyMissingLocalPlayerState()
     {
         RefreshStaminaUI(false);
+
+        if (IsPrefabAttachedMode() && _prefabAttachedHiddenForNonOwner)
+        {
+            SetVisible(false);
+            return;
+        }
+
         SetVisible(!hideWhenNoLocalPlayer);
     }
 
@@ -1249,6 +1928,13 @@ public class CharacterFollowStaminaHUD : MonoBehaviour
         if (_boundPlayerHub == null || _targetTransform == null)
             return false;
 
+        if (IsPrefabAttachedMode() && ShouldRequirePrefabAttachedLocalOwner())
+        {
+            bool isLocalOwner = IsPrefabAttachedLocalOwner(_boundPlayerHub);
+            _prefabAttachedHiddenForNonOwner = !isLocalOwner;
+            return isLocalOwner;
+        }
+
         if (!_boundPlayerHub.IsSpawned)
             return false;
 
@@ -1268,6 +1954,12 @@ public class CharacterFollowStaminaHUD : MonoBehaviour
     {
         if (_targetTransform == null)
             return;
+
+        if (presentationMode == PresentationMode.PrefabAttachedLocalOwner)
+        {
+            LogPrefabAttached($"Prefab attached mode active. positionFollowDisabled={attachedDisablePositionFollow} rotationFollowDisabled={attachedDisableRotationFollow}");
+            return;
+        }
 
         if (presentationMode == PresentationMode.CharacterScreenAnchor)
         {
@@ -1335,9 +2027,52 @@ public class CharacterFollowStaminaHUD : MonoBehaviour
         Debug.Log($"[CharacterFollowStaminaHUD] {message}", this);
     }
 
+    private void LogPrefabAttachedParentFound()
+    {
+        if (_hasLoggedPrefabAttachedParentFound)
+            return;
+
+        _hasLoggedPrefabAttachedParentFound = true;
+        LogPrefabAttached("Prefab attached parent player found.");
+    }
+
+    private void LogPrefabAttachedHiddenNonOwner()
+    {
+        if (_hasLoggedPrefabAttachedHiddenNonOwner)
+            return;
+
+        _hasLoggedPrefabAttachedHiddenNonOwner = true;
+        LogPrefabAttached("Prefab attached hidden: non-owner.");
+    }
+
+    private void LogPrefabAttachedOwnerBound()
+    {
+        if (_hasLoggedPrefabAttachedOwnerBound)
+            return;
+
+        _hasLoggedPrefabAttachedOwnerBound = true;
+        LogPrefabAttached("Prefab attached owner bound.");
+    }
+
+    private void LogPrefabAttached(string message)
+    {
+        if (!attachedDebugLogs && !followStaminaDebugLogs)
+            return;
+
+        Debug.Log($"[CharacterFollowStaminaHUD] {message}", this);
+    }
+
     private void Log(string message)
     {
         if (!followStaminaDebugLogs)
+            return;
+
+        Debug.Log($"[CharacterFollowStaminaHUD] {message}", this);
+    }
+
+    private void LogVisualLock(string message)
+    {
+        if (!visualLockDebugLogs && !followStaminaDebugLogs)
             return;
 
         Debug.Log($"[CharacterFollowStaminaHUD] {message}", this);
@@ -1348,6 +2083,8 @@ public class CharacterFollowStaminaHUD : MonoBehaviour
         followSmoothTime = Mathf.Max(0f, followSmoothTime);
         worldFollowSmoothTime = Mathf.Max(0f, worldFollowSmoothTime);
         maxWorldSnapDistance = Mathf.Max(0f, maxWorldSnapDistance);
+        visualRotationSmoothTime = Mathf.Max(0f, visualRotationSmoothTime);
+        targetVisualRotationSmoothTime = Mathf.Max(0f, targetVisualRotationSmoothTime);
         stabilizedWorldFollowSmoothTime = Mathf.Max(0f, stabilizedWorldFollowSmoothTime);
         stabilizedVerticalSmoothTime = Mathf.Max(0f, stabilizedVerticalSmoothTime);
         worldAnchorSnapDistance = Mathf.Max(0f, worldAnchorSnapDistance);
@@ -1361,6 +2098,8 @@ public class CharacterFollowStaminaHUD : MonoBehaviour
         characterScreenDeadzone = Mathf.Max(0f, characterScreenDeadzone);
         worldOffset = GetFiniteVector3OrZero(worldOffset);
         targetLocalOffset = GetFiniteVector3OrZero(targetLocalOffset);
+        lockedWorldRotationEuler = GetFiniteVector3OrZero(lockedWorldRotationEuler);
+        targetVisualLocalEuler = GetFiniteVector3OrZero(targetVisualLocalEuler);
         screenLockedOffset = GetFiniteVector2OrZero(screenLockedOffset);
         screenLockedWorldBaseOffset = GetFiniteVector3OrZero(screenLockedWorldBaseOffset);
         characterScreenWorldBaseOffset = GetFiniteVector3OrZero(characterScreenWorldBaseOffset);
