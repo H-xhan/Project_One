@@ -283,6 +283,25 @@ public class CharacterFollowStaminaHUD : MonoBehaviour
     [SerializeField, Tooltip("프리팹 부착 모드 디버그 로그를 출력합니다.")]
     private bool attachedDebugLogs = false;
 
+    [Header("Stamina Visual Fill")]
+    [SerializeField, Tooltip("곡선형 스태미나 UI처럼 실제 보이는 영역이 fillAmount 0~1과 다를 때 표시용 fill 범위를 보정합니다.")]
+    private bool useStaminaVisualFillRemap = false;
+
+    [SerializeField, Range(0f, 1f), Tooltip("실제 스태미나가 0일 때 Image.fillAmount에 적용할 값입니다. 투명 여백 때문에 0보다 큰 값이 필요할 수 있습니다.")]
+    private float staminaVisualEmptyFillAmount = 0f;
+
+    [SerializeField, Range(0f, 1f), Tooltip("실제 스태미나가 최대일 때 Image.fillAmount에 적용할 값입니다. 이미지 상단 여백 때문에 1보다 작은 값이 필요할 수 있습니다.")]
+    private float staminaVisualFullFillAmount = 1f;
+
+    [SerializeField, Min(0.1f), Tooltip("표시용 fill 변화 곡선을 조정합니다. 1은 선형, 1보다 작으면 초반이 더 많이 차 보이고, 1보다 크면 후반이 더 많이 차 보입니다.")]
+    private float staminaVisualFillExponent = 1f;
+
+    [SerializeField, Tooltip("필요 시 표시용 fill 방향을 반전합니다.")]
+    private bool invertStaminaVisualFill = false;
+
+    [SerializeField, Tooltip("실제 stamina ratio와 보정된 visual fill 값을 로그로 확인합니다.")]
+    private bool staminaVisualFillDebugLogs = false;
+
     [Header("Visibility")]
     [SerializeField, Tooltip("로컬 플레이어를 찾지 못했을 때 UI를 숨길지 여부입니다.")]
     private bool hideWhenNoLocalPlayer = true;
@@ -326,6 +345,8 @@ public class CharacterFollowStaminaHUD : MonoBehaviour
     private float _nextBindAttemptTime;
     private float _visibleUntil;
     private float _lastRatio = -1f;
+    private float _lastLoggedStaminaVisualRatio = -1f;
+    private float _lastLoggedStaminaVisualFill = -1f;
     private bool _hasSnappedToTarget;
     private bool _hasInitialWorldAnchorScale;
     private bool _hasInitialVisualScale;
@@ -337,6 +358,7 @@ public class CharacterFollowStaminaHUD : MonoBehaviour
     private bool _hasAttachedRootLocalTransform;
     private bool _hasAttachedFollowLocalTransform;
     private bool _prefabAttachedHiddenForNonOwner;
+    private bool _hasLoggedStaminaVisualFill;
     private bool _hasLoggedPrefabAttachedParentFound;
     private bool _hasLoggedPrefabAttachedHiddenNonOwner;
     private bool _hasLoggedPrefabAttachedOwnerBound;
@@ -367,6 +389,7 @@ public class CharacterFollowStaminaHUD : MonoBehaviour
         _hasLoggedCameraFacingFlipForward = false;
         _hasLoggedTargetVisualFlipForward = false;
         _prefabAttachedHiddenForNonOwner = false;
+        _hasLoggedStaminaVisualFill = false;
         _hasLoggedPrefabAttachedParentFound = false;
         _hasLoggedPrefabAttachedHiddenNonOwner = false;
         _hasLoggedPrefabAttachedOwnerBound = false;
@@ -699,6 +722,7 @@ public class CharacterFollowStaminaHUD : MonoBehaviour
         _worldVerticalVelocity = 0f;
         _hasInitialWorldAnchorScale = false;
         _hasCapturedTargetVisualLocalRotation = false;
+        _hasLoggedStaminaVisualFill = false;
         _characterScreenTargetInView = true;
         _lastRatio = -1f;
     }
@@ -724,8 +748,10 @@ public class CharacterFollowStaminaHUD : MonoBehaviour
 
         if (staminaFillImage != null)
         {
-            staminaFillImage.fillAmount = ratio;
+            float visualFillAmount = GetStaminaVisualFillAmount(ratio);
+            staminaFillImage.fillAmount = visualFillAmount;
             staminaFillImage.color = IsLowStamina(currentStamina, ratio) ? lowStaminaFillColor : normalFillColor;
+            LogStaminaVisualFill(ratio, visualFillAmount);
         }
 
         if (staminaSlider != null)
@@ -743,6 +769,22 @@ public class CharacterFollowStaminaHUD : MonoBehaviour
             return 0f;
 
         return Mathf.Clamp01(currentStamina / maxStamina);
+    }
+
+    private float GetStaminaVisualFillAmount(float normalizedRatio)
+    {
+        float sourceRatio = Mathf.Clamp01(normalizedRatio);
+        if (!useStaminaVisualFillRemap)
+            return sourceRatio;
+
+        float ratio = invertStaminaVisualFill ? 1f - sourceRatio : sourceRatio;
+        float exponent = Mathf.Max(0.1f, staminaVisualFillExponent);
+        if (!Mathf.Approximately(exponent, 1f))
+            ratio = Mathf.Pow(ratio, exponent);
+
+        float emptyFillAmount = Mathf.Clamp01(staminaVisualEmptyFillAmount);
+        float fullFillAmount = Mathf.Clamp01(staminaVisualFullFillAmount);
+        return Mathf.Clamp01(Mathf.Lerp(emptyFillAmount, fullFillAmount, ratio));
     }
 
     private bool IsLowStamina(float currentStamina, float ratio)
@@ -2062,6 +2104,24 @@ public class CharacterFollowStaminaHUD : MonoBehaviour
         Debug.Log($"[CharacterFollowStaminaHUD] {message}", this);
     }
 
+    private void LogStaminaVisualFill(float ratio, float visualFillAmount)
+    {
+        if (!staminaVisualFillDebugLogs && !followStaminaDebugLogs)
+            return;
+
+        if (_hasLoggedStaminaVisualFill &&
+            Mathf.Abs(_lastLoggedStaminaVisualRatio - ratio) < 0.001f &&
+            Mathf.Abs(_lastLoggedStaminaVisualFill - visualFillAmount) < 0.001f)
+        {
+            return;
+        }
+
+        _hasLoggedStaminaVisualFill = true;
+        _lastLoggedStaminaVisualRatio = ratio;
+        _lastLoggedStaminaVisualFill = visualFillAmount;
+        Debug.Log($"[CharacterFollowStaminaHUD] stamina ratio={ratio:0.###} visualFill={visualFillAmount:0.###}", this);
+    }
+
     private void Log(string message)
     {
         if (!followStaminaDebugLogs)
@@ -2115,6 +2175,9 @@ public class CharacterFollowStaminaHUD : MonoBehaviour
         rebindInterval = Mathf.Max(0f, rebindInterval);
         visibleAfterChangeSeconds = Mathf.Max(0f, visibleAfterChangeSeconds);
         lowStaminaThreshold = Mathf.Max(0f, lowStaminaThreshold);
+        staminaVisualEmptyFillAmount = Mathf.Clamp01(staminaVisualEmptyFillAmount);
+        staminaVisualFullFillAmount = Mathf.Clamp01(staminaVisualFullFillAmount);
+        staminaVisualFillExponent = Mathf.Max(0.1f, staminaVisualFillExponent);
     }
 
     private static float GetFiniteOrZero(float value)
