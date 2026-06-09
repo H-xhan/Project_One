@@ -1373,9 +1373,9 @@ MonoBehaviour:
   m_EditorClassIdentifier: 
   ShowTopMostFoldoutHeaderGroup: 1
   maxStamina: 100
-  startingStamina: 100
+  startingStamina: 1
   regenerationPerSecond: 20
-  regenerationDelayAfterSpend: 0.5
+  regenerationDelayAfterSpend: 1
   regenerateAutomatically: 1
   serverRegenTickInterval: 0.1
 --- !u!1 &6368872376776149902

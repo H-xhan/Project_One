@@ -11,6 +11,8 @@ TagManager:
   - GameSpawnPoint
   - LobbySpawnPoint
   - Hurtbox
+  - RagdollTestGround
+  - RagdollTestPuppet
   layers:
   - Default
   - TransparentFX
@@ -26,8 +28,8 @@ TagManager:
   - Hurtbox
   - BodyBlocker
   - RagdollPart
-  - 
-  - 
+  - 'RagdollTestGround '
+  - RagdollTestPuppet
   - 
   - 
   - 
