@@ -302,6 +302,15 @@ public class CharacterFollowStaminaHUD : MonoBehaviour
     [SerializeField, Tooltip("실제 stamina ratio와 보정된 visual fill 값을 로그로 확인합니다.")]
     private bool staminaVisualFillDebugLogs = false;
 
+    [SerializeField, Tooltip("실제 stamina ratio를 곡선형 UI에 맞는 표시 fillAmount로 변환합니다.")]
+    private bool useStaminaVisualFillCurve = false;
+
+    [SerializeField, Tooltip("X=실제 stamina ratio, Y=Image.fillAmount 표시값입니다.")]
+    private AnimationCurve staminaVisualFillCurve = AnimationCurve.Linear(0f, 0f, 1f, 1f);
+
+    [SerializeField, Tooltip("curve remap 결과를 로그로 확인합니다.")]
+    private bool staminaVisualCurveDebugLogs = false;
+
     [Header("Visibility")]
     [SerializeField, Tooltip("로컬 플레이어를 찾지 못했을 때 UI를 숨길지 여부입니다.")]
     private bool hideWhenNoLocalPlayer = true;
@@ -366,6 +375,79 @@ public class CharacterFollowStaminaHUD : MonoBehaviour
     private bool _characterScreenTargetInView = true;
     private PresentationMode _lastPresentationMode;
     private VisualLockMode _lastLoggedVisualLockMode = VisualLockMode.None;
+
+    [ContextMenu("Project One/Apply Prefab Attached Stamina HUD Preset")]
+    private void ApplyPrefabAttachedStaminaHudPreset()
+    {
+        ApplyPrefabAttachedStaminaHudPresetValues();
+        MarkPresetDirty();
+        Debug.Log("[CharacterFollowStaminaHUD] Applied prefab attached stamina HUD preset.", this);
+    }
+
+    [ContextMenu("Project One/Apply Stamina Arc Fill Curve Preset")]
+    private void ApplyStaminaArcFillCurvePreset()
+    {
+        ApplyStaminaArcFillCurvePresetValues();
+        MarkPresetDirty();
+        Debug.Log("[CharacterFollowStaminaHUD] Applied stamina arc fill curve preset.", this);
+    }
+
+    private void ApplyPrefabAttachedStaminaHudPresetValues()
+    {
+        presentationMode = PresentationMode.PrefabAttachedLocalOwner;
+
+        attachedUseParentPlayerHub = true;
+        attachedOwnerOnly = true;
+        attachedDisablePositionFollow = true;
+        attachedDisableRotationFollow = true;
+        attachedKeepLocalTransform = true;
+        attachedHideOnNonOwner = true;
+        attachedDebugLogs = false;
+
+        autoBindLocalPlayer = true;
+        hideWhenNoLocalPlayer = false;
+        hideWhenFull = false;
+
+        ApplyStaminaArcFillCurvePresetValues();
+
+        billboardToCamera = false;
+        billboardYawOnly = false;
+        visualLockMode = VisualLockMode.None;
+        disableLegacyBillboardWhenVisualLocked = true;
+        keepVisualScale = true;
+    }
+
+    private void ApplyStaminaArcFillCurvePresetValues()
+    {
+        useStaminaVisualFillCurve = true;
+        useStaminaVisualFillRemap = false;
+        invertStaminaVisualFill = false;
+        staminaVisualFillDebugLogs = false;
+        staminaVisualCurveDebugLogs = false;
+        staminaVisualFillCurve = CreateDefaultStaminaArcFillCurve();
+    }
+
+    private static AnimationCurve CreateDefaultStaminaArcFillCurve()
+    {
+        AnimationCurve curve = new AnimationCurve(
+            new Keyframe(0f, 0.22f),
+            new Keyframe(0.25f, 0.43f),
+            new Keyframe(0.5f, 0.62f),
+            new Keyframe(0.75f, 0.8f),
+            new Keyframe(1f, 0.96f));
+
+        for (int i = 0; i < curve.length; i++)
+            curve.SmoothTangents(i, 0f);
+
+        return curve;
+    }
+
+    private void MarkPresetDirty()
+    {
+#if UNITY_EDITOR
+        UnityEditor.EditorUtility.SetDirty(this);
+#endif
+    }
 
     private void Awake()
     {
@@ -774,6 +856,19 @@ public class CharacterFollowStaminaHUD : MonoBehaviour
     private float GetStaminaVisualFillAmount(float normalizedRatio)
     {
         float sourceRatio = Mathf.Clamp01(normalizedRatio);
+
+        if (useStaminaVisualFillCurve)
+        {
+            float curveFillAmount = staminaVisualFillCurve != null
+                ? staminaVisualFillCurve.Evaluate(sourceRatio)
+                : sourceRatio;
+
+            if (invertStaminaVisualFill)
+                curveFillAmount = 1f - curveFillAmount;
+
+            return Mathf.Clamp01(curveFillAmount);
+        }
+
         if (!useStaminaVisualFillRemap)
             return sourceRatio;
 
@@ -2106,7 +2201,7 @@ public class CharacterFollowStaminaHUD : MonoBehaviour
 
     private void LogStaminaVisualFill(float ratio, float visualFillAmount)
     {
-        if (!staminaVisualFillDebugLogs && !followStaminaDebugLogs)
+        if (!staminaVisualFillDebugLogs && !staminaVisualCurveDebugLogs && !followStaminaDebugLogs)
             return;
 
         if (_hasLoggedStaminaVisualFill &&
@@ -2178,6 +2273,8 @@ public class CharacterFollowStaminaHUD : MonoBehaviour
         staminaVisualEmptyFillAmount = Mathf.Clamp01(staminaVisualEmptyFillAmount);
         staminaVisualFullFillAmount = Mathf.Clamp01(staminaVisualFullFillAmount);
         staminaVisualFillExponent = Mathf.Max(0.1f, staminaVisualFillExponent);
+        if (staminaVisualFillCurve == null)
+            staminaVisualFillCurve = AnimationCurve.Linear(0f, 0f, 1f, 1f);
     }
 
     private static float GetFiniteOrZero(float value)
