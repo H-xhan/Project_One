@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using UnityEditor;
+using UnityEditor.Animations;
 using UnityEditor.SceneManagement;
 using UnityEngine;
 using UnityEngine.SceneManagement;
@@ -20,6 +21,15 @@ public static class HamsterFullRagdollTestSetupUtility
     private const string JointFreeShellRootName = "Hamster_JointFreeMotorShell_Test";
     private const string JointFreeShellBodyName = "MotorShellBody";
     private const string JointFreeShellVisualRootName = "VisualPreviewRoot";
+    private const string JointFreeVisualGeneratedFolderPath = "Assets/Scripts/Test/HamsterFullRagdoll/Generated";
+    private const string JointFreeVisualControllerPath = JointFreeVisualGeneratedFolderPath + "/Hamster_JointFreeVisual.controller";
+    private const string VisualAnimatorSpeedParameter = "Speed";
+    private const string VisualAnimatorMove01Parameter = "Move01";
+    private const float VisualAnimatorWalkStateSpeed = 1.45f;
+    private const float VisualGroundOffsetPresetY = 0.10f;
+    private const float VisualGroundOffsetPreserveThresholdY = 0.05f;
+    private const RigidbodyConstraints MotorShellRotationStabilityConstraints =
+        RigidbodyConstraints.FreezeRotationX | RigidbodyConstraints.FreezeRotationZ;
 
     private static readonly string[] SceneSourceCandidates =
     {
@@ -45,6 +55,86 @@ public static class HamsterFullRagdollTestSetupUtility
         "PlayerInteractModule",
         "PlayerStatusModule",
         "PlayerStaminaModule"
+    };
+
+    private static readonly string[] AnimationClipSearchPaths =
+    {
+        "Assets/Anime",
+        "Assets/Animation",
+        "Assets/Modeling",
+        "Assets/Prefab",
+        "Assets"
+    };
+
+    private static readonly string[] IdleClipNameFragments =
+    {
+        "idle",
+        "wait",
+        "normal",
+        "default",
+        "대기",
+        "기본"
+    };
+
+    private static readonly string[] WalkClipNameFragments =
+    {
+        "walk",
+        "run",
+        "move",
+        "locomotion",
+        "trot",
+        "이동",
+        "걷",
+        "총총"
+    };
+
+    private static readonly string[] BlockedAnimationClipNameFragments =
+    {
+        "back stand up",
+        "front stand up",
+        "stand up",
+        "get up",
+        "rise",
+        "recover",
+        "knock",
+        "knockdown",
+        "down",
+        "fall",
+        "hit",
+        "hurt",
+        "damage",
+        "attack",
+        "punch",
+        "kick",
+        "carry",
+        "grab",
+        "throw",
+        "pickup",
+        "stun",
+        "die",
+        "death",
+        "일어나",
+        "기상",
+        "피격",
+        "피해",
+        "공격",
+        "펀치",
+        "킥",
+        "잡기",
+        "들기",
+        "던지",
+        "기절",
+        "넘어",
+        "쓰러",
+        "죽음"
+    };
+
+    private static readonly string[] VisualClipPriorityFragments =
+    {
+        "Sugar",
+        "Suga",
+        "슈가",
+        "Hamster"
     };
 
     private static readonly string[] HipsCandidates =
@@ -388,6 +478,134 @@ public static class HamsterFullRagdollTestSetupUtility
         Debug.Log($"{LogPrefix} 5. Press Play and tap W for 0.3 sec.");
     }
 
+    [MenuItem("Project ONE/Hamster Full Ragdoll/Configure Visual Follower For Joint-Free Shell")]
+    private static void ConfigureVisualFollowerForJointFreeShell()
+    {
+        Scene activeScene;
+        if (!TryGetCurrentDestinationTestScene(out activeScene))
+            return;
+
+        HamsterVisualFollower visualFollower;
+        if (!ConfigureVisualFollowerForJointFreeShell(activeScene, out visualFollower))
+            return;
+
+        Rigidbody ignoredBody;
+        if (!ApplyMotorShellRotationStabilityToSceneShell(activeScene, out ignoredBody))
+            return;
+
+        if (!SaveCurrentDestinationTestScene(activeScene, "Visual Follower setup"))
+            return;
+
+        if (visualFollower != null)
+            Selection.activeGameObject = visualFollower.gameObject;
+
+        Debug.Log($"{LogPrefix} Ready for visual follow test.");
+        Debug.Log($"{LogPrefix} Next test:");
+        Debug.Log($"{LogPrefix} 1. Keep Hamster_FullRagdoll_Test inactive.");
+        Debug.Log($"{LogPrefix} 2. Select MotorShellBody.");
+        Debug.Log($"{LogPrefix} 3. Confirm HamsterVisualFollower targetBody and visualRoot are assigned.");
+        Debug.Log($"{LogPrefix} 4. Press Play.");
+        Debug.Log($"{LogPrefix} 5. Move with W/A/S/D.");
+        Debug.Log($"{LogPrefix} 6. Tune visualYawOffsetDegrees if model faces wrong direction.");
+        Debug.Log($"{LogPrefix} 7. Tune invertForwardLean/invertSideLean if lean is reversed.");
+        Debug.Log($"{LogPrefix} 8. Turn debugLogs off after tuning.");
+    }
+
+    [MenuItem("Project ONE/Hamster Full Ragdoll/Apply Motor Shell Rotation Stability Preset")]
+    private static void ApplyMotorShellRotationStabilityPreset()
+    {
+        Scene activeScene;
+        if (!TryGetCurrentDestinationTestScene(out activeScene))
+            return;
+
+        Rigidbody bodyRigidbody;
+        if (!ApplyMotorShellRotationStabilityToSceneShell(activeScene, out bodyRigidbody))
+            return;
+
+        if (!SaveCurrentDestinationTestScene(activeScene, "Motor Shell Rotation Stability preset"))
+            return;
+
+        LogMotorShellRotationStabilityNextTest();
+    }
+
+    [MenuItem("Project ONE/Hamster Full Ragdoll/Apply Visual Ground Offset Preset")]
+    private static void ApplyVisualGroundOffsetPreset()
+    {
+        Scene activeScene;
+        if (!TryGetCurrentDestinationTestScene(out activeScene))
+            return;
+
+        HamsterVisualFollower visualFollower;
+        if (!TryGetJointFreeVisualFollower(activeScene, out visualFollower))
+            return;
+
+        if (!ApplyVisualGroundOffsetPreset(visualFollower))
+            return;
+
+        if (!SaveCurrentDestinationTestScene(activeScene, "Visual Ground Offset preset"))
+            return;
+
+        LogVisualDiagnosticNextTest();
+    }
+
+    [MenuItem("Project ONE/Hamster Full Ragdoll/Apply Visual Idle No-Lean Diagnostic")]
+    private static void ApplyVisualIdleNoLeanDiagnostic()
+    {
+        Scene activeScene;
+        if (!TryGetCurrentDestinationTestScene(out activeScene))
+            return;
+
+        HamsterVisualFollower visualFollower;
+        if (!TryGetJointFreeVisualFollower(activeScene, out visualFollower))
+            return;
+
+        ApplyVisualIdleNoLeanDiagnostic(visualFollower);
+
+        if (!SaveCurrentDestinationTestScene(activeScene, "Visual Idle No-Lean diagnostic"))
+            return;
+
+        LogVisualDiagnosticNextTest();
+    }
+
+    [MenuItem("Project ONE/Hamster Full Ragdoll/Restore Visual Wobble Preset")]
+    private static void RestoreVisualWobblePreset()
+    {
+        Scene activeScene;
+        if (!TryGetCurrentDestinationTestScene(out activeScene))
+            return;
+
+        HamsterVisualFollower visualFollower;
+        if (!TryGetJointFreeVisualFollower(activeScene, out visualFollower))
+            return;
+
+        RestoreVisualWobblePreset(visualFollower);
+
+        if (!SaveCurrentDestinationTestScene(activeScene, "Visual Wobble preset restore"))
+            return;
+
+        LogVisualDiagnosticNextTest();
+    }
+
+    [MenuItem("Project ONE/Hamster Full Ragdoll/Configure Visual Animator For Joint-Free Shell")]
+    private static void ConfigureVisualAnimatorForJointFreeShell()
+    {
+        Scene activeScene;
+        if (!TryGetCurrentDestinationTestScene(out activeScene))
+            return;
+
+        Animator visualAnimator;
+        HamsterVisualFollower visualFollower;
+        if (!ConfigureVisualAnimatorForJointFreeShell(activeScene, out visualAnimator, out visualFollower))
+            return;
+
+        if (!SaveCurrentDestinationTestScene(activeScene, "Visual Animator setup"))
+            return;
+
+        AssetDatabase.SaveAssets();
+        Debug.Log($"{LogPrefix} Ready for idle/walk visual animation test");
+        LogVisualAnimatorNextTest();
+    }
+
     [MenuItem("Project ONE/Hamster Full Ragdoll/Validate Selected Test Prefab")]
     private static void ValidateSelectedTestPrefab()
     {
@@ -477,10 +695,22 @@ public static class HamsterFullRagdollTestSetupUtility
             return;
         }
 
+        bool shellExists = FindGameObjectByName(activeScene, JointFreeShellRootName) != null;
         if (!testInstance.activeInHierarchy)
-            Debug.LogError($"{LogPrefix} Destination Hamster_FullRagdoll_Test instance is not active.");
+        {
+            if (shellExists)
+                Debug.Log($"{LogPrefix} Destination Hamster_FullRagdoll_Test instance is inactive for shell-only testing.");
+            else
+                Debug.LogError($"{LogPrefix} Destination Hamster_FullRagdoll_Test instance is not active.");
+        }
+        else if (shellExists)
+        {
+            Debug.LogWarning($"{LogPrefix} Destination Hamster_FullRagdoll_Test instance is active while Joint-Free Shell exists; disable it for shell-only visual follow tests.");
+        }
         else
+        {
             Debug.Log($"{LogPrefix} Destination Hamster_FullRagdoll_Test instance is active.");
+        }
 
         ValidateNoActiveProtectedTestLikeInstances(activeScene, testInstance);
 
@@ -1215,6 +1445,990 @@ public static class HamsterFullRagdollTestSetupUtility
         return true;
     }
 
+    private static bool ConfigureVisualFollowerForJointFreeShell(Scene scene, out HamsterVisualFollower visualFollower)
+    {
+        visualFollower = null;
+        GameObject shellRoot = FindGameObjectByName(scene, JointFreeShellRootName);
+        if (shellRoot == null)
+        {
+            Debug.LogWarning($"{LogPrefix} Joint-Free Motor Shell is missing. Run Create Phase 1 Joint-Free Motor Shell first.");
+            return false;
+        }
+
+        Transform bodyTransform = FindDirectChild(shellRoot.transform, JointFreeShellBodyName);
+        if (bodyTransform == null)
+        {
+            Debug.LogError($"{LogPrefix} {JointFreeShellBodyName} is missing under {JointFreeShellRootName}.");
+            return false;
+        }
+
+        Rigidbody bodyRigidbody = bodyTransform.GetComponent<Rigidbody>();
+        if (bodyRigidbody == null)
+        {
+            Debug.LogError($"{LogPrefix} MotorShellBody Rigidbody is missing. Cannot configure visual follower.");
+            return false;
+        }
+
+        Transform visualRoot = FindDirectChild(shellRoot.transform, JointFreeShellVisualRootName);
+        bool visualRootCreated = false;
+        if (visualRoot == null)
+        {
+            GameObject visualRootObject = new GameObject(JointFreeShellVisualRootName);
+            visualRootObject.transform.SetParent(bodyTransform, false);
+            visualRoot = visualRootObject.transform;
+            visualRootCreated = true;
+        }
+        else if (visualRoot.parent != bodyTransform)
+        {
+            visualRoot.SetParent(bodyTransform, true);
+        }
+
+        if (visualRootCreated)
+            Debug.Log($"{LogPrefix} Created {JointFreeShellVisualRootName} under MotorShellBody.");
+        else
+            Debug.Log($"{LogPrefix} Reused {JointFreeShellVisualRootName}: {GetHierarchyPath(visualRoot)}");
+
+        if (IsInvalidScale(visualRoot.localScale))
+        {
+            visualRoot.localScale = Vector3.one;
+            Debug.LogWarning($"{LogPrefix} Corrected VisualPreviewRoot localScale to Vector3.one.");
+        }
+
+        Renderer[] visualRenderers = visualRoot.GetComponentsInChildren<Renderer>(true);
+        if (visualRenderers.Length == 0)
+            Debug.LogWarning($"{LogPrefix} VisualPreviewRoot has no visual model child. Add visual-only hamster model manually.");
+
+        visualFollower = bodyTransform.GetComponent<HamsterVisualFollower>();
+        bool visualFollowerAdded = false;
+        if (visualFollower == null)
+        {
+            visualFollower = bodyTransform.gameObject.AddComponent<HamsterVisualFollower>();
+            visualFollowerAdded = true;
+        }
+
+        Animator visualAnimator = visualRoot.GetComponentInChildren<Animator>(true);
+        ConfigureVisualFollowerSerializedFields(visualFollower, bodyRigidbody, visualRoot, visualAnimator);
+
+        if (visualAnimator != null)
+        {
+            visualAnimator.applyRootMotion = false;
+            EditorUtility.SetDirty(visualAnimator);
+            Debug.Log($"{LogPrefix} Assigned visualAnimator: {GetHierarchyPath(visualAnimator.transform)}");
+        }
+        else
+        {
+            Debug.LogWarning($"{LogPrefix} No visual Animator found under VisualPreviewRoot. visualAnimator remains empty.");
+        }
+
+        int disabledColliderCount = DisableVisualOnlyColliders(visualRoot);
+        int frozenRigidbodyCount = FreezeVisualOnlyRigidbodies(visualRoot, bodyRigidbody);
+        int jointCount = MinimizeJointInfluence(visualRoot.gameObject, bodyRigidbody);
+        int disabledControllerCount = DisableVisualOnlyControllerComponents(visualRoot);
+        int animatorRootMotionDisabledCount = DisableVisualAnimatorRootMotion(visualRoot);
+
+        ConfigureShellMotorReferencesForVisualFollower(bodyTransform, bodyRigidbody);
+        DisableExistingSkinnedTestInstanceForShellOnly(scene);
+
+        EditorUtility.SetDirty(shellRoot);
+        EditorUtility.SetDirty(bodyTransform.gameObject);
+        EditorUtility.SetDirty(visualRoot.gameObject);
+        EditorUtility.SetDirty(visualFollower);
+
+        Debug.Log($"{LogPrefix} {(visualFollowerAdded ? "Added" : "Reused")} HamsterVisualFollower on MotorShellBody.");
+        Debug.Log($"{LogPrefix} Configured HamsterVisualFollower for Joint-Free Shell.");
+        Debug.Log($"{LogPrefix} Assigned targetBody: {GetHierarchyPath(bodyRigidbody.transform)}");
+        Debug.Log($"{LogPrefix} Assigned visualRoot: {GetHierarchyPath(visualRoot)}");
+        Debug.Log($"{LogPrefix} Visual-only colliders disabled count: {disabledColliderCount}");
+        Debug.Log($"{LogPrefix} Visual-only rigidbodies frozen count: {frozenRigidbodyCount}");
+        Debug.Log($"{LogPrefix} Visual-only joints count: {jointCount}");
+        Debug.Log($"{LogPrefix} Visual-only production/network/controller disabled count: {disabledControllerCount}");
+        Debug.Log($"{LogPrefix} Visual Animator root motion disabled count: {animatorRootMotionDisabledCount}");
+        Debug.LogWarning($"{LogPrefix} Animator parameter Speed/Move01 may not exist, follower handles this safely.");
+        Debug.LogWarning($"{LogPrefix} If visual faces wrong direction, tune visualYawOffsetDegrees.");
+        Debug.LogWarning($"{LogPrefix} If lean direction is reversed, tune invertForwardLean / invertSideLean.");
+        return true;
+    }
+
+    private static bool TryGetJointFreeVisualFollower(Scene scene, out HamsterVisualFollower visualFollower)
+    {
+        visualFollower = null;
+        if (!scene.IsValid()
+            || !string.Equals(NormalizeAssetPath(scene.path), SceneDestinationPath, StringComparison.OrdinalIgnoreCase))
+        {
+            Debug.LogWarning($"{LogPrefix} Current scene is not Test_FullRagdollHamster. Open {SceneDestinationPath} first. CurrentPath={scene.path}");
+            return false;
+        }
+
+        GameObject shellRoot = FindGameObjectByName(scene, JointFreeShellRootName);
+        if (shellRoot == null)
+        {
+            Debug.LogWarning($"{LogPrefix} Hamster_JointFreeMotorShell_Test not found. Run Create Phase 1 Joint-Free Motor Shell first.");
+            return false;
+        }
+
+        Transform bodyTransform = FindDirectChild(shellRoot.transform, JointFreeShellBodyName);
+        if (bodyTransform == null)
+        {
+            Debug.LogError($"{LogPrefix} {JointFreeShellBodyName} is missing under {JointFreeShellRootName}.");
+            return false;
+        }
+
+        visualFollower = bodyTransform.GetComponent<HamsterVisualFollower>();
+        if (visualFollower == null)
+        {
+            Debug.LogWarning($"{LogPrefix} HamsterVisualFollower missing. Run Configure Visual Follower For Joint-Free Shell first.");
+            return false;
+        }
+
+        return true;
+    }
+
+    private static bool ApplyVisualGroundOffsetPreset(HamsterVisualFollower visualFollower)
+    {
+        if (visualFollower == null)
+            return false;
+
+        SerializedObject followerObject = new SerializedObject(visualFollower);
+        Vector3 before;
+        if (!TryGetVector3Field(followerObject, "visualLocalOffset", out before))
+        {
+            Debug.LogWarning($"{LogPrefix} visualLocalOffset field was not found.");
+            return false;
+        }
+
+        Vector3 after = before;
+        if (after.y < VisualGroundOffsetPreserveThresholdY)
+            after.y = VisualGroundOffsetPresetY;
+
+        SetVector3Field(followerObject, "visualLocalOffset", after);
+        followerObject.ApplyModifiedProperties();
+        EditorUtility.SetDirty(visualFollower);
+
+        Debug.Log($"{LogPrefix} Applied Visual Ground Offset Preset");
+        Debug.Log($"{LogPrefix} visualLocalOffset before/after: {before} -> {after}");
+        if (Mathf.Approximately(before.y, after.y) && before.y >= VisualGroundOffsetPreserveThresholdY)
+            Debug.Log($"{LogPrefix} Existing visualLocalOffset.y is already >= {VisualGroundOffsetPreserveThresholdY:F2}; preserved current value.");
+
+        Debug.Log($"{LogPrefix} Next: Press Play and verify feet are not sinking. Tune y between 0.05 and 0.15 if needed.");
+        return true;
+    }
+
+    private static void ApplyVisualIdleNoLeanDiagnostic(HamsterVisualFollower visualFollower)
+    {
+        SerializedObject followerObject = new SerializedObject(visualFollower);
+        SetBoolField(followerObject, "enableBodyLean", false);
+        SetBoolField(followerObject, "enableLocalLag", false);
+        SetBoolField(followerObject, "faceMoveDirection", true);
+        SetBoolField(followerObject, "keepLastMoveYawWhenIdle", true);
+        followerObject.ApplyModifiedProperties();
+        EditorUtility.SetDirty(visualFollower);
+
+        Debug.Log($"{LogPrefix} Applied Visual Idle No-Lean Diagnostic");
+        Debug.Log($"{LogPrefix} If idle still leans forward, the cause is likely Idle clip pose or visualLocalEulerOffset.");
+        Debug.Log($"{LogPrefix} If idle becomes upright, the cause is Body Lean / Local Lag settings.");
+    }
+
+    private static void RestoreVisualWobblePreset(HamsterVisualFollower visualFollower)
+    {
+        SerializedObject followerObject = new SerializedObject(visualFollower);
+        SetBoolField(followerObject, "enableBodyLean", true);
+        SetFloatField(followerObject, "speedForMaxLean", 0.9f);
+        SetFloatField(followerObject, "maxForwardLeanDegrees", 18f);
+        SetFloatField(followerObject, "maxSideLeanDegrees", 26f);
+        SetFloatField(followerObject, "leanSmoothTime", 0.20f);
+        SetBoolField(followerObject, "enableLocalLag", true);
+        SetFloatField(followerObject, "maxBackLag", 0.12f);
+        SetFloatField(followerObject, "maxSideLag", 0.08f);
+        SetFloatField(followerObject, "lagSmoothTime", 0.16f);
+        SetFloatField(followerObject, "yawSmoothTime", 0.32f);
+        SetFloatField(followerObject, "minSpeedToFaceMove", 0.05f);
+        followerObject.ApplyModifiedProperties();
+        EditorUtility.SetDirty(visualFollower);
+
+        Debug.Log($"{LogPrefix} Restored Visual Wobble Preset");
+        Debug.Log($"{LogPrefix} Tune visualYawOffsetDegrees if facing direction is wrong.");
+        Debug.Log($"{LogPrefix} Tune invertForwardLean/invertSideLean if lean direction is reversed.");
+    }
+
+    private static void LogVisualDiagnosticNextTest()
+    {
+        Debug.Log($"{LogPrefix} Next test:");
+        Debug.Log($"{LogPrefix} 1. Keep Hamster_FullRagdoll_Test inactive.");
+        Debug.Log($"{LogPrefix} 2. Keep Hamster_JointFreeMotorShell_Test active.");
+        Debug.Log($"{LogPrefix} 3. Apply Visual Ground Offset Preset if the model sinks into ground.");
+        Debug.Log($"{LogPrefix} 4. Apply Visual Idle No-Lean Diagnostic to check idle forward lean cause.");
+        Debug.Log($"{LogPrefix} 5. If idle still leans, adjust visualLocalEulerOffset or replace idle clip.");
+        Debug.Log($"{LogPrefix} 6. If idle becomes upright, restore Visual Wobble Preset and tune lean values.");
+        Debug.Log($"{LogPrefix} 7. Run Configure Visual Animator For Joint-Free Shell again after clip filter update.");
+        Debug.Log($"{LogPrefix} 8. Validate Current Test Scene.");
+        Debug.Log($"{LogPrefix} 9. Press Play and verify no AnimationEvent receiver errors.");
+    }
+
+    private struct AnimationClipCandidate
+    {
+        public AnimationClip Clip;
+        public string Path;
+        public int Score;
+        public int SearchOrder;
+        public int EventCount;
+        public string EventNames;
+    }
+
+    private struct AnimationClipSearchResult
+    {
+        public bool Found;
+        public AnimationClipCandidate Candidate;
+        public int CandidateCount;
+        public int SkippedBlockedCount;
+        public int SkippedEventCount;
+    }
+
+    private static bool ConfigureVisualAnimatorForJointFreeShell(
+        Scene scene,
+        out Animator visualAnimator,
+        out HamsterVisualFollower visualFollower)
+    {
+        visualAnimator = null;
+        visualFollower = null;
+
+        GameObject shellRoot;
+        Transform bodyTransform;
+        Rigidbody bodyRigidbody;
+        Transform visualRoot;
+        if (!TryGetJointFreeVisualAnimatorContext(
+            scene,
+            out shellRoot,
+            out bodyTransform,
+            out bodyRigidbody,
+            out visualRoot,
+            out visualAnimator))
+        {
+            return false;
+        }
+
+        Debug.Log($"{LogPrefix} Found Animator path: {GetHierarchyPath(visualAnimator.transform)}");
+
+        AnimationClipSearchResult idleSearch = FindAnimationClipCandidate(visualRoot, visualAnimator, IdleClipNameFragments, "Idle");
+        AnimationClipSearchResult walkSearch = FindAnimationClipCandidate(visualRoot, visualAnimator, WalkClipNameFragments, "Walk");
+
+        Debug.Log($"{LogPrefix} Idle candidate count={idleSearch.CandidateCount}");
+        Debug.Log($"{LogPrefix} Walk candidate count={walkSearch.CandidateCount}");
+        Debug.Log($"{LogPrefix} Skipped blocked clip count={idleSearch.SkippedBlockedCount + walkSearch.SkippedBlockedCount}");
+        Debug.Log($"{LogPrefix} Skipped event clip count={idleSearch.SkippedEventCount + walkSearch.SkippedEventCount}");
+
+        AnimationClip idleClip = idleSearch.Found ? idleSearch.Candidate.Clip : null;
+        AnimationClip walkClip = walkSearch.Found ? walkSearch.Candidate.Clip : null;
+
+        if (idleSearch.Found)
+            LogAnimationClipCandidate("Selected Idle", idleSearch.Candidate);
+
+        if (walkSearch.Found)
+            LogAnimationClipCandidate("Selected Walk", walkSearch.Candidate);
+
+        AnimatorController controller = CreateOrConfigureJointFreeVisualAnimatorController(idleClip, walkClip);
+        if (controller == null)
+            return false;
+
+        ConfigureVisualAnimatorComponent(visualAnimator, controller);
+
+        int disabledColliderCount = DisableVisualOnlyColliders(visualRoot);
+        int frozenRigidbodyCount = FreezeVisualOnlyRigidbodies(visualRoot, bodyRigidbody);
+        int jointCount = MinimizeJointInfluence(visualRoot.gameObject, bodyRigidbody);
+        int disabledControllerCount = DisableVisualOnlyControllerComponents(visualRoot);
+        int animatorRootMotionDisabledCount = DisableVisualAnimatorRootMotion(visualRoot);
+
+        visualFollower = bodyTransform.GetComponent<HamsterVisualFollower>();
+        if (visualFollower == null)
+        {
+            Debug.LogWarning($"{LogPrefix} HamsterVisualFollower missing. Run Configure Visual Follower For Joint-Free Shell first.");
+        }
+        else
+        {
+            LinkVisualAnimatorToHamsterVisualFollower(visualFollower, bodyRigidbody, visualRoot, visualAnimator);
+        }
+
+        EditorUtility.SetDirty(shellRoot);
+        EditorUtility.SetDirty(visualRoot.gameObject);
+        EditorUtility.SetDirty(visualAnimator);
+        Debug.Log($"{LogPrefix} Visual-only colliders disabled count: {disabledColliderCount}");
+        Debug.Log($"{LogPrefix} Visual-only rigidbodies frozen count: {frozenRigidbodyCount}");
+        Debug.Log($"{LogPrefix} Visual-only joints count: {jointCount}");
+        Debug.Log($"{LogPrefix} Visual-only production/network/controller disabled count: {disabledControllerCount}");
+        Debug.Log($"{LogPrefix} Visual Animator root motion disabled count: {animatorRootMotionDisabledCount}");
+        Debug.Log($"{LogPrefix} Configured Visual Animator for Joint-Free Shell");
+        return true;
+    }
+
+    private static bool TryGetJointFreeVisualAnimatorContext(
+        Scene scene,
+        out GameObject shellRoot,
+        out Transform bodyTransform,
+        out Rigidbody bodyRigidbody,
+        out Transform visualRoot,
+        out Animator visualAnimator)
+    {
+        shellRoot = null;
+        bodyTransform = null;
+        bodyRigidbody = null;
+        visualRoot = null;
+        visualAnimator = null;
+
+        if (!scene.IsValid()
+            || !string.Equals(NormalizeAssetPath(scene.path), SceneDestinationPath, StringComparison.OrdinalIgnoreCase))
+        {
+            Debug.LogWarning($"{LogPrefix} Current scene is not Test_FullRagdollHamster. Open {SceneDestinationPath} first. CurrentPath={scene.path}");
+            return false;
+        }
+
+        shellRoot = FindGameObjectByName(scene, JointFreeShellRootName);
+        if (shellRoot == null)
+        {
+            Debug.LogWarning($"{LogPrefix} Hamster_JointFreeMotorShell_Test not found. Run Create Phase 1 Joint-Free Motor Shell first.");
+            return false;
+        }
+
+        bodyTransform = FindDirectChild(shellRoot.transform, JointFreeShellBodyName);
+        if (bodyTransform == null)
+        {
+            Debug.LogError($"{LogPrefix} {JointFreeShellBodyName} is missing under {JointFreeShellRootName}.");
+            return false;
+        }
+
+        bodyRigidbody = bodyTransform.GetComponent<Rigidbody>();
+        visualRoot = FindDirectChild(bodyTransform, JointFreeShellVisualRootName)
+            ?? FindDirectChild(shellRoot.transform, JointFreeShellVisualRootName);
+        if (visualRoot == null)
+        {
+            Debug.LogWarning($"{LogPrefix} VisualPreviewRoot not found. Run Configure Visual Follower For Joint-Free Shell first.");
+            return false;
+        }
+
+        Renderer[] renderers = visualRoot.GetComponentsInChildren<Renderer>(true);
+        if (renderers.Length == 0)
+            Debug.LogWarning($"{LogPrefix} VisualPreviewRoot has no SkinnedMeshRenderer/Renderer child");
+
+        visualAnimator = visualRoot.GetComponentInChildren<Animator>(true);
+        if (visualAnimator == null)
+        {
+            Debug.LogWarning($"{LogPrefix} No Animator found under VisualPreviewRoot. Add visual hamster model first.");
+            return false;
+        }
+
+        return true;
+    }
+
+    private static AnimationClipSearchResult FindAnimationClipCandidate(
+        Transform visualRoot,
+        Animator visualAnimator,
+        string[] nameFragments,
+        string label)
+    {
+        AnimationClipSearchResult result = default(AnimationClipSearchResult);
+        List<string> priorityFragments = BuildVisualAnimationPriorityFragments(visualRoot, visualAnimator);
+        List<AnimationClipCandidate> candidates = new List<AnimationClipCandidate>();
+        HashSet<string> visitedClipKeys = new HashSet<string>(StringComparer.Ordinal);
+
+        for (int searchIndex = 0; searchIndex < AnimationClipSearchPaths.Length; searchIndex++)
+        {
+            string searchPath = AnimationClipSearchPaths[searchIndex];
+            if (!AssetDatabase.IsValidFolder(searchPath))
+                continue;
+
+            string[] guids = AssetDatabase.FindAssets("t:AnimationClip", new[] { searchPath });
+            for (int guidIndex = 0; guidIndex < guids.Length; guidIndex++)
+            {
+                string assetPath = AssetDatabase.GUIDToAssetPath(guids[guidIndex]);
+                UnityEngine.Object[] assets = AssetDatabase.LoadAllAssetsAtPath(assetPath);
+                for (int assetIndex = 0; assetIndex < assets.Length; assetIndex++)
+                {
+                    AnimationClip clip = assets[assetIndex] as AnimationClip;
+                    if (clip == null || string.IsNullOrEmpty(clip.name))
+                        continue;
+
+                    string clipKey = assetPath + "::" + clip.name;
+                    if (!visitedClipKeys.Add(clipKey))
+                        continue;
+
+                    string clipSearchText = Path.GetFileNameWithoutExtension(assetPath) + " " + clip.name;
+                    bool matchesName = ContainsAnyFragment(clipSearchText, nameFragments);
+                    bool blockedName = IsBlockedAnimationClipName(clip, assetPath);
+                    bool shouldLogBlockedForSearch = matchesName
+                        || (string.Equals(label, "Idle", StringComparison.OrdinalIgnoreCase)
+                            && NormalizeName(clipSearchText).Contains("stand"));
+                    if (blockedName && shouldLogBlockedForSearch)
+                    {
+                        result.SkippedBlockedCount++;
+                        Debug.LogWarning($"{LogPrefix} Skipped blocked clip: {assetPath}/{clip.name} reason=blocked-name");
+                        continue;
+                    }
+
+                    if (!matchesName)
+                        continue;
+
+                    int eventCount;
+                    string eventNames;
+                    if (TryGetAnimationEventSummary(clip, out eventCount, out eventNames) && eventCount > 0)
+                    {
+                        result.SkippedEventCount++;
+                        Debug.LogWarning($"{LogPrefix} Skipped event clip: {assetPath}/{clip.name} eventCount={eventCount} eventNames={eventNames}");
+                        continue;
+                    }
+
+                    AnimationClipCandidate clipCandidate = new AnimationClipCandidate
+                    {
+                        Clip = clip,
+                        Path = assetPath,
+                        SearchOrder = searchIndex,
+                        Score = ScoreAnimationClipCandidate(clip, assetPath, searchIndex, priorityFragments),
+                        EventCount = eventCount,
+                        EventNames = eventNames
+                    };
+                    candidates.Add(clipCandidate);
+                }
+            }
+        }
+
+        if (candidates.Count == 0)
+            return result;
+
+        candidates.Sort(CompareAnimationClipCandidates);
+        result.CandidateCount = candidates.Count;
+        result.Candidate = candidates[0];
+        result.Found = true;
+        return result;
+    }
+
+    private static List<string> BuildVisualAnimationPriorityFragments(Transform visualRoot, Animator visualAnimator)
+    {
+        List<string> fragments = new List<string>();
+        for (int i = 0; i < VisualClipPriorityFragments.Length; i++)
+            AddUsefulSearchFragment(fragments, VisualClipPriorityFragments[i]);
+
+        if (visualAnimator != null)
+        {
+            AddUsefulSearchFragment(fragments, visualAnimator.name);
+            AddUsefulSearchFragment(fragments, visualAnimator.gameObject.name);
+            if (visualAnimator.avatar != null)
+                AddUsefulSearchFragment(fragments, visualAnimator.avatar.name);
+        }
+
+        if (visualRoot != null)
+        {
+            AddUsefulSearchFragment(fragments, visualRoot.name);
+            Renderer[] renderers = visualRoot.GetComponentsInChildren<Renderer>(true);
+            for (int i = 0; i < renderers.Length; i++)
+            {
+                if (renderers[i] == null)
+                    continue;
+
+                AddUsefulSearchFragment(fragments, renderers[i].name);
+                AddUsefulSearchFragment(fragments, renderers[i].gameObject.name);
+            }
+        }
+
+        return fragments;
+    }
+
+    private static void AddUsefulSearchFragment(List<string> fragments, string fragment)
+    {
+        if (string.IsNullOrEmpty(fragment))
+            return;
+
+        fragment = fragment.Trim();
+        if (fragment.Length < 2)
+            return;
+
+        if (string.Equals(fragment, "Root", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(fragment, "Armature", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(fragment, "Animator", StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        for (int i = 0; i < fragments.Count; i++)
+        {
+            if (string.Equals(fragments[i], fragment, StringComparison.OrdinalIgnoreCase))
+                return;
+        }
+
+        fragments.Add(fragment);
+    }
+
+    private static int ScoreAnimationClipCandidate(
+        AnimationClip clip,
+        string assetPath,
+        int searchOrder,
+        List<string> priorityFragments)
+    {
+        int score = 100000 - (searchOrder * 1000);
+        for (int i = 0; i < priorityFragments.Count; i++)
+        {
+            string fragment = priorityFragments[i];
+            if (ContainsIgnoreCase(clip.name, fragment))
+                score += 10000;
+            else if (ContainsIgnoreCase(assetPath, fragment))
+                score += 4000;
+        }
+
+        return score;
+    }
+
+    private static int CompareAnimationClipCandidates(AnimationClipCandidate left, AnimationClipCandidate right)
+    {
+        int scoreComparison = right.Score.CompareTo(left.Score);
+        if (scoreComparison != 0)
+            return scoreComparison;
+
+        int searchComparison = left.SearchOrder.CompareTo(right.SearchOrder);
+        if (searchComparison != 0)
+            return searchComparison;
+
+        int pathComparison = string.Compare(left.Path, right.Path, StringComparison.OrdinalIgnoreCase);
+        if (pathComparison != 0)
+            return pathComparison;
+
+        return string.Compare(left.Clip.name, right.Clip.name, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static void LogAnimationClipCandidate(string label, AnimationClipCandidate candidate)
+    {
+        Debug.Log($"{LogPrefix} {label} clip path/name/eventCount/isLooping: {candidate.Path}/{candidate.Clip.name} eventCount={candidate.EventCount} isLooping={candidate.Clip.isLooping}");
+        Debug.Log($"{LogPrefix} Found {label} clip: {candidate.Path}/{candidate.Clip.name}");
+        if (!candidate.Clip.isLooping)
+            Debug.LogWarning($"{LogPrefix} Clip is not looping; import setting was not modified. Clip={candidate.Path}/{candidate.Clip.name}");
+    }
+
+    private static bool IsBlockedAnimationClipName(AnimationClip clip, string assetPath)
+    {
+        if (clip == null)
+            return false;
+
+        string assetName = string.IsNullOrEmpty(assetPath) ? string.Empty : Path.GetFileNameWithoutExtension(assetPath);
+        string normalizedClipText = NormalizeName(assetName + " " + clip.name);
+        for (int i = 0; i < BlockedAnimationClipNameFragments.Length; i++)
+        {
+            string normalizedBlocked = NormalizeName(BlockedAnimationClipNameFragments[i]);
+            if (!string.IsNullOrEmpty(normalizedBlocked)
+                && normalizedClipText.Contains(normalizedBlocked))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool TryGetAnimationEventSummary(AnimationClip clip, out int eventCount, out string eventNames)
+    {
+        eventCount = 0;
+        eventNames = string.Empty;
+        if (clip == null)
+            return false;
+
+        try
+        {
+            AnimationEvent[] events = AnimationUtility.GetAnimationEvents(clip);
+            if (events == null || events.Length == 0)
+                return true;
+
+            eventCount = events.Length;
+            List<string> names = new List<string>();
+            for (int i = 0; i < events.Length; i++)
+            {
+                string functionName = events[i] != null ? events[i].functionName : string.Empty;
+                if (string.IsNullOrEmpty(functionName))
+                    functionName = "<empty>";
+
+                bool alreadyAdded = false;
+                for (int nameIndex = 0; nameIndex < names.Count; nameIndex++)
+                {
+                    if (string.Equals(names[nameIndex], functionName, StringComparison.Ordinal))
+                    {
+                        alreadyAdded = true;
+                        break;
+                    }
+                }
+
+                if (!alreadyAdded)
+                    names.Add(functionName);
+            }
+
+            eventNames = string.Join(",", names.ToArray());
+            return true;
+        }
+        catch (Exception exception)
+        {
+            Debug.LogWarning($"{LogPrefix} AnimationEvent read failed for clip {clip.name}: {exception.Message}");
+            return false;
+        }
+    }
+
+    private static AnimatorController CreateOrConfigureJointFreeVisualAnimatorController(AnimationClip idleClip, AnimationClip walkClip)
+    {
+        if (!EnsureFolder(JointFreeVisualGeneratedFolderPath))
+        {
+            Debug.LogError($"{LogPrefix} Failed to create generated folder: {JointFreeVisualGeneratedFolderPath}");
+            return null;
+        }
+
+        AnimatorController controller = AssetDatabase.LoadAssetAtPath<AnimatorController>(JointFreeVisualControllerPath);
+        bool created = false;
+        if (controller == null)
+        {
+            controller = AnimatorController.CreateAnimatorControllerAtPath(JointFreeVisualControllerPath);
+            created = true;
+        }
+
+        if (controller == null)
+        {
+            Debug.LogError($"{LogPrefix} Failed to create/load AnimatorController: {JointFreeVisualControllerPath}");
+            return null;
+        }
+
+        Debug.Log($"{LogPrefix} Created/Reused AnimatorController path: {JointFreeVisualControllerPath}");
+        EnsureAnimatorControllerFloatParameter(controller, VisualAnimatorSpeedParameter);
+        EnsureAnimatorControllerFloatParameter(controller, VisualAnimatorMove01Parameter);
+        bool sanitizedUnsafeMotion = GeneratedControllerHasUnsafeClipMotion(controller);
+        ConfigureJointFreeVisualControllerStates(controller, idleClip, walkClip);
+        if (sanitizedUnsafeMotion)
+            Debug.LogWarning($"{LogPrefix} Existing generated controller used blocked/event clip and was sanitized.");
+
+        EditorUtility.SetDirty(controller);
+        AssetDatabase.SaveAssets();
+        Debug.Log($"{LogPrefix} {(created ? "Created" : "Reused")} test-only AnimatorController: {JointFreeVisualControllerPath}");
+        return controller;
+    }
+
+    private static void EnsureAnimatorControllerFloatParameter(AnimatorController controller, string parameterName)
+    {
+        AnimatorControllerParameter[] parameters = controller.parameters;
+        for (int i = 0; i < parameters.Length; i++)
+        {
+            AnimatorControllerParameter parameter = parameters[i];
+            if (!string.Equals(parameter.name, parameterName, StringComparison.Ordinal))
+                continue;
+
+            if (parameter.type == AnimatorControllerParameterType.Float)
+            {
+                Debug.Log($"{LogPrefix} Added/Verified {parameterName} parameter");
+                return;
+            }
+
+            Debug.LogWarning($"{LogPrefix} Animator parameter mismatch. Replacing {parameterName} with Float in test controller.");
+            controller.RemoveParameter(parameter);
+            break;
+        }
+
+        controller.AddParameter(parameterName, AnimatorControllerParameterType.Float);
+        Debug.Log($"{LogPrefix} Added/Verified {parameterName} parameter");
+    }
+
+    private static bool GeneratedControllerHasUnsafeClipMotion(AnimatorController controller)
+    {
+        if (controller == null)
+            return false;
+
+        bool hasUnsafeMotion = false;
+        AnimatorControllerLayer[] layers = controller.layers;
+        for (int layerIndex = 0; layerIndex < layers.Length; layerIndex++)
+        {
+            AnimatorStateMachine stateMachine = layers[layerIndex].stateMachine;
+            if (stateMachine == null)
+                continue;
+
+            ChildAnimatorState[] states = stateMachine.states;
+            for (int stateIndex = 0; stateIndex < states.Length; stateIndex++)
+            {
+                AnimationClip clip = states[stateIndex].state != null ? states[stateIndex].state.motion as AnimationClip : null;
+                if (clip == null)
+                    continue;
+
+                string clipPath = AssetDatabase.GetAssetPath(clip);
+                int eventCount;
+                string eventNames;
+                bool hasEvents = TryGetAnimationEventSummary(clip, out eventCount, out eventNames) && eventCount > 0;
+                bool blocked = IsBlockedAnimationClipName(clip, clipPath);
+                if (!blocked && !hasEvents)
+                    continue;
+
+                hasUnsafeMotion = true;
+                Debug.LogWarning($"{LogPrefix} Existing generated controller unsafe clip: State={states[stateIndex].state.name} Clip={clipPath}/{clip.name} BlockedName={blocked} EventCount={eventCount} EventNames={eventNames}");
+            }
+        }
+
+        return hasUnsafeMotion;
+    }
+
+    private static void ConfigureJointFreeVisualControllerStates(
+        AnimatorController controller,
+        AnimationClip idleClip,
+        AnimationClip walkClip)
+    {
+        AnimatorControllerLayer[] layers = controller.layers;
+        if (layers == null || layers.Length == 0)
+        {
+            controller.AddLayer("Base Layer");
+            layers = controller.layers;
+        }
+
+        AnimatorStateMachine stateMachine = layers[0].stateMachine;
+        ChildAnimatorState[] existingStates = stateMachine.states;
+        for (int i = 0; i < existingStates.Length; i++)
+            stateMachine.RemoveState(existingStates[i].state);
+
+        AnimatorState idleState = stateMachine.AddState("Idle", new Vector3(260f, 120f, 0f));
+        idleState.motion = idleClip;
+        idleState.speed = 1f;
+        stateMachine.defaultState = idleState;
+        if (idleClip == null)
+            Debug.LogWarning($"{LogPrefix} No safe idle clip candidate found. Test controller idle state motion left empty.");
+
+        AnimatorState walkState = stateMachine.AddState("Walk", new Vector3(260f, 240f, 0f));
+        walkState.motion = walkClip;
+        walkState.speed = VisualAnimatorWalkStateSpeed;
+        if (walkClip == null)
+            Debug.LogWarning($"{LogPrefix} No safe walk clip candidate found. Test controller walk state motion left empty.");
+
+        AnimatorStateTransition walkTransition = idleState.AddTransition(walkState);
+        walkTransition.hasExitTime = false;
+        walkTransition.hasFixedDuration = true;
+        walkTransition.duration = 0.08f;
+        walkTransition.AddCondition(AnimatorConditionMode.Greater, 0.15f, VisualAnimatorMove01Parameter);
+
+        AnimatorStateTransition idleTransition = walkState.AddTransition(idleState);
+        idleTransition.hasExitTime = false;
+        idleTransition.hasFixedDuration = true;
+        idleTransition.duration = 0.08f;
+        idleTransition.AddCondition(AnimatorConditionMode.Less, 0.10f, VisualAnimatorMove01Parameter);
+
+        Debug.Log($"{LogPrefix} Configured 2-state Idle/Walk test controller. WalkSpeed={VisualAnimatorWalkStateSpeed}");
+    }
+
+    private static void ConfigureVisualAnimatorComponent(Animator visualAnimator, AnimatorController controller)
+    {
+        visualAnimator.runtimeAnimatorController = controller;
+        visualAnimator.applyRootMotion = false;
+        visualAnimator.cullingMode = AnimatorCullingMode.AlwaysAnimate;
+        visualAnimator.updateMode = AnimatorUpdateMode.Normal;
+        EditorUtility.SetDirty(visualAnimator);
+        Debug.Log($"{LogPrefix} Assigned controller to Animator");
+        Debug.Log($"{LogPrefix} Animator applyRootMotion set false");
+    }
+
+    private static void LinkVisualAnimatorToHamsterVisualFollower(
+        HamsterVisualFollower visualFollower,
+        Rigidbody bodyRigidbody,
+        Transform visualRoot,
+        Animator visualAnimator)
+    {
+        SerializedObject followerObject = new SerializedObject(visualFollower);
+        AssignObjectField(followerObject, "visualAnimator", visualAnimator, required: true);
+
+        if (GetObjectReference<Rigidbody>(followerObject, "targetBody") == null && bodyRigidbody != null)
+            AssignObjectField(followerObject, "targetBody", bodyRigidbody, required: false);
+
+        if (GetObjectReference<Transform>(followerObject, "visualRoot") == null && visualRoot != null)
+            AssignObjectField(followerObject, "visualRoot", visualRoot, required: false);
+
+        SetBoolField(followerObject, "updateAnimator", true);
+        SetBoolField(followerObject, "disableAnimatorRootMotion", true);
+        SetStringField(followerObject, "speedParameter", VisualAnimatorSpeedParameter);
+        SetStringField(followerObject, "move01Parameter", VisualAnimatorMove01Parameter);
+        SetFloatField(followerObject, "animatorDampTime", 0.10f);
+
+        float speedForMove01;
+        if (!TryGetFloatField(followerObject, "speedForMove01", out speedForMove01) || speedForMove01 <= 0f)
+            SetFloatField(followerObject, "speedForMove01", 2.0f);
+
+        followerObject.ApplyModifiedProperties();
+        EditorUtility.SetDirty(visualFollower);
+        Debug.Log($"{LogPrefix} Linked Animator to HamsterVisualFollower");
+    }
+
+    private static void LogVisualAnimatorNextTest()
+    {
+        LogVisualDiagnosticNextTest();
+    }
+
+    private static void ConfigureVisualFollowerSerializedFields(
+        HamsterVisualFollower visualFollower,
+        Rigidbody targetBody,
+        Transform visualRoot,
+        Animator visualAnimator)
+    {
+        SerializedObject followerObject = new SerializedObject(visualFollower);
+        AssignObjectField(followerObject, "targetBody", targetBody, required: true);
+        AssignObjectField(followerObject, "visualRoot", visualRoot, required: true);
+        AssignObjectField(followerObject, "visualAnimator", visualAnimator, required: false);
+        SetBoolField(followerObject, "captureInitialLocalTransformOnEnable", true);
+        SetBoolField(followerObject, "resetVisualLocalTransformOnEnable", true);
+        SetBoolField(followerObject, "visualRootIsChildOfTarget", true);
+        SetVector3Field(followerObject, "visualLocalOffset", Vector3.zero);
+        SetVector3Field(followerObject, "visualLocalEulerOffset", Vector3.zero);
+        SetBoolField(followerObject, "faceMoveDirection", true);
+        SetBoolField(followerObject, "keepLastMoveYawWhenIdle", true);
+        SetFloatField(followerObject, "minSpeedToFaceMove", 0.12f);
+        SetFloatField(followerObject, "yawSmoothTime", 0.22f);
+        SetFloatField(followerObject, "visualYawOffsetDegrees", 0f);
+        SetBoolField(followerObject, "enableBodyLean", true);
+        SetFloatField(followerObject, "speedForMaxLean", 2.5f);
+        SetFloatField(followerObject, "maxForwardLeanDegrees", 9f);
+        SetFloatField(followerObject, "maxSideLeanDegrees", 14f);
+        SetFloatField(followerObject, "leanSmoothTime", 0.12f);
+        SetBoolField(followerObject, "invertForwardLean", false);
+        SetBoolField(followerObject, "invertSideLean", false);
+        SetBoolField(followerObject, "enableLocalLag", true);
+        SetFloatField(followerObject, "maxBackLag", 0.06f);
+        SetFloatField(followerObject, "maxSideLag", 0.04f);
+        SetFloatField(followerObject, "lagSmoothTime", 0.10f);
+        SetBoolField(followerObject, "updateAnimator", true);
+        SetBoolField(followerObject, "disableAnimatorRootMotion", true);
+        SetStringField(followerObject, "speedParameter", "Speed");
+        SetStringField(followerObject, "move01Parameter", "Move01");
+        SetFloatField(followerObject, "animatorDampTime", 0.10f);
+        SetFloatField(followerObject, "speedForMove01", 2.5f);
+        SetBoolField(followerObject, "debugLogs", true);
+        SetBoolField(followerObject, "drawGizmos", true);
+        followerObject.ApplyModifiedProperties();
+    }
+
+    private static void ConfigureShellMotorReferencesForVisualFollower(Transform bodyTransform, Rigidbody bodyRigidbody)
+    {
+        HamsterFullRagdollMotor motor = bodyTransform.GetComponent<HamsterFullRagdollMotor>();
+        if (motor == null)
+        {
+            Debug.LogError($"{LogPrefix} MotorShellBody HamsterFullRagdollMotor is missing. Movement tuning values were not modified.");
+            return;
+        }
+
+        SerializedObject motorObject = new SerializedObject(motor);
+        AssignObjectField(motorObject, "hipsBody", bodyRigidbody, required: true);
+        AssignObjectField(motorObject, "chestBody", bodyRigidbody, required: true);
+
+        Transform cameraTransform = GetObjectReference<Transform>(motorObject, "cameraTransform");
+        if (cameraTransform == null)
+        {
+            Camera mainCamera = Camera.main;
+            AssignObjectField(motorObject, "cameraTransform", mainCamera != null ? mainCamera.transform : null, required: false);
+            if (mainCamera != null)
+                Debug.Log($"{LogPrefix} Assigned Main Camera to shell motor: {GetHierarchyPath(mainCamera.transform)}");
+            else
+                Debug.LogWarning($"{LogPrefix} Main Camera not found. Shell motor cameraTransform remains empty.");
+        }
+
+        SetBoolField(motorObject, "debugLogs", true);
+        SetBoolField(motorObject, "drawDebugGizmos", true);
+        motorObject.ApplyModifiedProperties();
+        EditorUtility.SetDirty(motor);
+        Debug.Log($"{LogPrefix} Shell motor references checked. Movement tuning values were preserved.");
+    }
+
+    private static int DisableVisualOnlyColliders(Transform visualRoot)
+    {
+        int disabledCount = 0;
+        Collider[] colliders = visualRoot.GetComponentsInChildren<Collider>(true);
+        for (int i = 0; i < colliders.Length; i++)
+        {
+            Collider collider = colliders[i];
+            if (collider == null || !collider.enabled)
+                continue;
+
+            collider.enabled = false;
+            EditorUtility.SetDirty(collider);
+            disabledCount++;
+        }
+
+        return disabledCount;
+    }
+
+    private static int FreezeVisualOnlyRigidbodies(Transform visualRoot, Rigidbody shellBody)
+    {
+        int frozenCount = 0;
+        Rigidbody[] rigidbodies = visualRoot.GetComponentsInChildren<Rigidbody>(true);
+        for (int i = 0; i < rigidbodies.Length; i++)
+        {
+            Rigidbody body = rigidbodies[i];
+            if (body == null || body == shellBody)
+                continue;
+
+            body.isKinematic = true;
+            body.useGravity = false;
+            body.detectCollisions = false;
+            ClearRigidbodyVelocities(body);
+            body.constraints = RigidbodyConstraints.FreezeAll;
+            EditorUtility.SetDirty(body);
+            frozenCount++;
+        }
+
+        return frozenCount;
+    }
+
+    private static int DisableVisualOnlyControllerComponents(Transform visualRoot)
+    {
+        int disabledCount = 0;
+        Component[] components = visualRoot.GetComponentsInChildren<Component>(true);
+        for (int i = 0; i < components.Length; i++)
+        {
+            Component component = components[i];
+            if (component == null)
+                continue;
+
+            string typeName = component.GetType().Name;
+            if (!DisableTypeNames.Contains(typeName))
+                continue;
+
+            if (!IsComponentEnabled(component))
+                continue;
+
+            if (TrySetComponentEnabled(component, false))
+            {
+                EditorUtility.SetDirty(component);
+                disabledCount++;
+            }
+            else
+            {
+                Debug.LogWarning($"{LogPrefix} Could not disable visual-only {typeName} on {GetHierarchyPath(component.transform)}.");
+            }
+        }
+
+        return disabledCount;
+    }
+
+    private static int DisableVisualAnimatorRootMotion(Transform visualRoot)
+    {
+        int disabledCount = 0;
+        Animator[] animators = visualRoot.GetComponentsInChildren<Animator>(true);
+        for (int i = 0; i < animators.Length; i++)
+        {
+            Animator animator = animators[i];
+            if (animator == null || !animator.applyRootMotion)
+                continue;
+
+            animator.applyRootMotion = false;
+            EditorUtility.SetDirty(animator);
+            disabledCount++;
+        }
+
+        return disabledCount;
+    }
+
+    private static void DisableExistingSkinnedTestInstanceForShellOnly(Scene scene)
+    {
+        GameObject existingSkinnedInstance = FindDestinationPrefabInstance(scene);
+        if (existingSkinnedInstance == null)
+            return;
+
+        if (!existingSkinnedInstance.activeSelf)
+        {
+            Debug.Log($"{LogPrefix} Existing Hamster_FullRagdoll_Test scene instance is already inactive.");
+            return;
+        }
+
+        existingSkinnedInstance.SetActive(false);
+        EditorUtility.SetDirty(existingSkinnedInstance);
+        Debug.Log($"{LogPrefix} Disabled existing Hamster_FullRagdoll_Test scene instance for shell-only visual follow test.");
+    }
+
     private static void ConfigureJointFreeShellRigidbody(Rigidbody bodyRigidbody)
     {
         bodyRigidbody.mass = 14f;
@@ -1222,9 +2436,74 @@ public static class HamsterFullRagdollTestSetupUtility
         bodyRigidbody.useGravity = true;
         bodyRigidbody.isKinematic = false;
         bodyRigidbody.detectCollisions = true;
-        bodyRigidbody.constraints = RigidbodyConstraints.None;
+        bodyRigidbody.constraints = MotorShellRotationStabilityConstraints;
         bodyRigidbody.interpolation = RigidbodyInterpolation.Interpolate;
         bodyRigidbody.collisionDetectionMode = CollisionDetectionMode.ContinuousDynamic;
+    }
+
+    private static bool ApplyMotorShellRotationStabilityToSceneShell(Scene scene, out Rigidbody bodyRigidbody)
+    {
+        bodyRigidbody = null;
+        if (!scene.IsValid()
+            || !string.Equals(NormalizeAssetPath(scene.path), SceneDestinationPath, StringComparison.OrdinalIgnoreCase))
+        {
+            Debug.LogWarning($"{LogPrefix} Current scene is not Test_FullRagdollHamster. Open {SceneDestinationPath} first. CurrentPath={scene.path}");
+            return false;
+        }
+
+        GameObject shellRoot = FindGameObjectByName(scene, JointFreeShellRootName);
+        if (shellRoot == null)
+        {
+            Debug.LogWarning($"{LogPrefix} Hamster_JointFreeMotorShell_Test not found. Run Create Phase 1 Joint-Free Motor Shell first.");
+            return false;
+        }
+
+        Transform bodyTransform = FindDirectChild(shellRoot.transform, JointFreeShellBodyName);
+        if (bodyTransform == null)
+        {
+            Debug.LogError($"{LogPrefix} {JointFreeShellBodyName} is missing under {JointFreeShellRootName}.");
+            return false;
+        }
+
+        bodyRigidbody = bodyTransform.GetComponent<Rigidbody>();
+        if (bodyRigidbody == null)
+        {
+            Debug.LogError($"{LogPrefix} MotorShellBody Rigidbody is missing.");
+            return false;
+        }
+
+        RigidbodyConstraints constraintsBefore = bodyRigidbody.constraints;
+        bodyRigidbody.isKinematic = false;
+        bodyRigidbody.useGravity = true;
+        bodyRigidbody.detectCollisions = true;
+        bodyRigidbody.interpolation = RigidbodyInterpolation.Interpolate;
+        bodyRigidbody.collisionDetectionMode = CollisionDetectionMode.ContinuousDynamic;
+        bodyRigidbody.constraints = MotorShellRotationStabilityConstraints;
+
+        EditorUtility.SetDirty(bodyRigidbody);
+        EditorUtility.SetDirty(bodyTransform.gameObject);
+
+        RigidbodyConstraints constraintsAfter = bodyRigidbody.constraints;
+        Debug.Log($"{LogPrefix} Applied Motor Shell Rotation Stability Preset");
+        Debug.Log($"{LogPrefix} MotorShellBody Rigidbody constraints before/after: {constraintsBefore} -> {constraintsAfter}");
+        Debug.Log($"{LogPrefix} FreezeRotationX={HasRigidbodyConstraint(constraintsAfter, RigidbodyConstraints.FreezeRotationX)}, FreezeRotationZ={HasRigidbodyConstraint(constraintsAfter, RigidbodyConstraints.FreezeRotationZ)}, FreezeRotationY={HasRigidbodyConstraint(constraintsAfter, RigidbodyConstraints.FreezeRotationY)}");
+        Debug.Log($"{LogPrefix} Next: Press Play and test W/A/S/D. Visual lean should come from HamsterVisualFollower, not Rigidbody falling.");
+        return true;
+    }
+
+    private static void LogMotorShellRotationStabilityNextTest()
+    {
+        Debug.Log($"{LogPrefix} Next test:");
+        Debug.Log($"{LogPrefix} 1. Keep Hamster_FullRagdoll_Test inactive.");
+        Debug.Log($"{LogPrefix} 2. Keep Hamster_JointFreeMotorShell_Test active.");
+        Debug.Log($"{LogPrefix} 3. Select MotorShellBody and confirm Rigidbody constraints:");
+        Debug.Log($"{LogPrefix}    Freeze Rotation X = On");
+        Debug.Log($"{LogPrefix}    Freeze Rotation Z = On");
+        Debug.Log($"{LogPrefix}    Freeze Rotation Y = Off");
+        Debug.Log($"{LogPrefix} 4. Press Play.");
+        Debug.Log($"{LogPrefix} 5. Move with W/A/S/D.");
+        Debug.Log($"{LogPrefix} 6. Confirm MotorShellBody does not fall over.");
+        Debug.Log($"{LogPrefix} 7. Tune HamsterVisualFollower yaw/lean values only after MotorShellBody stays upright.");
     }
 
     private static void ConfigureJointFreeShellBoxCollider(BoxCollider boxCollider)
@@ -1353,12 +2632,21 @@ public static class HamsterFullRagdollTestSetupUtility
         if (bodyRigidbody == null)
             Debug.LogError($"{LogPrefix} MotorShellBody Rigidbody is missing.");
         else
+        {
             Debug.Log($"{LogPrefix} MotorShellBody Rigidbody found. Kinematic={bodyRigidbody.isKinematic} Gravity={bodyRigidbody.useGravity} DetectCollisions={bodyRigidbody.detectCollisions} Constraints={bodyRigidbody.constraints}");
+            ValidateMotorShellRotationStability(bodyRigidbody);
+        }
 
         if (boxCollider == null)
             Debug.LogError($"{LogPrefix} MotorShellBody BoxCollider is missing.");
         else
-            Debug.Log($"{LogPrefix} MotorShellBody BoxCollider found. Size={boxCollider.size} Center={boxCollider.center} Trigger={boxCollider.isTrigger}");
+        {
+            Debug.Log($"{LogPrefix} MotorShellBody BoxCollider found. Enabled={boxCollider.enabled} Size={boxCollider.size} Center={boxCollider.center} Trigger={boxCollider.isTrigger}");
+            if (!boxCollider.enabled)
+                Debug.LogError($"{LogPrefix} MotorShellBody BoxCollider should be enabled.");
+            else
+                Debug.Log($"{LogPrefix} MotorShellBody BoxCollider is enabled.");
+        }
 
         Collider[] bodyColliders = bodyTransform.GetComponents<Collider>();
         for (int i = 0; i < bodyColliders.Length; i++)
@@ -1404,8 +2692,451 @@ public static class HamsterFullRagdollTestSetupUtility
         else
             Debug.Log($"{LogPrefix} {JointFreeShellVisualRootName} exists as visual-only placeholder.");
 
+        ValidateShellVisualFollower(shellRoot, bodyTransform, bodyRigidbody, boxCollider, existingSkinnedInstance);
+
         if (existingSkinnedInstance != null && existingSkinnedInstance.activeInHierarchy)
             Debug.LogWarning($"{LogPrefix} Existing skinned ragdoll test instance is still active; disable it when testing shell only.");
+    }
+
+    private static void ValidateMotorShellRotationStability(Rigidbody bodyRigidbody)
+    {
+        if (bodyRigidbody == null)
+            return;
+
+        RigidbodyConstraints constraints = bodyRigidbody.constraints;
+        bool freezeRotationX = HasRigidbodyConstraint(constraints, RigidbodyConstraints.FreezeRotationX);
+        bool freezeRotationZ = HasRigidbodyConstraint(constraints, RigidbodyConstraints.FreezeRotationZ);
+        bool freezeRotationY = HasRigidbodyConstraint(constraints, RigidbodyConstraints.FreezeRotationY);
+        bool freezePositionX = HasRigidbodyConstraint(constraints, RigidbodyConstraints.FreezePositionX);
+        bool freezePositionY = HasRigidbodyConstraint(constraints, RigidbodyConstraints.FreezePositionY);
+        bool freezePositionZ = HasRigidbodyConstraint(constraints, RigidbodyConstraints.FreezePositionZ);
+        bool anyFreezePosition = freezePositionX || freezePositionY || freezePositionZ;
+
+        Debug.Log($"{LogPrefix} MotorShellBody rotation stability: isKinematic={bodyRigidbody.isKinematic}, useGravity={bodyRigidbody.useGravity}, detectCollisions={bodyRigidbody.detectCollisions}, constraints={constraints}");
+        Debug.Log($"{LogPrefix} MotorShellBody rotation constraints: FreezeRotationX={freezeRotationX}, FreezeRotationZ={freezeRotationZ}, FreezeRotationY={freezeRotationY}, FreezePositionX={freezePositionX}, FreezePositionY={freezePositionY}, FreezePositionZ={freezePositionZ}");
+
+        if (bodyRigidbody.isKinematic)
+            Debug.LogError($"{LogPrefix} MotorShellBody Rigidbody should be non-kinematic.");
+        else
+            Debug.Log($"{LogPrefix} MotorShellBody Rigidbody is non-kinematic.");
+
+        if (!bodyRigidbody.useGravity)
+            Debug.LogError($"{LogPrefix} MotorShellBody Rigidbody useGravity should be true.");
+        else
+            Debug.Log($"{LogPrefix} MotorShellBody Rigidbody useGravity is true.");
+
+        if (!bodyRigidbody.detectCollisions)
+            Debug.LogError($"{LogPrefix} MotorShellBody Rigidbody detectCollisions should be true.");
+        else
+            Debug.Log($"{LogPrefix} MotorShellBody Rigidbody detectCollisions is true.");
+
+        if (!freezeRotationX)
+            Debug.LogWarning($"{LogPrefix} Warning: FreezeRotationX is not enabled.");
+
+        if (!freezeRotationZ)
+            Debug.LogWarning($"{LogPrefix} Warning: FreezeRotationZ is not enabled.");
+
+        if (freezeRotationY)
+            Debug.LogWarning($"{LogPrefix} Warning: FreezeRotationY is enabled; this may be okay for full lock test but not the default X/Z stability preset.");
+
+        if (anyFreezePosition)
+            Debug.LogError($"{LogPrefix} Error: FreezePosition is enabled; MotorShellBody may not move.");
+
+        if (!bodyRigidbody.isKinematic
+            && bodyRigidbody.useGravity
+            && bodyRigidbody.detectCollisions
+            && freezeRotationX
+            && freezeRotationZ
+            && !freezeRotationY
+            && !anyFreezePosition)
+        {
+            Debug.Log($"{LogPrefix} MotorShellBody rotation stability OK.");
+        }
+    }
+
+    private static void ValidateShellVisualFollower(
+        GameObject shellRoot,
+        Transform bodyTransform,
+        Rigidbody bodyRigidbody,
+        BoxCollider boxCollider,
+        GameObject existingSkinnedInstance)
+    {
+        HamsterVisualFollower visualFollower = bodyTransform.GetComponent<HamsterVisualFollower>();
+        if (visualFollower == null)
+        {
+            Debug.LogError($"{LogPrefix} MotorShellBody HamsterVisualFollower is missing.");
+        }
+        else
+        {
+            Debug.Log($"{LogPrefix} MotorShellBody HamsterVisualFollower found.");
+            SerializedObject followerObject = new SerializedObject(visualFollower);
+            Rigidbody targetBody = GetObjectReference<Rigidbody>(followerObject, "targetBody");
+            Transform assignedVisualRoot = GetObjectReference<Transform>(followerObject, "visualRoot");
+
+            if (targetBody != bodyRigidbody)
+                Debug.LogError($"{LogPrefix} HamsterVisualFollower targetBody should reference MotorShellBody Rigidbody.");
+            else
+                Debug.Log($"{LogPrefix} HamsterVisualFollower targetBody references MotorShellBody Rigidbody.");
+
+            Transform expectedVisualRoot = FindDirectChild(bodyTransform, JointFreeShellVisualRootName)
+                ?? FindDirectChild(shellRoot.transform, JointFreeShellVisualRootName);
+
+            if (assignedVisualRoot == null)
+                Debug.LogError($"{LogPrefix} HamsterVisualFollower visualRoot is not assigned.");
+            else if (assignedVisualRoot != expectedVisualRoot)
+                Debug.LogError($"{LogPrefix} HamsterVisualFollower visualRoot should reference VisualPreviewRoot. Current={GetHierarchyPath(assignedVisualRoot)}");
+            else
+                Debug.Log($"{LogPrefix} HamsterVisualFollower visualRoot references VisualPreviewRoot.");
+
+            ValidateAssignedVisualAnimator(followerObject);
+        }
+
+        Transform visualRoot = FindDirectChild(bodyTransform, JointFreeShellVisualRootName)
+            ?? FindDirectChild(shellRoot.transform, JointFreeShellVisualRootName);
+        if (visualRoot == null)
+        {
+            Debug.LogError($"{LogPrefix} VisualPreviewRoot is missing for visual follower validation.");
+        }
+        else
+        {
+            if (visualRoot.parent != bodyTransform)
+                Debug.LogError($"{LogPrefix} VisualPreviewRoot should be a direct child of MotorShellBody.");
+            else
+                Debug.Log($"{LogPrefix} VisualPreviewRoot is a child of MotorShellBody.");
+
+            Renderer[] renderers = visualRoot.GetComponentsInChildren<Renderer>(true);
+            if (renderers.Length == 0)
+                Debug.LogWarning($"{LogPrefix} VisualPreviewRoot has no Renderer or SkinnedMeshRenderer child.");
+            else
+                Debug.Log($"{LogPrefix} VisualPreviewRoot renderer count={renderers.Length}.");
+
+            int enabledColliderCount = CountEnabledColliders(visualRoot);
+            int nonKinematicRigidbodyCount = CountNonKinematicRigidbodies(visualRoot);
+            int activeControllerCount = CountActiveControllerComponents(visualRoot);
+            Debug.Log($"{LogPrefix} VisualPreviewRoot enabled Collider count={enabledColliderCount}.");
+            Debug.Log($"{LogPrefix} VisualPreviewRoot non-kinematic Rigidbody count={nonKinematicRigidbodyCount}.");
+            Debug.Log($"{LogPrefix} VisualPreviewRoot active Network/Player/Ragdoll controller count={activeControllerCount}.");
+
+            if (enabledColliderCount > 0)
+                Debug.LogError($"{LogPrefix} VisualPreviewRoot has enabled Collider components; run Configure Visual Follower For Joint-Free Shell.");
+
+            if (nonKinematicRigidbodyCount > 0)
+                Debug.LogError($"{LogPrefix} VisualPreviewRoot has non-kinematic Rigidbody components; run Configure Visual Follower For Joint-Free Shell.");
+
+            if (activeControllerCount > 0)
+                Debug.LogError($"{LogPrefix} VisualPreviewRoot has active Network/Player/Ragdoll controller components.");
+        }
+
+        ValidateVisualFollowerOffsetAndDiagnosticState(visualFollower);
+        ValidateVisualAnimatorSetup(visualRoot, visualFollower);
+
+        if (existingSkinnedInstance == null)
+            Debug.LogWarning($"{LogPrefix} Hamster_FullRagdoll_Test scene instance was not found for inactive-state validation.");
+        else if (existingSkinnedInstance.activeInHierarchy)
+            Debug.LogWarning($"{LogPrefix} Hamster_FullRagdoll_Test is active; keep it inactive for shell-only visual follow tests.");
+        else
+            Debug.Log($"{LogPrefix} Hamster_FullRagdoll_Test is inactive for shell-only visual follow tests.");
+
+        if (bodyRigidbody == null)
+            Debug.LogError($"{LogPrefix} MotorShellBody Rigidbody is missing for visual follower validation.");
+        else if (bodyRigidbody.isKinematic || !bodyRigidbody.useGravity || !bodyRigidbody.detectCollisions)
+            Debug.LogError($"{LogPrefix} MotorShellBody Rigidbody should remain dynamic. Kinematic={bodyRigidbody.isKinematic} Gravity={bodyRigidbody.useGravity} DetectCollisions={bodyRigidbody.detectCollisions}");
+        else
+            Debug.Log($"{LogPrefix} MotorShellBody Rigidbody is dynamic.");
+
+        if (boxCollider == null)
+            Debug.LogError($"{LogPrefix} MotorShellBody BoxCollider is missing for visual follower validation.");
+        else if (!boxCollider.enabled)
+            Debug.LogError($"{LogPrefix} MotorShellBody BoxCollider should remain enabled.");
+        else
+            Debug.Log($"{LogPrefix} MotorShellBody BoxCollider is enabled.");
+    }
+
+    private static void ValidateAssignedVisualAnimator(SerializedObject followerObject)
+    {
+        Animator visualAnimator = GetObjectReference<Animator>(followerObject, "visualAnimator");
+        if (visualAnimator == null)
+        {
+            Debug.LogWarning($"{LogPrefix} HamsterVisualFollower visualAnimator is not assigned.");
+            return;
+        }
+
+        if (visualAnimator.applyRootMotion)
+            Debug.LogError($"{LogPrefix} Visual Animator applyRootMotion should be false: {GetHierarchyPath(visualAnimator.transform)}");
+        else
+            Debug.Log($"{LogPrefix} Visual Animator applyRootMotion is false: {GetHierarchyPath(visualAnimator.transform)}");
+    }
+
+    private static void ValidateVisualFollowerOffsetAndDiagnosticState(HamsterVisualFollower visualFollower)
+    {
+        if (visualFollower == null)
+            return;
+
+        SerializedObject followerObject = new SerializedObject(visualFollower);
+        Vector3 visualLocalOffset;
+        Vector3 visualLocalEulerOffset;
+        bool enableBodyLean;
+        bool enableLocalLag;
+
+        if (TryGetVector3Field(followerObject, "visualLocalOffset", out visualLocalOffset))
+            Debug.Log($"{LogPrefix} HamsterVisualFollower visualLocalOffset={visualLocalOffset}");
+        else
+            Debug.LogWarning($"{LogPrefix} HamsterVisualFollower visualLocalOffset field was not found.");
+
+        if (TryGetVector3Field(followerObject, "visualLocalEulerOffset", out visualLocalEulerOffset))
+            Debug.Log($"{LogPrefix} HamsterVisualFollower visualLocalEulerOffset={visualLocalEulerOffset}");
+        else
+            Debug.LogWarning($"{LogPrefix} HamsterVisualFollower visualLocalEulerOffset field was not found.");
+
+        if (TryGetBoolField(followerObject, "enableBodyLean", out enableBodyLean))
+            Debug.Log($"{LogPrefix} HamsterVisualFollower enableBodyLean={enableBodyLean}");
+        else
+            Debug.LogWarning($"{LogPrefix} HamsterVisualFollower enableBodyLean field was not found.");
+
+        if (TryGetBoolField(followerObject, "enableLocalLag", out enableLocalLag))
+            Debug.Log($"{LogPrefix} HamsterVisualFollower enableLocalLag={enableLocalLag}");
+        else
+            Debug.LogWarning($"{LogPrefix} HamsterVisualFollower enableLocalLag field was not found.");
+
+        Debug.Log($"{LogPrefix} If idle leans with enableBodyLean=false, check idle clip pose or visualLocalEulerOffset.");
+    }
+
+    private static void ValidateVisualAnimatorSetup(Transform visualRoot, HamsterVisualFollower visualFollower)
+    {
+        if (visualRoot == null)
+            return;
+
+        Animator visualAnimator = visualRoot.GetComponentInChildren<Animator>(true);
+        if (visualAnimator == null)
+        {
+            Debug.LogWarning($"{LogPrefix} No Animator found under VisualPreviewRoot");
+            return;
+        }
+
+        Debug.Log($"{LogPrefix} Found Animator path: {GetHierarchyPath(visualAnimator.transform)}");
+
+        RuntimeAnimatorController controller = visualAnimator.runtimeAnimatorController;
+        if (controller == null)
+        {
+            Debug.LogError($"{LogPrefix} Visual Animator runtimeAnimatorController is not assigned.");
+        }
+        else
+        {
+            string controllerPath = NormalizeAssetPath(AssetDatabase.GetAssetPath(controller));
+            if (!string.Equals(controllerPath, JointFreeVisualControllerPath, StringComparison.OrdinalIgnoreCase))
+                Debug.LogError($"{LogPrefix} Visual Animator controller should be test-only controller. Current={controllerPath} Expected={JointFreeVisualControllerPath}");
+            else
+                Debug.Log($"{LogPrefix} Visual Animator controller path OK: {controllerPath}");
+
+            AnimatorController editorController = controller as AnimatorController;
+            if (editorController != null)
+                ValidateGeneratedVisualControllerMotions(editorController);
+            else
+                Debug.LogWarning($"{LogPrefix} Visual Animator controller is not an AnimatorController asset.");
+        }
+
+        if (visualAnimator.applyRootMotion)
+            Debug.LogError($"{LogPrefix} Visual Animator applyRootMotion should be false.");
+        else
+            Debug.Log($"{LogPrefix} Visual Animator applyRootMotion is false.");
+
+        ValidateAnimatorParameter(visualAnimator, VisualAnimatorSpeedParameter, AnimatorControllerParameterType.Float);
+        ValidateAnimatorParameter(visualAnimator, VisualAnimatorMove01Parameter, AnimatorControllerParameterType.Float);
+
+        if (visualFollower == null)
+        {
+            Debug.LogError($"{LogPrefix} HamsterVisualFollower is missing for visual Animator validation.");
+            return;
+        }
+
+        SerializedObject followerObject = new SerializedObject(visualFollower);
+        Animator assignedAnimator = GetObjectReference<Animator>(followerObject, "visualAnimator");
+        bool updateAnimator;
+        string speedParameter;
+        string move01Parameter;
+
+        if (assignedAnimator != visualAnimator)
+            Debug.LogError($"{LogPrefix} HamsterVisualFollower visualAnimator should reference VisualPreviewRoot Animator.");
+        else
+            Debug.Log($"{LogPrefix} HamsterVisualFollower visualAnimator references VisualPreviewRoot Animator.");
+
+        if (!TryGetBoolField(followerObject, "updateAnimator", out updateAnimator))
+            Debug.LogWarning($"{LogPrefix} HamsterVisualFollower updateAnimator field was not found.");
+        else if (!updateAnimator)
+            Debug.LogError($"{LogPrefix} HamsterVisualFollower updateAnimator should be true.");
+        else
+            Debug.Log($"{LogPrefix} HamsterVisualFollower updateAnimator is true.");
+
+        if (!TryGetStringField(followerObject, "speedParameter", out speedParameter))
+            Debug.LogWarning($"{LogPrefix} HamsterVisualFollower speedParameter field was not found.");
+        else if (!string.Equals(speedParameter, VisualAnimatorSpeedParameter, StringComparison.Ordinal))
+            Debug.LogWarning($"{LogPrefix} Animator parameter mismatch. speedParameter={speedParameter} Expected={VisualAnimatorSpeedParameter}");
+        else
+            Debug.Log($"{LogPrefix} HamsterVisualFollower speedParameter is {VisualAnimatorSpeedParameter}.");
+
+        if (!TryGetStringField(followerObject, "move01Parameter", out move01Parameter))
+            Debug.LogWarning($"{LogPrefix} HamsterVisualFollower move01Parameter field was not found.");
+        else if (!string.Equals(move01Parameter, VisualAnimatorMove01Parameter, StringComparison.Ordinal))
+            Debug.LogWarning($"{LogPrefix} Animator parameter mismatch. move01Parameter={move01Parameter} Expected={VisualAnimatorMove01Parameter}");
+        else
+            Debug.Log($"{LogPrefix} HamsterVisualFollower move01Parameter is {VisualAnimatorMove01Parameter}.");
+    }
+
+    private static void ValidateGeneratedVisualControllerMotions(AnimatorController controller)
+    {
+        if (controller == null)
+            return;
+
+        AnimatorControllerLayer[] layers = controller.layers;
+        if (layers == null || layers.Length == 0 || layers[0].stateMachine == null)
+        {
+            Debug.LogError($"{LogPrefix} Generated visual controller has no Base Layer state machine.");
+            return;
+        }
+
+        ValidateGeneratedVisualControllerStateMotion(layers[0].stateMachine, "Idle");
+        ValidateGeneratedVisualControllerStateMotion(layers[0].stateMachine, "Walk");
+    }
+
+    private static void ValidateGeneratedVisualControllerStateMotion(AnimatorStateMachine stateMachine, string stateName)
+    {
+        AnimatorState state = FindAnimatorStateByName(stateMachine, stateName);
+        if (state == null)
+        {
+            Debug.LogWarning($"{LogPrefix} Generated visual controller state is missing: {stateName}");
+            return;
+        }
+
+        AnimationClip clip = state.motion as AnimationClip;
+        if (clip == null)
+        {
+            Debug.LogWarning($"{LogPrefix} Generated visual controller {stateName} state motion is empty.");
+            return;
+        }
+
+        string clipPath = AssetDatabase.GetAssetPath(clip);
+        int eventCount;
+        string eventNames;
+        TryGetAnimationEventSummary(clip, out eventCount, out eventNames);
+        bool blocked = IsBlockedAnimationClipName(clip, clipPath);
+
+        Debug.Log($"{LogPrefix} Generated visual controller {stateName} motion={clipPath}/{clip.name} eventCount={eventCount} isLooping={clip.isLooping}");
+        if (blocked)
+            Debug.LogError($"{LogPrefix} Generated visual controller {stateName} motion has blocked keyword: {clipPath}/{clip.name}");
+
+        if (eventCount > 0)
+            Debug.LogError($"{LogPrefix} Generated visual controller {stateName} motion has AnimationEvents: {clipPath}/{clip.name} eventCount={eventCount} eventNames={eventNames}");
+    }
+
+    private static AnimatorState FindAnimatorStateByName(AnimatorStateMachine stateMachine, string stateName)
+    {
+        if (stateMachine == null)
+            return null;
+
+        ChildAnimatorState[] states = stateMachine.states;
+        for (int i = 0; i < states.Length; i++)
+        {
+            AnimatorState state = states[i].state;
+            if (state != null && string.Equals(state.name, stateName, StringComparison.Ordinal))
+                return state;
+        }
+
+        return null;
+    }
+
+    private static void ValidateAnimatorParameter(
+        Animator animator,
+        string parameterName,
+        AnimatorControllerParameterType expectedType)
+    {
+        if (AnimatorHasParameter(animator, parameterName, expectedType))
+        {
+            Debug.Log($"{LogPrefix} Animator has parameter {parameterName} {expectedType}.");
+            return;
+        }
+
+        Debug.LogWarning($"{LogPrefix} Animator parameter mismatch. Missing {parameterName} {expectedType}.");
+    }
+
+    private static bool AnimatorHasParameter(
+        Animator animator,
+        string parameterName,
+        AnimatorControllerParameterType expectedType)
+    {
+        if (animator == null || animator.runtimeAnimatorController == null)
+            return false;
+
+        AnimatorControllerParameter[] parameters;
+        try
+        {
+            parameters = animator.parameters;
+        }
+        catch (Exception exception)
+        {
+            Debug.LogWarning($"{LogPrefix} Animator parameter read failed: {exception.Message}");
+            return false;
+        }
+
+        for (int i = 0; i < parameters.Length; i++)
+        {
+            AnimatorControllerParameter parameter = parameters[i];
+            if (string.Equals(parameter.name, parameterName, StringComparison.Ordinal)
+                && parameter.type == expectedType)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static int CountEnabledColliders(Transform root)
+    {
+        int count = 0;
+        Collider[] colliders = root.GetComponentsInChildren<Collider>(true);
+        for (int i = 0; i < colliders.Length; i++)
+        {
+            if (colliders[i] != null && colliders[i].enabled)
+                count++;
+        }
+
+        return count;
+    }
+
+    private static int CountNonKinematicRigidbodies(Transform root)
+    {
+        int count = 0;
+        Rigidbody[] rigidbodies = root.GetComponentsInChildren<Rigidbody>(true);
+        for (int i = 0; i < rigidbodies.Length; i++)
+        {
+            Rigidbody body = rigidbodies[i];
+            if (body != null && !body.isKinematic)
+                count++;
+        }
+
+        return count;
+    }
+
+    private static int CountActiveControllerComponents(Transform root)
+    {
+        int count = 0;
+        Component[] components = root.GetComponentsInChildren<Component>(true);
+        for (int i = 0; i < components.Length; i++)
+        {
+            Component component = components[i];
+            if (component == null || !DisableTypeNames.Contains(component.GetType().Name))
+                continue;
+
+            if (component.gameObject.activeInHierarchy && IsComponentEnabled(component))
+                count++;
+        }
+
+        return count;
+    }
+
+    private static bool HasRigidbodyConstraint(RigidbodyConstraints constraints, RigidbodyConstraints flag)
+    {
+        return (constraints & flag) == flag;
     }
 
     private static void ValidateShellGroundMask(Scene scene, GameObject body, int groundMask)
@@ -3194,6 +4925,42 @@ public static class HamsterFullRagdollTestSetupUtility
         property.boolValue = value;
     }
 
+    private static void SetVector3Field(SerializedObject serializedObject, string fieldName, Vector3 value)
+    {
+        SerializedProperty property = serializedObject.FindProperty(fieldName);
+        if (property == null)
+        {
+            Debug.LogWarning($"{LogPrefix} Vector3 field was not found: {fieldName}");
+            return;
+        }
+
+        if (property.propertyType != SerializedPropertyType.Vector3)
+        {
+            Debug.LogWarning($"{LogPrefix} Field is not Vector3: {fieldName}");
+            return;
+        }
+
+        property.vector3Value = value;
+    }
+
+    private static void SetStringField(SerializedObject serializedObject, string fieldName, string value)
+    {
+        SerializedProperty property = serializedObject.FindProperty(fieldName);
+        if (property == null)
+        {
+            Debug.LogWarning($"{LogPrefix} String field was not found: {fieldName}");
+            return;
+        }
+
+        if (property.propertyType != SerializedPropertyType.String)
+        {
+            Debug.LogWarning($"{LogPrefix} Field is not string: {fieldName}");
+            return;
+        }
+
+        property.stringValue = value;
+    }
+
     private static T GetObjectReference<T>(SerializedObject serializedObject, string fieldName) where T : UnityEngine.Object
     {
         SerializedProperty property = serializedObject.FindProperty(fieldName);
@@ -3245,6 +5012,28 @@ public static class HamsterFullRagdollTestSetupUtility
             return false;
 
         value = property.floatValue;
+        return true;
+    }
+
+    private static bool TryGetVector3Field(SerializedObject serializedObject, string fieldName, out Vector3 value)
+    {
+        value = Vector3.zero;
+        SerializedProperty property = serializedObject.FindProperty(fieldName);
+        if (property == null || property.propertyType != SerializedPropertyType.Vector3)
+            return false;
+
+        value = property.vector3Value;
+        return true;
+    }
+
+    private static bool TryGetStringField(SerializedObject serializedObject, string fieldName, out string value)
+    {
+        value = string.Empty;
+        SerializedProperty property = serializedObject.FindProperty(fieldName);
+        if (property == null || property.propertyType != SerializedPropertyType.String)
+            return false;
+
+        value = property.stringValue;
         return true;
     }
 
@@ -3366,11 +5155,40 @@ public static class HamsterFullRagdollTestSetupUtility
         return new string(buffer, 0, count);
     }
 
+    private static bool IsInvalidScale(Vector3 scale)
+    {
+        return !IsFinite(scale.x)
+            || !IsFinite(scale.y)
+            || !IsFinite(scale.z)
+            || Mathf.Abs(scale.x) <= 0.0001f
+            || Mathf.Abs(scale.y) <= 0.0001f
+            || Mathf.Abs(scale.z) <= 0.0001f;
+    }
+
+    private static bool IsFinite(float value)
+    {
+        return !float.IsNaN(value) && !float.IsInfinity(value);
+    }
+
     private static bool ContainsIgnoreCase(string value, string fragment)
     {
         return !string.IsNullOrEmpty(value)
             && !string.IsNullOrEmpty(fragment)
             && value.IndexOf(fragment, StringComparison.OrdinalIgnoreCase) >= 0;
+    }
+
+    private static bool ContainsAnyFragment(string value, string[] fragments)
+    {
+        if (string.IsNullOrEmpty(value) || fragments == null)
+            return false;
+
+        for (int i = 0; i < fragments.Length; i++)
+        {
+            if (ContainsIgnoreCase(value, fragments[i]))
+                return true;
+        }
+
+        return false;
     }
 
     private static string ToTitleCase(string value)
