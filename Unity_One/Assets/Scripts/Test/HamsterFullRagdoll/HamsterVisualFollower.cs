@@ -43,6 +43,32 @@ public sealed class HamsterVisualFollower : MonoBehaviour
     [SerializeField] private float speedForMovingVisualYOffset = 0.6f;
     [SerializeField] private float visualHeightSmoothTime = 0.08f;
 
+    [Header("Acceleration Wobble")]
+    [SerializeField] private bool enableAccelerationWobble = false;
+    [SerializeField] private float accelerationForMaxWobble = 5.0f;
+    [SerializeField] private float maxAccelerationForwardWobbleDegrees = 8.0f;
+    [SerializeField] private float maxAccelerationSideWobbleDegrees = 10.0f;
+    [SerializeField] private float accelerationWobbleSmoothTime = 0.12f;
+    [SerializeField] private float accelerationWobbleReturnSmoothTime = 0.18f;
+    [SerializeField] private bool invertAccelerationForwardWobble = false;
+    [SerializeField] private bool invertAccelerationSideWobble = false;
+
+    [Header("Stop Overshoot")]
+    [SerializeField] private bool enableStopOvershoot = false;
+    [SerializeField] private float stopOvershootSpeedThreshold = 0.45f;
+    [SerializeField] private float stopOvershootInputThreshold = 0.08f;
+    [SerializeField] private float maxStopOvershootDegrees = 8.0f;
+    [SerializeField] private float stopOvershootDuration = 0.18f;
+    [SerializeField] private float stopOvershootCooldown = 0.12f;
+    [SerializeField] private bool invertStopOvershoot = false;
+
+    [Header("Turn Wobble")]
+    [SerializeField] private bool enableTurnWobble = false;
+    [SerializeField] private float turnWobbleYawDeltaForMax = 90.0f;
+    [SerializeField] private float maxTurnWobbleDegrees = 10.0f;
+    [SerializeField] private float turnWobbleSmoothTime = 0.12f;
+    [SerializeField] private bool invertTurnWobble = false;
+
     [Header("Animator")]
     [SerializeField] private bool updateAnimator = true;
     [SerializeField] private bool disableAnimatorRootMotion = true;
@@ -70,6 +96,21 @@ public sealed class HamsterVisualFollower : MonoBehaviour
     private float _lastLogTime;
     private float _currentVisualYOffset;
     private float _visualYOffsetVelocity;
+    private Vector3 _previousPlanarVelocity;
+    private Vector3 _currentPlanarAcceleration;
+    private float _accelForwardWobble;
+    private float _accelForwardWobbleVelocity;
+    private float _accelSideWobble;
+    private float _accelSideWobbleVelocity;
+    private float _stopOvershoot;
+    private float _stopOvershootVelocity;
+    private float _stopOvershootTimer;
+    private float _stopOvershootCooldownTimer;
+    private float _lastPlanarSpeed;
+    private float _previousYawForTurnWobble;
+    private float _turnWobble;
+    private float _turnWobbleVelocity;
+    private float _stopOvershootDirection = 1f;
 
     private Vector3 _currentLagOffset;
     private Animator _cachedAnimator;
@@ -111,6 +152,7 @@ public sealed class HamsterVisualFollower : MonoBehaviour
         if (targetBody == null || visualRoot == null)
             return;
 
+        float deltaTime = Time.deltaTime;
         Vector3 velocity = targetBody.linearVelocity;
         Vector3 planarVelocity = velocity;
         planarVelocity.y = 0f;
@@ -118,10 +160,12 @@ public sealed class HamsterVisualFollower : MonoBehaviour
         float planarSpeed = planarVelocity.magnitude;
         Vector3 localVelocity = targetBody.transform.InverseTransformDirection(planarVelocity);
 
+        UpdateMotionWobble(planarVelocity, planarSpeed, deltaTime);
         UpdateVisualPosition(localVelocity, planarSpeed);
         UpdateVisualRotation(planarVelocity, planarSpeed, localVelocity);
         UpdateAnimator(planarSpeed);
         LogDebugState(velocity, planarSpeed, localVelocity);
+        StorePreviousMotionState(planarVelocity, planarSpeed);
     }
 
     private void ResolveReferences()
@@ -175,9 +219,28 @@ public sealed class HamsterVisualFollower : MonoBehaviour
         _sideLeanVelocity = 0f;
         _currentVisualYOffset = enableSpeedBasedVisualHeight ? idleVisualYOffset : visualLocalOffset.y;
         _visualYOffsetVelocity = 0f;
+        _previousPlanarVelocity = Vector3.zero;
+        _currentPlanarAcceleration = Vector3.zero;
+        _accelForwardWobble = 0f;
+        _accelForwardWobbleVelocity = 0f;
+        _accelSideWobble = 0f;
+        _accelSideWobbleVelocity = 0f;
+        _stopOvershoot = 0f;
+        _stopOvershootVelocity = 0f;
+        _stopOvershootTimer = 0f;
+        _stopOvershootCooldownTimer = 0f;
+        _lastPlanarSpeed = 0f;
+        _previousYawForTurnWobble = 0f;
+        _turnWobble = 0f;
+        _turnWobbleVelocity = 0f;
+        _stopOvershootDirection = 1f;
 
         if (targetBody == null)
             return;
+
+        _previousPlanarVelocity = targetBody.linearVelocity;
+        _previousPlanarVelocity.y = 0f;
+        _lastPlanarSpeed = _previousPlanarVelocity.magnitude;
 
         Vector3 initialDirection = Vector3.ProjectOnPlane(targetBody.transform.forward, Vector3.up);
         _lastPlanarMoveDirection = initialDirection.sqrMagnitude > 0.0001f
@@ -249,6 +312,139 @@ public sealed class HamsterVisualFollower : MonoBehaviour
         return _currentVisualYOffset;
     }
 
+    private void UpdateMotionWobble(Vector3 planarVelocity, float planarSpeed, float deltaTime)
+    {
+        if (deltaTime > 0.0001f)
+            _currentPlanarAcceleration = (planarVelocity - _previousPlanarVelocity) / deltaTime;
+        else
+            _currentPlanarAcceleration = Vector3.zero;
+
+        UpdateAccelerationWobble(deltaTime);
+        UpdateStopOvershoot(planarSpeed, deltaTime);
+    }
+
+    private void UpdateAccelerationWobble(float deltaTime)
+    {
+        Vector3 localAcceleration = targetBody.transform.InverseTransformDirection(_currentPlanarAcceleration);
+
+        float targetForwardWobble = 0f;
+        float targetSideWobble = 0f;
+        if (enableAccelerationWobble)
+        {
+            float accelerationScale = Mathf.Max(0.01f, accelerationForMaxWobble);
+            float forwardAmount = Mathf.Clamp(localAcceleration.z / accelerationScale, -1f, 1f);
+            float sideAmount = Mathf.Clamp(localAcceleration.x / accelerationScale, -1f, 1f);
+
+            targetForwardWobble = forwardAmount * maxAccelerationForwardWobbleDegrees;
+            targetSideWobble = -sideAmount * maxAccelerationSideWobbleDegrees;
+
+            if (invertAccelerationForwardWobble)
+                targetForwardWobble = -targetForwardWobble;
+
+            if (invertAccelerationSideWobble)
+                targetSideWobble = -targetSideWobble;
+        }
+
+        float forwardSmoothTime = Mathf.Abs(targetForwardWobble) > 0.001f
+            ? accelerationWobbleSmoothTime
+            : accelerationWobbleReturnSmoothTime;
+        float sideSmoothTime = Mathf.Abs(targetSideWobble) > 0.001f
+            ? accelerationWobbleSmoothTime
+            : accelerationWobbleReturnSmoothTime;
+
+        _accelForwardWobble = Mathf.SmoothDamp(
+            _accelForwardWobble,
+            targetForwardWobble,
+            ref _accelForwardWobbleVelocity,
+            forwardSmoothTime,
+            Mathf.Infinity,
+            deltaTime);
+        _accelSideWobble = Mathf.SmoothDamp(
+            _accelSideWobble,
+            targetSideWobble,
+            ref _accelSideWobbleVelocity,
+            sideSmoothTime,
+            Mathf.Infinity,
+            deltaTime);
+    }
+
+    private void UpdateStopOvershoot(float planarSpeed, float deltaTime)
+    {
+        if (_stopOvershootCooldownTimer > 0f)
+            _stopOvershootCooldownTimer = Mathf.Max(0f, _stopOvershootCooldownTimer - deltaTime);
+
+        if (enableStopOvershoot && _stopOvershootTimer <= 0f && _stopOvershootCooldownTimer <= 0f)
+        {
+            float speedDrop = _lastPlanarSpeed - planarSpeed;
+            bool hadMoveSpeed = _lastPlanarSpeed >= stopOvershootSpeedThreshold;
+            bool nearStopSpeed = planarSpeed <= stopOvershootSpeedThreshold;
+            bool decelerating = speedDrop > 0.001f;
+            bool inferredInputReleased = planarSpeed <= stopOvershootInputThreshold || speedDrop >= stopOvershootInputThreshold;
+
+            if (hadMoveSpeed && nearStopSpeed && decelerating && inferredInputReleased && stopOvershootDuration > 0f)
+            {
+                Vector3 localPreviousVelocity = targetBody.transform.InverseTransformDirection(_previousPlanarVelocity);
+                _stopOvershootDirection = Mathf.Abs(localPreviousVelocity.z) > 0.01f
+                    ? Mathf.Sign(localPreviousVelocity.z)
+                    : 1f;
+                _stopOvershootTimer = stopOvershootDuration;
+                _stopOvershootCooldownTimer = stopOvershootDuration + stopOvershootCooldown;
+            }
+        }
+
+        float targetStopOvershoot = 0f;
+        if (enableStopOvershoot && _stopOvershootTimer > 0f)
+        {
+            float normalizedTime = stopOvershootDuration > 0f
+                ? Mathf.Clamp01(_stopOvershootTimer / stopOvershootDuration)
+                : 0f;
+            targetStopOvershoot = _stopOvershootDirection * maxStopOvershootDegrees * normalizedTime;
+
+            if (invertStopOvershoot)
+                targetStopOvershoot = -targetStopOvershoot;
+
+            _stopOvershootTimer = Mathf.Max(0f, _stopOvershootTimer - deltaTime);
+        }
+
+        float smoothTime = stopOvershootDuration > 0f ? stopOvershootDuration * 0.25f : 0f;
+        _stopOvershoot = Mathf.SmoothDamp(
+            _stopOvershoot,
+            targetStopOvershoot,
+            ref _stopOvershootVelocity,
+            smoothTime,
+            Mathf.Infinity,
+            deltaTime);
+    }
+
+    private void UpdateTurnWobble(float deltaTime)
+    {
+        float targetTurnWobble = 0f;
+        if (enableTurnWobble)
+        {
+            float yawDelta = Mathf.DeltaAngle(_previousYawForTurnWobble, _currentYaw);
+            float turnAmount = Mathf.Clamp(yawDelta / Mathf.Max(1f, turnWobbleYawDeltaForMax), -1f, 1f);
+            targetTurnWobble = -turnAmount * maxTurnWobbleDegrees;
+
+            if (invertTurnWobble)
+                targetTurnWobble = -targetTurnWobble;
+        }
+
+        _turnWobble = Mathf.SmoothDamp(
+            _turnWobble,
+            targetTurnWobble,
+            ref _turnWobbleVelocity,
+            turnWobbleSmoothTime,
+            Mathf.Infinity,
+            deltaTime);
+    }
+
+    private void StorePreviousMotionState(Vector3 planarVelocity, float planarSpeed)
+    {
+        _previousPlanarVelocity = planarVelocity;
+        _lastPlanarSpeed = planarSpeed;
+        _previousYawForTurnWobble = _currentYaw;
+    }
+
     private void UpdateVisualRotation(Vector3 planarVelocity, float planarSpeed, Vector3 localVelocity)
     {
         float targetYaw = 0f;
@@ -269,6 +465,7 @@ public sealed class HamsterVisualFollower : MonoBehaviour
             yawSmoothTime,
             Mathf.Infinity,
             Time.deltaTime);
+        UpdateTurnWobble(Time.deltaTime);
 
         float targetForwardLean = 0f;
         float targetSideLean = 0f;
@@ -302,12 +499,15 @@ public sealed class HamsterVisualFollower : MonoBehaviour
 
         Quaternion yawRot = Quaternion.Euler(0f, _currentYaw + visualYawOffsetDegrees, 0f);
         Quaternion leanRot = Quaternion.Euler(_currentForwardLean, 0f, _currentSideLean);
+        Quaternion accelerationWobbleRot = Quaternion.Euler(_accelForwardWobble, 0f, _accelSideWobble);
+        Quaternion stopOvershootRot = Quaternion.Euler(_stopOvershoot, 0f, 0f);
+        Quaternion turnWobbleRot = Quaternion.Euler(0f, 0f, _turnWobble);
         Quaternion offsetRot = Quaternion.Euler(visualLocalEulerOffset);
 
         if (visualRootIsChildOfTarget)
-            visualRoot.localRotation = _initialLocalRotation * yawRot * leanRot * offsetRot;
+            visualRoot.localRotation = _initialLocalRotation * yawRot * leanRot * accelerationWobbleRot * stopOvershootRot * turnWobbleRot * offsetRot;
         else
-            visualRoot.rotation = yawRot * leanRot * offsetRot;
+            visualRoot.rotation = yawRot * leanRot * accelerationWobbleRot * stopOvershootRot * turnWobbleRot * offsetRot;
     }
 
     private float CalculateTargetYaw(Vector3 moveDirection)
@@ -400,7 +600,7 @@ public sealed class HamsterVisualFollower : MonoBehaviour
 
         _lastLogTime = Time.time;
         Debug.Log(
-            $"[HamsterVisualFollower:{gameObject.name}] targetVelocity={FormatVector3(velocity)} planarSpeed={planarSpeed:F2} localVelocity={FormatVector3(localVelocity)} currentYaw={_currentYaw:F1} forwardLean={_currentForwardLean:F1} sideLean={_currentSideLean:F1} enableSpeedBasedVisualHeight={enableSpeedBasedVisualHeight} idleVisualYOffset={idleVisualYOffset:F3} movingVisualYOffset={movingVisualYOffset:F3} currentVisualYOffset={_currentVisualYOffset:F3} speedForMovingVisualYOffset={speedForMovingVisualYOffset:F2} visualLocalPosition={FormatVector3(visualRoot.localPosition)} visualLocalEuler={FormatVector3(visualRoot.localRotation.eulerAngles)}",
+            $"[HamsterVisualFollower:{gameObject.name}] targetVelocity={FormatVector3(velocity)} planarSpeed={planarSpeed:F2} previousPlanarSpeed={_lastPlanarSpeed:F2} localVelocity={FormatVector3(localVelocity)} currentPlanarAcceleration={FormatVector3(_currentPlanarAcceleration)} currentYaw={_currentYaw:F1} forwardLean={_currentForwardLean:F1} sideLean={_currentSideLean:F1} enableAccelerationWobble={enableAccelerationWobble} accelForwardWobble={_accelForwardWobble:F1} accelSideWobble={_accelSideWobble:F1} stopOvershoot={_stopOvershoot:F1} turnWobble={_turnWobble:F1} enableSpeedBasedVisualHeight={enableSpeedBasedVisualHeight} idleVisualYOffset={idleVisualYOffset:F3} movingVisualYOffset={movingVisualYOffset:F3} currentVisualYOffset={_currentVisualYOffset:F3} speedForMovingVisualYOffset={speedForMovingVisualYOffset:F2} visualLocalPosition={FormatVector3(visualRoot.localPosition)} visualLocalEuler={FormatVector3(visualRoot.localRotation.eulerAngles)}",
             this);
     }
 
@@ -422,6 +622,19 @@ public sealed class HamsterVisualFollower : MonoBehaviour
         lagSmoothTime = Mathf.Max(0f, lagSmoothTime);
         speedForMovingVisualYOffset = Mathf.Max(0.01f, speedForMovingVisualYOffset);
         visualHeightSmoothTime = Mathf.Max(0f, visualHeightSmoothTime);
+        accelerationForMaxWobble = Mathf.Max(0.01f, accelerationForMaxWobble);
+        maxAccelerationForwardWobbleDegrees = Mathf.Max(0f, maxAccelerationForwardWobbleDegrees);
+        maxAccelerationSideWobbleDegrees = Mathf.Max(0f, maxAccelerationSideWobbleDegrees);
+        accelerationWobbleSmoothTime = Mathf.Max(0f, accelerationWobbleSmoothTime);
+        accelerationWobbleReturnSmoothTime = Mathf.Max(0f, accelerationWobbleReturnSmoothTime);
+        stopOvershootSpeedThreshold = Mathf.Max(0f, stopOvershootSpeedThreshold);
+        stopOvershootInputThreshold = Mathf.Max(0f, stopOvershootInputThreshold);
+        maxStopOvershootDegrees = Mathf.Max(0f, maxStopOvershootDegrees);
+        stopOvershootDuration = Mathf.Max(0f, stopOvershootDuration);
+        stopOvershootCooldown = Mathf.Max(0f, stopOvershootCooldown);
+        turnWobbleYawDeltaForMax = Mathf.Max(1f, turnWobbleYawDeltaForMax);
+        maxTurnWobbleDegrees = Mathf.Max(0f, maxTurnWobbleDegrees);
+        turnWobbleSmoothTime = Mathf.Max(0f, turnWobbleSmoothTime);
         animatorDampTime = Mathf.Max(0f, animatorDampTime);
         speedForMove01 = Mathf.Max(0.01f, speedForMove01);
     }

@@ -28,6 +28,23 @@ public static class HamsterFullRagdollTestSetupUtility
     private const float VisualAnimatorWalkStateSpeed = 1.45f;
     private const float VisualGroundOffsetPresetY = 0.10f;
     private const float VisualGroundOffsetPreserveThresholdY = 0.05f;
+    private const string Phase2BoingVisualName = "Boing_Visual";
+    private const string Phase2BoingTailName = "BK_Tail";
+    private const string Phase2BoingEarLName = "BK_Ear_L";
+    private const string Phase2BoingEarRName = "BK_Ear_R";
+    private const float VerifiedVisualLocalOffsetY = 0.10f;
+    private const float VerifiedIdleVisualYOffset = -0.03f;
+    private const float VerifiedMovingVisualYOffset = 0.10f;
+    private const float VerifiedSpeedForMovingVisualYOffset = 0.60f;
+    private const float VerifiedVisualHeightSmoothTime = 0.08f;
+    private const float VerifiedVisualOffsetYTolerance = 0.005f;
+    private const float VerifiedVisualHeightFloatTolerance = 0.01f;
+    private const float Phase2TailMaxBendAngleCap = 75f;
+    private const float Phase2TailMaxCollisionRadius = 0.07f;
+    private const float Phase2TailSoftMaxBendAngleCap = 52f;
+    private const float Phase2TailFullChainSoftMaxBendAngleCap = 44f;
+    private const float Phase2EarMaxBendAngleCap = 45f;
+    private const float Phase2EarMaxCollisionRadius = 0.03f;
     private const RigidbodyConstraints MotorShellRotationStabilityConstraints =
         RigidbodyConstraints.FreezeRotationX | RigidbodyConstraints.FreezeRotationZ;
 
@@ -86,6 +103,35 @@ public static class HamsterFullRagdollTestSetupUtility
         "이동",
         "걷",
         "총총"
+    };
+
+    private static readonly string[] Phase2TailBoneNameCandidates =
+    {
+        "tail",
+        "Tail",
+        "꼬리"
+    };
+
+    private static readonly string[] Phase2EarLBoneNameCandidates =
+    {
+        "ear_L",
+        "ear.l",
+        "Ear_L",
+        "Ear.L",
+        "left ear",
+        "귀_L",
+        "왼귀"
+    };
+
+    private static readonly string[] Phase2EarRBoneNameCandidates =
+    {
+        "ear_R",
+        "ear.r",
+        "Ear_R",
+        "Ear.R",
+        "right ear",
+        "귀_R",
+        "오른귀"
     };
 
     private static readonly string[] BlockedAnimationClipNameFragments =
@@ -548,6 +594,67 @@ public static class HamsterFullRagdollTestSetupUtility
         LogVisualDiagnosticNextTest();
     }
 
+    [MenuItem("Project ONE/Hamster Full Ragdoll/Apply Verified Visual Height Profile")]
+    private static void ApplyVerifiedVisualHeightProfile()
+    {
+        Scene activeScene;
+        if (!TryGetCurrentDestinationTestScene(out activeScene))
+            return;
+
+        HamsterVisualFollower visualFollower;
+        if (!TryGetJointFreeVisualFollower(activeScene, out visualFollower))
+            return;
+
+        if (!ApplyVerifiedVisualHeightProfile(visualFollower, "Applied Verified Visual Height Profile"))
+            return;
+
+        if (!SaveCurrentDestinationTestScene(activeScene, "Verified Visual Height Profile"))
+            return;
+
+        LogVerifiedVisualHeightProfileNextTest();
+    }
+
+    [MenuItem("Project ONE/Hamster Full Ragdoll/Apply Phase 1 Final Visual Shell Preset")]
+    private static void ApplyPhase1FinalVisualShellPreset()
+    {
+        Scene activeScene;
+        if (!TryGetCurrentDestinationTestScene(out activeScene))
+            return;
+
+        HamsterVisualFollower visualFollower;
+        if (!TryGetJointFreeVisualFollower(activeScene, out visualFollower))
+            return;
+
+        if (!ApplyVerifiedVisualHeightProfile(visualFollower, "Applied verified visual height profile to Phase 1 Final Visual Shell Preset"))
+            return;
+
+        if (!SaveCurrentDestinationTestScene(activeScene, "Phase 1 Final Visual Shell height profile"))
+            return;
+
+        LogVerifiedVisualHeightProfileNextTest();
+    }
+
+    [MenuItem("Project ONE/Hamster Full Ragdoll/Apply Phase 2b Final Motion Wobble Preset")]
+    private static void ApplyPhase2bFinalMotionWobblePreset()
+    {
+        Scene activeScene;
+        if (!TryGetCurrentDestinationTestScene(out activeScene))
+            return;
+
+        HamsterVisualFollower visualFollower;
+        if (!TryGetJointFreeVisualFollower(activeScene, out visualFollower))
+            return;
+
+        if (!ApplyVerifiedVisualHeightProfile(visualFollower, "Phase 2b Final Motion Wobble Preset preserved verified visual height profile"))
+            return;
+
+        if (!SaveCurrentDestinationTestScene(activeScene, "Phase 2b Final Motion Wobble height profile"))
+            return;
+
+        Debug.Log($"{LogPrefix} Phase 2b wobble values, invert options, Animator links, and Tail/Ear Boing values were not modified.");
+        LogVerifiedVisualHeightProfileNextTest();
+    }
+
     [MenuItem("Project ONE/Hamster Full Ragdoll/Apply Visual Idle No-Lean Diagnostic")]
     private static void ApplyVisualIdleNoLeanDiagnostic()
     {
@@ -604,6 +711,87 @@ public static class HamsterFullRagdollTestSetupUtility
         AssetDatabase.SaveAssets();
         Debug.Log($"{LogPrefix} Ready for idle/walk visual animation test");
         LogVisualAnimatorNextTest();
+    }
+
+    [MenuItem("Project ONE/Hamster Full Ragdoll/Configure Phase 2 Tail Ear Boing")]
+    private static void ConfigurePhase2TailEarBoing()
+    {
+        Scene activeScene;
+        if (!TryGetCurrentDestinationTestScene(out activeScene))
+            return;
+
+        if (!ConfigurePhase2TailEarBoing(activeScene))
+            return;
+
+        if (!SaveCurrentDestinationTestScene(activeScene, "Phase 2 Tail/Ear Boing setup"))
+            return;
+
+        Debug.Log($"{LogPrefix} Ready for Tail/Ear secondary motion test");
+        LogPhase2TailEarBoingNextTest();
+    }
+
+    [MenuItem("Project ONE/Hamster Full Ragdoll/Apply Phase 2 Tail Soft Boing Preset")]
+    private static void ApplyPhase2TailSoftBoingPreset()
+    {
+        Scene activeScene;
+        if (!TryGetCurrentDestinationTestScene(out activeScene))
+            return;
+
+        if (!ApplyPhase2TailSoftBoingPreset(activeScene))
+            return;
+
+        if (!SaveCurrentDestinationTestScene(activeScene, "Phase 2 Tail Soft Boing preset"))
+            return;
+
+        LogPhase2TailSoftBoingNextTest();
+    }
+
+    [MenuItem("Project ONE/Hamster Full Ragdoll/Apply Phase 2 Tail Full-Chain Soft Preset")]
+    private static void ApplyPhase2TailFullChainSoftPreset()
+    {
+        Scene activeScene;
+        if (!TryGetCurrentDestinationTestScene(out activeScene))
+            return;
+
+        if (!ApplyPhase2TailFullChainSoftPreset(activeScene))
+            return;
+
+        if (!SaveCurrentDestinationTestScene(activeScene, "Phase 2 Tail Full-Chain Soft preset"))
+            return;
+
+        LogPhase2TailFullChainSoftBoingNextTest();
+    }
+
+    [MenuItem("Project ONE/Hamster Full Ragdoll/Restore Phase 2 Tail Soft Boing Default")]
+    private static void RestorePhase2TailSoftBoingDefault()
+    {
+        Scene activeScene;
+        if (!TryGetCurrentDestinationTestScene(out activeScene))
+            return;
+
+        if (!RestorePhase2TailSoftBoingDefault(activeScene))
+            return;
+
+        if (!SaveCurrentDestinationTestScene(activeScene, "Phase 2 Tail Soft Boing default restore"))
+            return;
+
+        LogPhase2TailSoftBoingNextTest();
+    }
+
+    [MenuItem("Project ONE/Hamster Full Ragdoll/Restore Phase 2 Tail Ear Boing Default")]
+    private static void RestorePhase2TailEarBoingDefault()
+    {
+        Scene activeScene;
+        if (!TryGetCurrentDestinationTestScene(out activeScene))
+            return;
+
+        if (!RestorePhase2TailEarBoingDefault(activeScene))
+            return;
+
+        if (!SaveCurrentDestinationTestScene(activeScene, "Phase 2 Tail/Ear Boing default restore"))
+            return;
+
+        LogPhase2TailEarBoingNextTest();
     }
 
     [MenuItem("Project ONE/Hamster Full Ragdoll/Validate Selected Test Prefab")]
@@ -1613,6 +1801,37 @@ public static class HamsterFullRagdollTestSetupUtility
         return true;
     }
 
+    private static bool ApplyVerifiedVisualHeightProfile(HamsterVisualFollower visualFollower, string successLog)
+    {
+        if (visualFollower == null)
+            return false;
+
+        SerializedObject followerObject = new SerializedObject(visualFollower);
+        Vector3 beforeOffset;
+        if (!TryGetVector3Field(followerObject, "visualLocalOffset", out beforeOffset))
+        {
+            Debug.LogWarning($"{LogPrefix} visualLocalOffset field was not found.");
+            return false;
+        }
+
+        Vector3 afterOffset = beforeOffset;
+        afterOffset.y = VerifiedVisualLocalOffsetY;
+        SetVector3Field(followerObject, "visualLocalOffset", afterOffset);
+        SetBoolField(followerObject, "enableSpeedBasedVisualHeight", true);
+        SetFloatField(followerObject, "idleVisualYOffset", VerifiedIdleVisualYOffset);
+        SetFloatField(followerObject, "movingVisualYOffset", VerifiedMovingVisualYOffset);
+        SetFloatField(followerObject, "speedForMovingVisualYOffset", VerifiedSpeedForMovingVisualYOffset);
+        SetFloatField(followerObject, "visualHeightSmoothTime", VerifiedVisualHeightSmoothTime);
+        followerObject.ApplyModifiedProperties();
+        EditorUtility.SetDirty(visualFollower);
+
+        Debug.Log($"{LogPrefix} {successLog}");
+        Debug.Log($"{LogPrefix} visualLocalOffset before/after: {beforeOffset} -> {afterOffset}");
+        Debug.Log($"{LogPrefix} visualLocalOffset.y={VerifiedVisualLocalOffsetY:F2}");
+        Debug.Log($"{LogPrefix} speedBasedHeight=true idle={VerifiedIdleVisualYOffset:F2} moving={VerifiedMovingVisualYOffset:F2} speed={VerifiedSpeedForMovingVisualYOffset:F2} smooth={VerifiedVisualHeightSmoothTime:F2}");
+        return true;
+    }
+
     private static void ApplyVisualIdleNoLeanDiagnostic(HamsterVisualFollower visualFollower)
     {
         SerializedObject followerObject = new SerializedObject(visualFollower);
@@ -1662,6 +1881,19 @@ public static class HamsterFullRagdollTestSetupUtility
         Debug.Log($"{LogPrefix} 7. Run Configure Visual Animator For Joint-Free Shell again after clip filter update.");
         Debug.Log($"{LogPrefix} 8. Validate Current Test Scene.");
         Debug.Log($"{LogPrefix} 9. Press Play and verify no AnimationEvent receiver errors.");
+    }
+
+    private static void LogVerifiedVisualHeightProfileNextTest()
+    {
+        Debug.Log($"{LogPrefix} Next test:");
+        Debug.Log($"{LogPrefix} 1. Keep Hamster_FullRagdoll_Test inactive.");
+        Debug.Log($"{LogPrefix} 2. Keep Hamster_JointFreeMotorShell_Test active.");
+        Debug.Log($"{LogPrefix} 3. Select MotorShellBody and confirm HamsterVisualFollower height profile.");
+        Debug.Log($"{LogPrefix} 4. Confirm visualLocalOffset.y=0.10 and speed-based visual height is enabled.");
+        Debug.Log($"{LogPrefix} 5. Press Play.");
+        Debug.Log($"{LogPrefix} 6. Idle: verify feet stay on ground and character does not float.");
+        Debug.Log($"{LogPrefix} 7. Move with W/A/S/D and verify walk height does not sink into ground.");
+        Debug.Log($"{LogPrefix} 8. Run Validate Current Test Scene.");
     }
 
     private struct AnimationClipCandidate
@@ -2250,6 +2482,891 @@ public static class HamsterFullRagdollTestSetupUtility
         LogVisualDiagnosticNextTest();
     }
 
+    private static bool ConfigurePhase2TailEarBoing(Scene scene)
+    {
+        Transform bodyTransform;
+        Rigidbody bodyRigidbody;
+        Transform visualRoot;
+        if (!TryGetJointFreeVisualRootContext(scene, out bodyTransform, out bodyRigidbody, out visualRoot))
+            return false;
+
+        Transform visualModelRoot = FindPhase2VisualModelRoot(visualRoot);
+        if (visualModelRoot == null)
+        {
+            Debug.LogWarning($"{LogPrefix} Visual model root not found under VisualPreviewRoot. Add visual hamster model first.");
+            return false;
+        }
+
+        Debug.Log($"{LogPrefix} Found Phase 2 visual model root: {GetHierarchyPath(visualModelRoot)}");
+
+        Phase2TailRootSelection tailSelection;
+        Transform tailRoot = null;
+        if (TrySelectPhase2TopmostTailRoot(visualRoot, out tailSelection))
+        {
+            tailRoot = tailSelection.Root;
+            LogPhase2TailRootSelection("Configure Phase 2 Tail/Ear Boing", tailSelection);
+        }
+        else
+        {
+            Debug.LogWarning($"{LogPrefix} Tail bone not found");
+        }
+
+        Transform earLRoot = FindPhase2BoneRoot(visualRoot, Phase2EarLBoneNameCandidates);
+        Transform earRRoot = FindPhase2BoneRoot(visualRoot, Phase2EarRBoneNameCandidates);
+
+        if (earLRoot == null)
+            Debug.LogWarning($"{LogPrefix} Ear_L bone not found");
+
+        if (earRRoot == null)
+            Debug.LogWarning($"{LogPrefix} Ear_R bone not found");
+
+        GameObject boingVisual = GetOrCreateDirectChild(visualRoot, Phase2BoingVisualName);
+        ResetPhase2BoingTransform(boingVisual.transform);
+        EditorUtility.SetDirty(boingVisual);
+        Debug.Log($"{LogPrefix} Created/Reused Boing_Visual");
+
+        int configuredCount = 0;
+        if (ConfigurePhase2BoingObject(boingVisual.transform, visualRoot, Phase2BoingTailName, tailRoot, Phase2TailMaxBendAngleCap, Phase2TailMaxCollisionRadius, "BK_Tail"))
+            configuredCount++;
+
+        if (ConfigurePhase2BoingObject(boingVisual.transform, visualRoot, Phase2BoingEarLName, earLRoot, Phase2EarMaxBendAngleCap, Phase2EarMaxCollisionRadius, "BK_Ear_L"))
+            configuredCount++;
+
+        if (ConfigurePhase2BoingObject(boingVisual.transform, visualRoot, Phase2BoingEarRName, earRRoot, Phase2EarMaxBendAngleCap, Phase2EarMaxCollisionRadius, "BK_Ear_R"))
+            configuredCount++;
+
+        if (configuredCount == 0)
+            Debug.LogWarning($"{LogPrefix} No Tail/Ear Boing root was assigned. Check visual model bone names.");
+
+        Debug.Log($"{LogPrefix} Boing collisions disabled");
+        Debug.Log($"{LogPrefix} BoingBones excluded from visual-only disable");
+        Debug.Log($"{LogPrefix} BoingManager is expected to auto-create at runtime if required.");
+        Debug.Log($"{LogPrefix} Configured Phase 2 Tail/Ear Boing");
+        return true;
+    }
+
+    private static bool ApplyPhase2TailSoftBoingPreset(Scene scene)
+    {
+        BoingKit.BoingBones tailBoingBones;
+        BoingKit.BoingBones.Chain tailChain;
+        if (!TryGetPhase2TailBoingBones(scene, out tailBoingBones, out tailChain))
+            return false;
+
+        Phase2TailBoingTuningSnapshot before = CapturePhase2TailBoingTuning(tailBoingBones, tailChain);
+        ApplyPhase2TailSoftBoingValues(tailBoingBones, tailChain);
+        Phase2TailBoingTuningSnapshot after = CapturePhase2TailBoingTuning(tailBoingBones, tailChain);
+
+        EditorUtility.SetDirty(tailBoingBones);
+        Debug.Log($"{LogPrefix} Applied Phase 2 Tail Soft Boing Preset");
+        LogPhase2TailBoingTuningChange(before, after);
+        Debug.Log($"{LogPrefix} BK_Ear_L and BK_Ear_R were not modified.");
+        return true;
+    }
+
+    private static bool RestorePhase2TailEarBoingDefault(Scene scene)
+    {
+        BoingKit.BoingBones tailBoingBones;
+        BoingKit.BoingBones.Chain tailChain;
+        if (!TryGetPhase2TailBoingBones(scene, out tailBoingBones, out tailChain))
+            return false;
+
+        Phase2TailBoingTuningSnapshot before = CapturePhase2TailBoingTuning(tailBoingBones, tailChain);
+        ApplyPhase2TailDefaultBoingValues(tailBoingBones, tailChain);
+        Phase2TailBoingTuningSnapshot after = CapturePhase2TailBoingTuning(tailBoingBones, tailChain);
+
+        EditorUtility.SetDirty(tailBoingBones);
+        Debug.Log($"{LogPrefix} Restored Phase 2 Tail Boing default values");
+        Debug.Log($"{LogPrefix} Restore menu only changes BK_Tail; BK_Ear_L and BK_Ear_R were not modified.");
+        LogPhase2TailBoingTuningChange(before, after);
+        return true;
+    }
+
+    private static bool ApplyPhase2TailFullChainSoftPreset(Scene scene)
+    {
+        Transform visualRoot;
+        BoingKit.BoingBones tailBoingBones;
+        BoingKit.BoingBones.Chain tailChain;
+        if (!TryGetPhase2TailBoingBones(scene, out tailBoingBones, out tailChain, out visualRoot))
+            return false;
+
+        Phase2TailRootSelection tailSelection;
+        if (!TrySelectPhase2TopmostTailRoot(visualRoot, out tailSelection))
+        {
+            Debug.LogWarning($"{LogPrefix} Tail bone not found. BK_Tail full-chain soft preset was not applied.");
+            return false;
+        }
+
+        Phase2TailBoingTuningSnapshot before = CapturePhase2TailBoingTuning(tailBoingBones, tailChain);
+        ApplyPhase2TailFullChainSoftBoingValues(tailBoingBones, tailChain, tailSelection.Root);
+        Phase2TailBoingTuningSnapshot after = CapturePhase2TailBoingTuning(tailBoingBones, tailChain);
+
+        EditorUtility.SetDirty(tailBoingBones);
+        Debug.Log($"{LogPrefix} Applied Phase 2 Tail Full-Chain Soft Preset");
+        LogPhase2TailRootSelection("Phase 2 Tail Full-Chain Soft Preset", tailSelection);
+        LogPhase2TailBoingTuningChange(before, after);
+        Debug.Log($"{LogPrefix} BK_Ear_L and BK_Ear_R were not modified.");
+        return true;
+    }
+
+    private static bool RestorePhase2TailSoftBoingDefault(Scene scene)
+    {
+        Transform visualRoot;
+        BoingKit.BoingBones tailBoingBones;
+        BoingKit.BoingBones.Chain tailChain;
+        if (!TryGetPhase2TailBoingBones(scene, out tailBoingBones, out tailChain, out visualRoot))
+            return false;
+
+        Phase2TailRootSelection tailSelection;
+        if (!TrySelectPhase2TopmostTailRoot(visualRoot, out tailSelection))
+        {
+            Debug.LogWarning($"{LogPrefix} Tail bone not found. BK_Tail soft default restore was not applied.");
+            return false;
+        }
+
+        Phase2TailBoingTuningSnapshot before = CapturePhase2TailBoingTuning(tailBoingBones, tailChain);
+        ApplyPhase2TailSoftBoingValues(tailBoingBones, tailChain, tailSelection.Root);
+        Phase2TailBoingTuningSnapshot after = CapturePhase2TailBoingTuning(tailBoingBones, tailChain);
+
+        EditorUtility.SetDirty(tailBoingBones);
+        Debug.Log($"{LogPrefix} Restored Phase 2 Tail Soft Boing default values");
+        LogPhase2TailRootSelection("Restore Phase 2 Tail Soft Boing Default", tailSelection);
+        LogPhase2TailBoingTuningChange(before, after);
+        Debug.Log($"{LogPrefix} Restore menu only changes BK_Tail; BK_Ear_L and BK_Ear_R were not modified.");
+        return true;
+    }
+
+    private static bool TryGetPhase2TailBoingBones(
+        Scene scene,
+        out BoingKit.BoingBones tailBoingBones,
+        out BoingKit.BoingBones.Chain tailChain)
+    {
+        Transform visualRoot;
+        return TryGetPhase2TailBoingBones(scene, out tailBoingBones, out tailChain, out visualRoot);
+    }
+
+    private static bool TryGetPhase2TailBoingBones(
+        Scene scene,
+        out BoingKit.BoingBones tailBoingBones,
+        out BoingKit.BoingBones.Chain tailChain,
+        out Transform visualRoot)
+    {
+        tailBoingBones = null;
+        tailChain = null;
+        visualRoot = null;
+
+        Transform bodyTransform;
+        Rigidbody bodyRigidbody;
+        if (!TryGetJointFreeVisualRootContext(scene, out bodyTransform, out bodyRigidbody, out visualRoot))
+            return false;
+
+        Transform boingVisual = FindDirectChild(visualRoot, Phase2BoingVisualName);
+        if (boingVisual == null)
+        {
+            Debug.LogWarning($"{LogPrefix} VisualPreviewRoot/Boing_Visual is missing. Run Configure Phase 2 Tail Ear Boing first.");
+            return false;
+        }
+
+        Transform tailTransform = FindDirectChild(boingVisual, Phase2BoingTailName);
+        if (tailTransform == null)
+        {
+            Debug.LogWarning($"{LogPrefix} BK_Tail not found under Boing_Visual.");
+            return false;
+        }
+
+        tailBoingBones = tailTransform.GetComponent<BoingKit.BoingBones>();
+        if (tailBoingBones == null)
+        {
+            Debug.LogWarning($"{LogPrefix} BK_Tail BoingBones is missing.");
+            return false;
+        }
+
+        tailChain = GetFirstPhase2BoingChain(tailBoingBones);
+        if (tailChain == null)
+        {
+            Debug.LogWarning($"{LogPrefix} BK_Tail BoingBones has no BoneChains.");
+            return false;
+        }
+
+        if (tailChain.Root == null)
+        {
+            Debug.LogWarning($"{LogPrefix} BK_Tail root missing. Run Configure Phase 2 Tail Ear Boing first.");
+            return false;
+        }
+
+        if (tailChain.Root != visualRoot && !IsChildOf(tailChain.Root, visualRoot))
+        {
+            Debug.LogWarning($"{LogPrefix} Root does not belong to VisualPreviewRoot: BK_Tail Root={GetHierarchyPath(tailChain.Root)}");
+            return false;
+        }
+
+        Debug.Log($"{LogPrefix} BK_Tail root path: {GetHierarchyPath(tailChain.Root)}");
+        return true;
+    }
+
+    private static void ApplyPhase2TailSoftBoingValues(BoingKit.BoingBones tailBoingBones, BoingKit.BoingBones.Chain tailChain)
+    {
+        ApplyPhase2TailSoftBoingValues(tailBoingBones, tailChain, null);
+    }
+
+    private static void ApplyPhase2TailSoftBoingValues(BoingKit.BoingBones tailBoingBones, BoingKit.BoingBones.Chain tailChain, Transform rootBone)
+    {
+        tailBoingBones.enabled = true;
+        tailBoingBones.UpdateMode = BoingKit.BoingManager.UpdateMode.LateUpdate;
+        if (rootBone != null)
+            tailChain.Root = rootBone;
+
+        tailChain.AnimationBlendCurveType = BoingKit.BoingBones.Chain.CurveType.RootOneTailZero;
+        tailChain.LengthStiffnessCurveType = BoingKit.BoingBones.Chain.CurveType.ConstantOne;
+        tailChain.PoseStiffnessCurveType = BoingKit.BoingBones.Chain.CurveType.ConstantOne;
+        tailChain.MaxBendAngleCap = Phase2TailSoftMaxBendAngleCap;
+        tailChain.BendAngleCapCurveType = BoingKit.BoingBones.Chain.CurveType.ConstantOne;
+        tailChain.MaxCollisionRadius = Phase2TailMaxCollisionRadius;
+        tailChain.CollisionRadiusCurveType = BoingKit.BoingBones.Chain.CurveType.ConstantOne;
+        ApplyPhase2TailSoftBoingParams(ref tailBoingBones.Params);
+        EnsurePhase2BoingCollisionDisabled(tailBoingBones, tailChain);
+        tailBoingBones.RescanBoneChains();
+        tailBoingBones.Reboot();
+    }
+
+    private static void ApplyPhase2TailFullChainSoftBoingValues(
+        BoingKit.BoingBones tailBoingBones,
+        BoingKit.BoingBones.Chain tailChain,
+        Transform rootBone)
+    {
+        tailBoingBones.enabled = true;
+        tailBoingBones.UpdateMode = BoingKit.BoingManager.UpdateMode.LateUpdate;
+        tailChain.Root = rootBone;
+        tailChain.AnimationBlendCurveType = BoingKit.BoingBones.Chain.CurveType.RootOneTailHalf;
+        tailChain.LengthStiffnessCurveType = BoingKit.BoingBones.Chain.CurveType.ConstantOne;
+        tailChain.PoseStiffnessCurveType = BoingKit.BoingBones.Chain.CurveType.RootOneTailHalf;
+        tailChain.MaxBendAngleCap = Phase2TailFullChainSoftMaxBendAngleCap;
+        tailChain.BendAngleCapCurveType = BoingKit.BoingBones.Chain.CurveType.ConstantOne;
+        tailChain.MaxCollisionRadius = Phase2TailMaxCollisionRadius;
+        tailChain.CollisionRadiusCurveType = BoingKit.BoingBones.Chain.CurveType.ConstantOne;
+        ApplyPhase2TailFullChainSoftBoingParams(ref tailBoingBones.Params);
+        EnsurePhase2BoingCollisionDisabled(tailBoingBones, tailChain);
+        tailBoingBones.RescanBoneChains();
+        tailBoingBones.Reboot();
+    }
+
+    private static void ApplyPhase2TailDefaultBoingValues(BoingKit.BoingBones tailBoingBones, BoingKit.BoingBones.Chain tailChain)
+    {
+        tailBoingBones.enabled = true;
+        tailBoingBones.UpdateMode = BoingKit.BoingManager.UpdateMode.LateUpdate;
+        tailChain.MaxBendAngleCap = Phase2TailMaxBendAngleCap;
+        tailChain.MaxCollisionRadius = Phase2TailMaxCollisionRadius;
+        ApplyPhase2BoingParams(ref tailBoingBones.Params, Phase2TailMaxBendAngleCap);
+        EnsurePhase2BoingCollisionDisabled(tailBoingBones, tailChain);
+        tailBoingBones.RescanBoneChains();
+        tailBoingBones.Reboot();
+    }
+
+    private static void ApplyPhase2TailSoftBoingParams(ref BoingKit.BoingWork.Params parameters)
+    {
+        parameters.Bits = new BoingKit.Bits32(0);
+        parameters.TwoDPlane = BoingKit.TwoDPlaneEnum.XZ;
+        parameters.PositionParameterMode = BoingKit.ParameterMode.OscillationByHalfLife;
+        parameters.RotationParameterMode = BoingKit.ParameterMode.OscillationByHalfLife;
+        parameters.ScaleParameterMode = BoingKit.ParameterMode.OscillationByHalfLife;
+        parameters.PositionExponentialHalfLife = 0.02f;
+        parameters.PositionOscillationHalfLife = 0.12f;
+        parameters.PositionOscillationFrequency = 2.6f;
+        parameters.PositionOscillationDampingRatio = 0.62f;
+        parameters.MoveReactionMultiplier = 0.04f;
+        parameters.LinearImpulseMultiplier = 0.024f;
+        parameters.RotationExponentialHalfLife = 0.02f;
+        parameters.RotationOscillationHalfLife = 0.16f;
+        parameters.RotationOscillationFrequency = 3.0f;
+        parameters.RotationOscillationDampingRatio = 0.62f;
+        parameters.RotationReactionMultiplier = 0.032f;
+        parameters.AngularImpulseMultiplier = 0.008f;
+        parameters.ScaleExponentialHalfLife = 0.02f;
+        parameters.ScaleOscillationHalfLife = 0.10f;
+        parameters.ScaleOscillationFrequency = 5f;
+        parameters.ScaleOscillationDampingRatio = 0.5f;
+        parameters.RotationReactionUp = Vector3.zero;
+    }
+
+    private static void ApplyPhase2TailFullChainSoftBoingParams(ref BoingKit.BoingWork.Params parameters)
+    {
+        parameters.Bits = new BoingKit.Bits32(0);
+        parameters.TwoDPlane = BoingKit.TwoDPlaneEnum.XZ;
+        parameters.PositionParameterMode = BoingKit.ParameterMode.OscillationByHalfLife;
+        parameters.RotationParameterMode = BoingKit.ParameterMode.OscillationByHalfLife;
+        parameters.ScaleParameterMode = BoingKit.ParameterMode.OscillationByHalfLife;
+        parameters.PositionExponentialHalfLife = 0.02f;
+        parameters.PositionOscillationHalfLife = 0.16f;
+        parameters.PositionOscillationFrequency = 2.1f;
+        parameters.PositionOscillationDampingRatio = 0.70f;
+        parameters.MoveReactionMultiplier = 0.025f;
+        parameters.LinearImpulseMultiplier = 0.015f;
+        parameters.RotationExponentialHalfLife = 0.02f;
+        parameters.RotationOscillationHalfLife = 0.22f;
+        parameters.RotationOscillationFrequency = 2.4f;
+        parameters.RotationOscillationDampingRatio = 0.70f;
+        parameters.RotationReactionMultiplier = 0.022f;
+        parameters.AngularImpulseMultiplier = 0.005f;
+        parameters.ScaleExponentialHalfLife = 0.02f;
+        parameters.ScaleOscillationHalfLife = 0.10f;
+        parameters.ScaleOscillationFrequency = 5f;
+        parameters.ScaleOscillationDampingRatio = 0.5f;
+        parameters.RotationReactionUp = Vector3.zero;
+    }
+
+    private static void EnsurePhase2BoingCollisionDisabled(BoingKit.BoingBones boingBones, BoingKit.BoingBones.Chain chain)
+    {
+        chain.EnableBoingKitCollision = false;
+        chain.EnableUnityCollision = false;
+        chain.EnableInterChainCollision = false;
+        boingBones.BoingColliders = new BoingKit.BoingBoneCollider[0];
+        boingBones.UnityColliders = new Collider[0];
+    }
+
+    private struct Phase2TailBoingTuningSnapshot
+    {
+        public string RootPath;
+        public string RootName;
+        public int TailDescendantCandidateCount;
+        public BoingKit.BoingBones.Chain.CurveType AnimationBlendCurveType;
+        public BoingKit.BoingBones.Chain.CurveType LengthStiffnessCurveType;
+        public BoingKit.BoingBones.Chain.CurveType PoseStiffnessCurveType;
+        public BoingKit.BoingBones.Chain.CurveType BendAngleCapCurveType;
+        public float MaxBendAngleCap;
+        public float MaxCollisionRadius;
+        public float PositionOscillationHalfLife;
+        public float PositionOscillationFrequency;
+        public float PositionOscillationDampingRatio;
+        public float MoveReactionMultiplier;
+        public float LinearImpulseMultiplier;
+        public float RotationOscillationHalfLife;
+        public float RotationOscillationFrequency;
+        public float RotationOscillationDampingRatio;
+        public float RotationReactionMultiplier;
+        public float AngularImpulseMultiplier;
+        public bool EnableBoingKitCollision;
+        public bool EnableUnityCollision;
+        public bool EnableInterChainCollision;
+        public int BoingColliderCount;
+        public int UnityColliderCount;
+    }
+
+    private static Phase2TailBoingTuningSnapshot CapturePhase2TailBoingTuning(
+        BoingKit.BoingBones boingBones,
+        BoingKit.BoingBones.Chain chain)
+    {
+        BoingKit.BoingWork.Params parameters = boingBones.Params;
+        Phase2TailBoingTuningSnapshot snapshot = new Phase2TailBoingTuningSnapshot();
+        snapshot.RootPath = chain.Root != null ? GetHierarchyPath(chain.Root) : "<missing>";
+        snapshot.RootName = chain.Root != null ? chain.Root.name : "<missing>";
+        snapshot.TailDescendantCandidateCount = chain.Root != null ? CountPhase2TailCandidateDescendants(chain.Root) : 0;
+        snapshot.AnimationBlendCurveType = chain.AnimationBlendCurveType;
+        snapshot.LengthStiffnessCurveType = chain.LengthStiffnessCurveType;
+        snapshot.PoseStiffnessCurveType = chain.PoseStiffnessCurveType;
+        snapshot.BendAngleCapCurveType = chain.BendAngleCapCurveType;
+        snapshot.MaxBendAngleCap = chain.MaxBendAngleCap;
+        snapshot.MaxCollisionRadius = chain.MaxCollisionRadius;
+        snapshot.PositionOscillationHalfLife = parameters.PositionOscillationHalfLife;
+        snapshot.PositionOscillationFrequency = parameters.PositionOscillationFrequency;
+        snapshot.PositionOscillationDampingRatio = parameters.PositionOscillationDampingRatio;
+        snapshot.MoveReactionMultiplier = parameters.MoveReactionMultiplier;
+        snapshot.LinearImpulseMultiplier = parameters.LinearImpulseMultiplier;
+        snapshot.RotationOscillationHalfLife = parameters.RotationOscillationHalfLife;
+        snapshot.RotationOscillationFrequency = parameters.RotationOscillationFrequency;
+        snapshot.RotationOscillationDampingRatio = parameters.RotationOscillationDampingRatio;
+        snapshot.RotationReactionMultiplier = parameters.RotationReactionMultiplier;
+        snapshot.AngularImpulseMultiplier = parameters.AngularImpulseMultiplier;
+        snapshot.EnableBoingKitCollision = chain.EnableBoingKitCollision;
+        snapshot.EnableUnityCollision = chain.EnableUnityCollision;
+        snapshot.EnableInterChainCollision = chain.EnableInterChainCollision;
+        snapshot.BoingColliderCount = boingBones.BoingColliders != null ? boingBones.BoingColliders.Length : 0;
+        snapshot.UnityColliderCount = boingBones.UnityColliders != null ? boingBones.UnityColliders.Length : 0;
+        return snapshot;
+    }
+
+    private static void LogPhase2TailBoingTuningChange(
+        Phase2TailBoingTuningSnapshot before,
+        Phase2TailBoingTuningSnapshot after)
+    {
+        Debug.Log($"{LogPrefix} BK_Tail root path: {after.RootPath}");
+        Debug.Log($"{LogPrefix} BK_Tail selected root name: {after.RootName}");
+        Debug.Log($"{LogPrefix} BK_Tail root tail candidate descendant count: {after.TailDescendantCandidateCount}");
+        Debug.Log($"{LogPrefix} BK_Tail AnimationBlend before/after: {before.AnimationBlendCurveType} -> {after.AnimationBlendCurveType}");
+        Debug.Log($"{LogPrefix} BK_Tail LengthStiffness before/after: {before.LengthStiffnessCurveType} -> {after.LengthStiffnessCurveType}");
+        Debug.Log($"{LogPrefix} BK_Tail PoseStiffness before/after: {before.PoseStiffnessCurveType} -> {after.PoseStiffnessCurveType}");
+        Debug.Log($"{LogPrefix} BK_Tail BendAngleCapCurve before/after: {before.BendAngleCapCurveType} -> {after.BendAngleCapCurveType}");
+        Debug.Log($"{LogPrefix} BK_Tail MaxBendAngleCap before/after: {before.MaxBendAngleCap:F3} -> {after.MaxBendAngleCap:F3}");
+        Debug.Log($"{LogPrefix} BK_Tail MaxCollisionRadius before/after: {before.MaxCollisionRadius:F3} -> {after.MaxCollisionRadius:F3}");
+        Debug.Log($"{LogPrefix} BK_Tail PositionOscillationHalfLife before/after: {before.PositionOscillationHalfLife:F3} -> {after.PositionOscillationHalfLife:F3}");
+        Debug.Log($"{LogPrefix} BK_Tail PositionOscillationFrequency before/after: {before.PositionOscillationFrequency:F3} -> {after.PositionOscillationFrequency:F3}");
+        Debug.Log($"{LogPrefix} BK_Tail PositionOscillationDampingRatio before/after: {before.PositionOscillationDampingRatio:F3} -> {after.PositionOscillationDampingRatio:F3}");
+        Debug.Log($"{LogPrefix} BK_Tail MoveReactionMultiplier before/after: {before.MoveReactionMultiplier:F3} -> {after.MoveReactionMultiplier:F3}");
+        Debug.Log($"{LogPrefix} BK_Tail LinearImpulseMultiplier before/after: {before.LinearImpulseMultiplier:F3} -> {after.LinearImpulseMultiplier:F3}");
+        Debug.Log($"{LogPrefix} BK_Tail RotationOscillationHalfLife before/after: {before.RotationOscillationHalfLife:F3} -> {after.RotationOscillationHalfLife:F3}");
+        Debug.Log($"{LogPrefix} BK_Tail RotationOscillationFrequency before/after: {before.RotationOscillationFrequency:F3} -> {after.RotationOscillationFrequency:F3}");
+        Debug.Log($"{LogPrefix} BK_Tail RotationOscillationDampingRatio before/after: {before.RotationOscillationDampingRatio:F3} -> {after.RotationOscillationDampingRatio:F3}");
+        Debug.Log($"{LogPrefix} BK_Tail RotationReactionMultiplier before/after: {before.RotationReactionMultiplier:F3} -> {after.RotationReactionMultiplier:F3}");
+        Debug.Log($"{LogPrefix} BK_Tail AngularImpulseMultiplier before/after: {before.AngularImpulseMultiplier:F3} -> {after.AngularImpulseMultiplier:F3}");
+        Debug.Log($"{LogPrefix} BK_Tail collision off: Boing={after.EnableBoingKitCollision == false}, Unity={after.EnableUnityCollision == false}, InterChain={after.EnableInterChainCollision == false}, BoingColliders={after.BoingColliderCount}, UnityColliders={after.UnityColliderCount}");
+    }
+
+    private static void LogPhase2TailBoingTuningSnapshot(Phase2TailBoingTuningSnapshot snapshot)
+    {
+        Debug.Log($"{LogPrefix} BK_Tail tuning root={snapshot.RootPath}");
+        Debug.Log($"{LogPrefix} BK_Tail tuning selectedRootName={snapshot.RootName} tailDescendantCandidateCount={snapshot.TailDescendantCandidateCount}");
+        Debug.Log($"{LogPrefix} BK_Tail tuning AnimationBlend={snapshot.AnimationBlendCurveType} LengthStiffness={snapshot.LengthStiffnessCurveType} PoseStiffness={snapshot.PoseStiffnessCurveType} BendAngleCapCurve={snapshot.BendAngleCapCurveType}");
+        Debug.Log($"{LogPrefix} BK_Tail tuning MaxBendAngleCap={snapshot.MaxBendAngleCap:F3} MaxCollisionRadius={snapshot.MaxCollisionRadius:F3}");
+        Debug.Log($"{LogPrefix} BK_Tail tuning PositionHalfLife={snapshot.PositionOscillationHalfLife:F3} PositionFrequency={snapshot.PositionOscillationFrequency:F3} PositionDamping={snapshot.PositionOscillationDampingRatio:F3}");
+        Debug.Log($"{LogPrefix} BK_Tail tuning MoveReaction={snapshot.MoveReactionMultiplier:F3} LinearImpulse={snapshot.LinearImpulseMultiplier:F3}");
+        Debug.Log($"{LogPrefix} BK_Tail tuning RotationHalfLife={snapshot.RotationOscillationHalfLife:F3} RotationFrequency={snapshot.RotationOscillationFrequency:F3} RotationDamping={snapshot.RotationOscillationDampingRatio:F3}");
+        Debug.Log($"{LogPrefix} BK_Tail tuning RotationReaction={snapshot.RotationReactionMultiplier:F3} AngularImpulse={snapshot.AngularImpulseMultiplier:F3}");
+        Debug.Log($"{LogPrefix} BK_Tail collision off: Boing={snapshot.EnableBoingKitCollision == false}, Unity={snapshot.EnableUnityCollision == false}, InterChain={snapshot.EnableInterChainCollision == false}, BoingColliders={snapshot.BoingColliderCount}, UnityColliders={snapshot.UnityColliderCount}");
+    }
+
+    private static bool TryGetJointFreeVisualRootContext(
+        Scene scene,
+        out Transform bodyTransform,
+        out Rigidbody bodyRigidbody,
+        out Transform visualRoot)
+    {
+        bodyTransform = null;
+        bodyRigidbody = null;
+        visualRoot = null;
+
+        GameObject shellRoot = FindGameObjectByName(scene, JointFreeShellRootName);
+        if (shellRoot == null)
+        {
+            Debug.LogWarning($"{LogPrefix} Hamster_JointFreeMotorShell_Test not found. Run Create Phase 1 Joint-Free Motor Shell first.");
+            return false;
+        }
+
+        bodyTransform = FindDirectChild(shellRoot.transform, JointFreeShellBodyName);
+        if (bodyTransform == null)
+        {
+            Debug.LogError($"{LogPrefix} {JointFreeShellBodyName} is missing under {JointFreeShellRootName}.");
+            return false;
+        }
+
+        bodyRigidbody = bodyTransform.GetComponent<Rigidbody>();
+        if (bodyRigidbody == null)
+        {
+            Debug.LogError($"{LogPrefix} MotorShellBody Rigidbody is missing.");
+            return false;
+        }
+
+        visualRoot = FindDirectChild(bodyTransform, JointFreeShellVisualRootName)
+            ?? FindDirectChild(shellRoot.transform, JointFreeShellVisualRootName);
+        if (visualRoot == null)
+        {
+            Debug.LogWarning($"{LogPrefix} VisualPreviewRoot not found. Run Configure Visual Follower For Joint-Free Shell first.");
+            return false;
+        }
+
+        return true;
+    }
+
+    private static Transform FindPhase2VisualModelRoot(Transform visualRoot)
+    {
+        Transform exactSugar = FindDescendantByExactName(visualRoot, "슈가");
+        if (exactSugar != null)
+            return exactSugar;
+
+        Animator animator = visualRoot.GetComponentInChildren<Animator>(true);
+        if (animator != null)
+            return animator.transform;
+
+        SkinnedMeshRenderer skinnedRenderer = visualRoot.GetComponentInChildren<SkinnedMeshRenderer>(true);
+        if (skinnedRenderer != null)
+            return skinnedRenderer.transform;
+
+        Renderer renderer = visualRoot.GetComponentInChildren<Renderer>(true);
+        return renderer != null ? renderer.transform : null;
+    }
+
+    private struct Phase2TailRootSelection
+    {
+        public Transform Root;
+        public Transform SearchRoot;
+        public int CandidateCount;
+        public int DescendantTailCandidateCount;
+    }
+
+    private static bool TrySelectPhase2TopmostTailRoot(Transform visualRoot, out Phase2TailRootSelection selection)
+    {
+        selection = new Phase2TailRootSelection();
+        if (visualRoot == null)
+            return false;
+
+        Transform searchRoot = FindPhase2VisualModelRoot(visualRoot);
+        if (searchRoot == null)
+        {
+            Debug.LogWarning($"{LogPrefix} Visual model root not found under VisualPreviewRoot. Cannot select topmost tail bone.");
+            return false;
+        }
+
+        Transform[] transforms = searchRoot.GetComponentsInChildren<Transform>(true);
+        Transform bestRoot = null;
+        int bestDepth = int.MaxValue;
+        int candidateCount = 0;
+
+        for (int i = 0; i < transforms.Length; i++)
+        {
+            Transform candidate = transforms[i];
+            if (candidate == null || !IsPhase2TailBoneName(candidate.name))
+                continue;
+
+            candidateCount++;
+            int depth = GetTransformDepthRelativeTo(searchRoot, candidate);
+            if (depth < bestDepth)
+            {
+                bestRoot = candidate;
+                bestDepth = depth;
+            }
+        }
+
+        if (bestRoot == null)
+        {
+            Debug.LogWarning($"{LogPrefix} Tail bone not found under visual model root: {GetHierarchyPath(searchRoot)}");
+            return false;
+        }
+
+        selection.Root = bestRoot;
+        selection.SearchRoot = searchRoot;
+        selection.CandidateCount = candidateCount;
+        selection.DescendantTailCandidateCount = CountPhase2TailCandidateDescendants(bestRoot);
+        return true;
+    }
+
+    private static bool IsPhase2TailBoneName(string value)
+    {
+        string normalizedName = NormalizeBoneSearchName(value);
+        if (string.IsNullOrEmpty(normalizedName))
+            return false;
+
+        for (int i = 0; i < Phase2TailBoneNameCandidates.Length; i++)
+        {
+            string normalizedCandidate = NormalizeBoneSearchName(Phase2TailBoneNameCandidates[i]);
+            if (string.Equals(normalizedName, normalizedCandidate, StringComparison.Ordinal)
+                || normalizedName.StartsWith(normalizedCandidate, StringComparison.Ordinal))
+            {
+                return true;
+            }
+        }
+
+        return normalizedName.Contains("꼬리");
+    }
+
+    private static int CountPhase2TailCandidateDescendants(Transform root)
+    {
+        if (root == null)
+            return 0;
+
+        int count = 0;
+        Transform[] transforms = root.GetComponentsInChildren<Transform>(true);
+        for (int i = 0; i < transforms.Length; i++)
+        {
+            Transform candidate = transforms[i];
+            if (candidate != null && IsPhase2TailBoneName(candidate.name))
+                count++;
+        }
+
+        return count;
+    }
+
+    private static int CountPhase2TailCandidates(Transform root)
+    {
+        if (root == null)
+            return 0;
+
+        int count = 0;
+        Transform[] transforms = root.GetComponentsInChildren<Transform>(true);
+        for (int i = 0; i < transforms.Length; i++)
+        {
+            Transform candidate = transforms[i];
+            if (candidate != null && IsPhase2TailBoneName(candidate.name))
+                count++;
+        }
+
+        return count;
+    }
+
+    private static int GetTransformDepthRelativeTo(Transform root, Transform target)
+    {
+        if (root == null || target == null)
+            return int.MaxValue;
+
+        int depth = 0;
+        Transform cursor = target;
+        while (cursor != null && cursor != root)
+        {
+            depth++;
+            cursor = cursor.parent;
+        }
+
+        return cursor == root ? depth : int.MaxValue;
+    }
+
+    private static void LogPhase2TailRootSelection(string context, Phase2TailRootSelection selection)
+    {
+        string searchRootPath = selection.SearchRoot != null ? GetHierarchyPath(selection.SearchRoot) : "<missing>";
+        string rootPath = selection.Root != null ? GetHierarchyPath(selection.Root) : "<missing>";
+        string rootName = selection.Root != null ? selection.Root.name : "<missing>";
+        Debug.Log($"{LogPrefix} {context}: tail search root={searchRootPath}");
+        Debug.Log($"{LogPrefix} {context}: selected BK_Tail root={rootPath}");
+        Debug.Log($"{LogPrefix} {context}: selected BK_Tail root name={rootName}");
+        Debug.Log($"{LogPrefix} {context}: tail candidate count={selection.CandidateCount}");
+        Debug.Log($"{LogPrefix} {context}: selected root descendant tail candidate count={selection.DescendantTailCandidateCount}");
+        if (selection.DescendantTailCandidateCount < 2)
+            Debug.LogWarning($"{LogPrefix} BK_Tail selected root has fewer than 2 tail candidate bones. Full-chain soft preset may have limited effect.");
+    }
+
+    private static Transform FindPhase2BoneRoot(Transform visualRoot, string[] candidates)
+    {
+        Transform[] transforms = visualRoot.GetComponentsInChildren<Transform>(true);
+
+        for (int candidateIndex = 0; candidateIndex < candidates.Length; candidateIndex++)
+        {
+            string candidate = candidates[candidateIndex];
+            for (int transformIndex = 0; transformIndex < transforms.Length; transformIndex++)
+            {
+                Transform candidateTransform = transforms[transformIndex];
+                if (candidateTransform != null && string.Equals(candidateTransform.name, candidate, StringComparison.OrdinalIgnoreCase))
+                    return candidateTransform;
+            }
+        }
+
+        for (int candidateIndex = 0; candidateIndex < candidates.Length; candidateIndex++)
+        {
+            string normalizedCandidate = NormalizeBoneSearchName(candidates[candidateIndex]);
+            for (int transformIndex = 0; transformIndex < transforms.Length; transformIndex++)
+            {
+                Transform candidateTransform = transforms[transformIndex];
+                if (candidateTransform == null)
+                    continue;
+
+                string normalizedName = NormalizeBoneSearchName(candidateTransform.name);
+                if (string.Equals(normalizedName, normalizedCandidate, StringComparison.Ordinal)
+                    || normalizedName.StartsWith(normalizedCandidate, StringComparison.Ordinal))
+                {
+                    return candidateTransform;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    private static Transform FindDescendantByExactName(Transform root, string exactName)
+    {
+        Transform[] transforms = root.GetComponentsInChildren<Transform>(true);
+        for (int i = 0; i < transforms.Length; i++)
+        {
+            Transform candidate = transforms[i];
+            if (candidate != null && string.Equals(candidate.name, exactName, StringComparison.Ordinal))
+                return candidate;
+        }
+
+        return null;
+    }
+
+    private static string NormalizeBoneSearchName(string value)
+    {
+        if (string.IsNullOrEmpty(value))
+            return string.Empty;
+
+        return value
+            .Replace("_", string.Empty)
+            .Replace(".", string.Empty)
+            .Replace("-", string.Empty)
+            .Replace(" ", string.Empty)
+            .ToLowerInvariant();
+    }
+
+    private static bool ConfigurePhase2BoingObject(
+        Transform boingVisual,
+        Transform visualRoot,
+        string objectName,
+        Transform rootBone,
+        float maxBendAngleCap,
+        float maxCollisionRadius,
+        string logName)
+    {
+        GameObject boingObject = GetOrCreateDirectChild(boingVisual, objectName);
+        ResetPhase2BoingTransform(boingObject.transform);
+        EditorUtility.SetDirty(boingObject);
+
+        if (rootBone == null)
+        {
+            DisableExistingPhase2BoingBones(boingObject, logName);
+            return false;
+        }
+
+        if (rootBone != visualRoot && !IsChildOf(rootBone, visualRoot))
+        {
+            Debug.LogWarning($"{LogPrefix} Root does not belong to VisualPreviewRoot: {logName} Root={GetHierarchyPath(rootBone)}");
+            DisableExistingPhase2BoingBones(boingObject, logName);
+            return false;
+        }
+
+        BoingKit.BoingBones boingBones = boingObject.GetComponent<BoingKit.BoingBones>();
+        if (boingBones == null)
+            boingBones = boingObject.AddComponent<BoingKit.BoingBones>();
+
+        ApplyPhase2BoingBonesPreset(boingBones, rootBone, maxBendAngleCap, maxCollisionRadius);
+        EditorUtility.SetDirty(boingBones);
+
+        Debug.Log($"{LogPrefix} {logName} root assigned: {GetHierarchyPath(rootBone)}");
+        return true;
+    }
+
+    private static void DisableExistingPhase2BoingBones(GameObject boingObject, string logName)
+    {
+        BoingKit.BoingBones boingBones = boingObject.GetComponent<BoingKit.BoingBones>();
+        if (boingBones == null)
+            return;
+
+        boingBones.enabled = false;
+        EditorUtility.SetDirty(boingBones);
+        Debug.LogWarning($"{LogPrefix} {logName} BoingBones disabled because root bone is missing.");
+    }
+
+    private static void ApplyPhase2BoingBonesPreset(
+        BoingKit.BoingBones boingBones,
+        Transform rootBone,
+        float maxBendAngleCap,
+        float maxCollisionRadius)
+    {
+        boingBones.enabled = true;
+        boingBones.UpdateMode = BoingKit.BoingManager.UpdateMode.LateUpdate;
+        boingBones.TwoDDistanceCheck = false;
+        boingBones.TwoDPositionInfluence = false;
+        boingBones.TwoDRotationInfluence = false;
+        boingBones.EnablePositionEffect = true;
+        boingBones.EnableRotationEffect = true;
+        boingBones.EnableScaleEffect = false;
+        boingBones.GlobalReactionUpVector = false;
+        boingBones.TranslationLockSpace = BoingKit.BoingManager.TransformLockSpace.Global;
+        boingBones.LockTranslationX = false;
+        boingBones.LockTranslationY = false;
+        boingBones.LockTranslationZ = false;
+        boingBones.RotationLockSpace = BoingKit.BoingManager.TransformLockSpace.Global;
+        boingBones.LockRotationX = false;
+        boingBones.LockRotationY = false;
+        boingBones.LockRotationZ = false;
+        boingBones.SharedParams = null;
+        ApplyPhase2BoingParams(ref boingBones.Params, maxBendAngleCap);
+
+        BoingKit.BoingBones.Chain chain = new BoingKit.BoingBones.Chain();
+        chain.Root = rootBone;
+        chain.Exclusion = new Transform[0];
+        chain.EffectorReaction = true;
+        chain.LooseRoot = false;
+        chain.ParamsOverride = null;
+        chain.AnimationBlendCurveType = BoingKit.BoingBones.Chain.CurveType.RootOneTailZero;
+        chain.LengthStiffnessCurveType = BoingKit.BoingBones.Chain.CurveType.ConstantOne;
+        chain.PoseStiffnessCurveType = BoingKit.BoingBones.Chain.CurveType.ConstantOne;
+        chain.MaxBendAngleCap = maxBendAngleCap;
+        chain.BendAngleCapCurveType = BoingKit.BoingBones.Chain.CurveType.ConstantOne;
+        chain.MaxCollisionRadius = maxCollisionRadius;
+        chain.CollisionRadiusCurveType = BoingKit.BoingBones.Chain.CurveType.ConstantOne;
+        chain.EnableBoingKitCollision = false;
+        chain.EnableUnityCollision = false;
+        chain.EnableInterChainCollision = false;
+        chain.Gravity = Vector3.zero;
+        chain.SquashAndStretchCurveType = BoingKit.BoingBones.Chain.CurveType.ConstantZero;
+        chain.MaxSquash = 1f;
+        chain.MaxStretch = 1.01f;
+
+        boingBones.BoneChains = new[] { chain };
+        boingBones.TwistPropagation = true;
+        boingBones.MaxCollisionResolutionSpeed = 3f;
+        boingBones.BoingColliders = new BoingKit.BoingBoneCollider[0];
+        boingBones.UnityColliders = new Collider[0];
+        boingBones.DebugDrawRawBones = false;
+        boingBones.DebugDrawTargetBones = false;
+        boingBones.DebugDrawBoingBones = false;
+        boingBones.DebugDrawFinalBones = false;
+        boingBones.DebugDrawColliders = false;
+        boingBones.DebugDrawChainBounds = false;
+        boingBones.DebugDrawBoneNames = false;
+        boingBones.DebugDrawLengthFromRoot = false;
+
+        boingBones.RescanBoneChains();
+        boingBones.Reboot();
+    }
+
+    private static void ApplyPhase2BoingParams(ref BoingKit.BoingWork.Params parameters, float maxBendAngleCap)
+    {
+        bool earPreset = Mathf.Approximately(maxBendAngleCap, Phase2EarMaxBendAngleCap);
+        parameters.Bits = new BoingKit.Bits32(0);
+        parameters.TwoDPlane = BoingKit.TwoDPlaneEnum.XZ;
+        parameters.PositionParameterMode = BoingKit.ParameterMode.OscillationByHalfLife;
+        parameters.RotationParameterMode = BoingKit.ParameterMode.OscillationByHalfLife;
+        parameters.ScaleParameterMode = BoingKit.ParameterMode.OscillationByHalfLife;
+        parameters.PositionExponentialHalfLife = 0.02f;
+        parameters.PositionOscillationHalfLife = earPreset ? 0.08f : 0.10f;
+        parameters.PositionOscillationFrequency = earPreset ? 4f : 3f;
+        parameters.PositionOscillationDampingRatio = 0.5f;
+        parameters.MoveReactionMultiplier = earPreset ? 0.08f : 0.05f;
+        parameters.LinearImpulseMultiplier = earPreset ? 0.02f : 0.03f;
+        parameters.RotationExponentialHalfLife = 0.02f;
+        parameters.RotationOscillationHalfLife = earPreset ? 0.08f : 0.14f;
+        parameters.RotationOscillationFrequency = earPreset ? 4f : 3.5f;
+        parameters.RotationOscillationDampingRatio = 0.5f;
+        parameters.RotationReactionMultiplier = 0.04f;
+        parameters.AngularImpulseMultiplier = 0.01f;
+        parameters.ScaleExponentialHalfLife = 0.02f;
+        parameters.ScaleOscillationHalfLife = 0.10f;
+        parameters.ScaleOscillationFrequency = 5f;
+        parameters.ScaleOscillationDampingRatio = 0.5f;
+        parameters.RotationReactionUp = Vector3.zero;
+    }
+
+    private static void ResetPhase2BoingTransform(Transform target)
+    {
+        target.localPosition = Vector3.zero;
+        target.localRotation = Quaternion.identity;
+        target.localScale = Vector3.one;
+    }
+
+    private static void LogPhase2TailEarBoingNextTest()
+    {
+        Debug.Log($"{LogPrefix} Next test:");
+        Debug.Log($"{LogPrefix} 1. Keep Hamster_FullRagdoll_Test inactive.");
+        Debug.Log($"{LogPrefix} 2. Keep Hamster_JointFreeMotorShell_Test active.");
+        Debug.Log($"{LogPrefix} 3. Press Play.");
+        Debug.Log($"{LogPrefix} 4. Verify tail and ears move in idle/walk/turn.");
+        Debug.Log($"{LogPrefix} 5. Verify MotorShellBody remains stable.");
+        Debug.Log($"{LogPrefix} 6. Verify no tail collision or physics push occurs.");
+        Debug.Log($"{LogPrefix} 7. If tail/ears do not move, check root bone reference and BoingManager runtime creation.");
+        Debug.Log($"{LogPrefix} 8. If motion is too strong, reduce MaxBendAngleCap or damping in test scene only.");
+    }
+
+    private static void LogPhase2TailSoftBoingNextTest()
+    {
+        Debug.Log($"{LogPrefix} Next test:");
+        Debug.Log($"{LogPrefix} 1. Keep Hamster_FullRagdoll_Test inactive.");
+        Debug.Log($"{LogPrefix} 2. Keep Hamster_JointFreeMotorShell_Test active.");
+        Debug.Log($"{LogPrefix} 3. Press Play.");
+        Debug.Log($"{LogPrefix} 4. Verify BK_Tail is slightly softer and slower than the default Phase 2 preset.");
+        Debug.Log($"{LogPrefix} 5. Verify BK_Ear_L and BK_Ear_R still use the previous successful values.");
+        Debug.Log($"{LogPrefix} 6. Verify no tail collision or physics push occurs.");
+        Debug.Log($"{LogPrefix} 7. If tail feels too weak, raise BK_Tail MaxBendAngleCap in the test scene only.");
+        Debug.Log($"{LogPrefix} 8. Run Validate Current Test Scene and confirm BK_Tail collision remains off.");
+    }
+
+    private static void LogPhase2TailFullChainSoftBoingNextTest()
+    {
+        Debug.Log($"{LogPrefix} Next test:");
+        Debug.Log($"{LogPrefix} 1. Keep Hamster_FullRagdoll_Test inactive.");
+        Debug.Log($"{LogPrefix} 2. Keep Hamster_JointFreeMotorShell_Test active.");
+        Debug.Log($"{LogPrefix} 3. Press Play.");
+        Debug.Log($"{LogPrefix} 4. Verify BK_Tail follows from the topmost tail root, not only the tail tip.");
+        Debug.Log($"{LogPrefix} 5. Verify tail motion is weaker, slower, and still alive.");
+        Debug.Log($"{LogPrefix} 6. Verify BK_Ear_L and BK_Ear_R still use the previous successful values.");
+        Debug.Log($"{LogPrefix} 7. Verify no tail collision or physics push occurs.");
+        Debug.Log($"{LogPrefix} 8. Run Validate Current Test Scene and check BK_Tail root/count/tuning logs.");
+    }
+
     private static void ConfigureVisualFollowerSerializedFields(
         HamsterVisualFollower visualFollower,
         Rigidbody targetBody,
@@ -2371,6 +3488,9 @@ public static class HamsterFullRagdollTestSetupUtility
         {
             Component component = components[i];
             if (component == null)
+                continue;
+
+            if (IsBoingKitComponent(component))
                 continue;
 
             string typeName = component.GetType().Name;
@@ -2829,6 +3949,7 @@ public static class HamsterFullRagdollTestSetupUtility
 
         ValidateVisualFollowerOffsetAndDiagnosticState(visualFollower);
         ValidateVisualAnimatorSetup(visualRoot, visualFollower);
+        ValidatePhase2TailEarBoing(visualRoot);
 
         if (existingSkinnedInstance == null)
             Debug.LogWarning($"{LogPrefix} Hamster_FullRagdoll_Test scene instance was not found for inactive-state validation.");
@@ -2877,11 +3998,111 @@ public static class HamsterFullRagdollTestSetupUtility
         Vector3 visualLocalEulerOffset;
         bool enableBodyLean;
         bool enableLocalLag;
+        bool enableSpeedBasedVisualHeight;
+        float idleVisualYOffset;
+        float movingVisualYOffset;
+        float speedForMovingVisualYOffset;
+        float visualHeightSmoothTime;
+        bool phaseHeightMismatch = false;
 
         if (TryGetVector3Field(followerObject, "visualLocalOffset", out visualLocalOffset))
+        {
             Debug.Log($"{LogPrefix} HamsterVisualFollower visualLocalOffset={visualLocalOffset}");
+            if (Mathf.Abs(visualLocalOffset.y - VerifiedVisualLocalOffsetY) > VerifiedVisualOffsetYTolerance)
+            {
+                phaseHeightMismatch = true;
+                Debug.LogWarning($"{LogPrefix} visualLocalOffset.y differs from verified height profile. Current={visualLocalOffset.y:F4} Expected={VerifiedVisualLocalOffsetY:F4}");
+            }
+            else
+            {
+                Debug.Log($"{LogPrefix} visualLocalOffset.y matches verified height profile.");
+            }
+        }
         else
+        {
             Debug.LogWarning($"{LogPrefix} HamsterVisualFollower visualLocalOffset field was not found.");
+            phaseHeightMismatch = true;
+        }
+
+        if (TryGetBoolField(followerObject, "enableSpeedBasedVisualHeight", out enableSpeedBasedVisualHeight))
+        {
+            Debug.Log($"{LogPrefix} HamsterVisualFollower enableSpeedBasedVisualHeight={enableSpeedBasedVisualHeight}");
+            if (!enableSpeedBasedVisualHeight)
+            {
+                phaseHeightMismatch = true;
+                Debug.LogWarning($"{LogPrefix} Speed based visual height is disabled; movement animation may sink into ground.");
+            }
+        }
+        else
+        {
+            Debug.LogWarning($"{LogPrefix} HamsterVisualFollower enableSpeedBasedVisualHeight field was not found.");
+            phaseHeightMismatch = true;
+        }
+
+        if (TryGetFloatField(followerObject, "idleVisualYOffset", out idleVisualYOffset))
+        {
+            Debug.Log($"{LogPrefix} HamsterVisualFollower idleVisualYOffset={idleVisualYOffset:F4}");
+            if (Mathf.Abs(idleVisualYOffset - VerifiedIdleVisualYOffset) > VerifiedVisualOffsetYTolerance)
+            {
+                phaseHeightMismatch = true;
+                Debug.LogWarning($"{LogPrefix} idleVisualYOffset differs from verified profile. Current={idleVisualYOffset:F4} Expected={VerifiedIdleVisualYOffset:F4}");
+            }
+        }
+        else
+        {
+            Debug.LogWarning($"{LogPrefix} HamsterVisualFollower idleVisualYOffset field was not found.");
+            phaseHeightMismatch = true;
+        }
+
+        if (TryGetFloatField(followerObject, "movingVisualYOffset", out movingVisualYOffset))
+        {
+            Debug.Log($"{LogPrefix} HamsterVisualFollower movingVisualYOffset={movingVisualYOffset:F4}");
+            if (Mathf.Abs(movingVisualYOffset - VerifiedMovingVisualYOffset) > VerifiedVisualOffsetYTolerance)
+            {
+                phaseHeightMismatch = true;
+                Debug.LogWarning($"{LogPrefix} Moving visual Y offset differs from 0.10; walk height may be wrong.");
+            }
+        }
+        else
+        {
+            Debug.LogWarning($"{LogPrefix} HamsterVisualFollower movingVisualYOffset field was not found.");
+            phaseHeightMismatch = true;
+        }
+
+        if (TryGetFloatField(followerObject, "speedForMovingVisualYOffset", out speedForMovingVisualYOffset))
+        {
+            Debug.Log($"{LogPrefix} HamsterVisualFollower speedForMovingVisualYOffset={speedForMovingVisualYOffset:F4}");
+            if (Mathf.Abs(speedForMovingVisualYOffset - VerifiedSpeedForMovingVisualYOffset) > VerifiedVisualHeightFloatTolerance)
+            {
+                phaseHeightMismatch = true;
+                Debug.LogWarning($"{LogPrefix} speedForMovingVisualYOffset differs from verified profile. Current={speedForMovingVisualYOffset:F4} Expected={VerifiedSpeedForMovingVisualYOffset:F4}");
+            }
+        }
+        else
+        {
+            Debug.LogWarning($"{LogPrefix} HamsterVisualFollower speedForMovingVisualYOffset field was not found.");
+            phaseHeightMismatch = true;
+        }
+
+        if (TryGetFloatField(followerObject, "visualHeightSmoothTime", out visualHeightSmoothTime))
+        {
+            Debug.Log($"{LogPrefix} HamsterVisualFollower visualHeightSmoothTime={visualHeightSmoothTime:F4}");
+            if (Mathf.Abs(visualHeightSmoothTime - VerifiedVisualHeightSmoothTime) > VerifiedVisualHeightFloatTolerance)
+            {
+                phaseHeightMismatch = true;
+                Debug.LogWarning($"{LogPrefix} visualHeightSmoothTime differs from verified profile. Current={visualHeightSmoothTime:F4} Expected={VerifiedVisualHeightSmoothTime:F4}");
+            }
+        }
+        else
+        {
+            Debug.LogWarning($"{LogPrefix} HamsterVisualFollower visualHeightSmoothTime field was not found.");
+            phaseHeightMismatch = true;
+        }
+
+        if (phaseHeightMismatch)
+            Debug.LogWarning($"{LogPrefix} Phase height profile mismatch. Expected visualLocalOffset.y=0.10 and speed-based height idle=-0.03 moving=0.10.");
+        else
+            Debug.Log($"{LogPrefix} Verified visual height profile OK.");
 
         if (TryGetVector3Field(followerObject, "visualLocalEulerOffset", out visualLocalEulerOffset))
             Debug.Log($"{LogPrefix} HamsterVisualFollower visualLocalEulerOffset={visualLocalEulerOffset}");
@@ -2980,6 +4201,149 @@ public static class HamsterFullRagdollTestSetupUtility
             Debug.LogWarning($"{LogPrefix} Animator parameter mismatch. move01Parameter={move01Parameter} Expected={VisualAnimatorMove01Parameter}");
         else
             Debug.Log($"{LogPrefix} HamsterVisualFollower move01Parameter is {VisualAnimatorMove01Parameter}.");
+    }
+
+    private static void ValidatePhase2TailEarBoing(Transform visualRoot)
+    {
+        if (visualRoot == null)
+            return;
+
+        Transform boingVisual = FindDirectChild(visualRoot, Phase2BoingVisualName);
+        if (boingVisual == null)
+        {
+            Debug.LogWarning($"{LogPrefix} VisualPreviewRoot/Boing_Visual is missing. Run Configure Phase 2 Tail Ear Boing when testing secondary motion.");
+            return;
+        }
+
+        Debug.Log($"{LogPrefix} VisualPreviewRoot/Boing_Visual exists: {GetHierarchyPath(boingVisual)}");
+        ValidatePhase2BoingObject(visualRoot, boingVisual, Phase2BoingTailName, Phase2TailMaxBendAngleCap, Phase2TailMaxCollisionRadius, allowSoftTailPreset: true);
+        ValidatePhase2BoingObject(visualRoot, boingVisual, Phase2BoingEarLName, Phase2EarMaxBendAngleCap, Phase2EarMaxCollisionRadius, allowSoftTailPreset: false);
+        ValidatePhase2BoingObject(visualRoot, boingVisual, Phase2BoingEarRName, Phase2EarMaxBendAngleCap, Phase2EarMaxCollisionRadius, allowSoftTailPreset: false);
+        Debug.Log($"{LogPrefix} BoingManager is expected to auto-create at runtime if required.");
+    }
+
+    private static void ValidatePhase2BoingObject(
+        Transform visualRoot,
+        Transform boingVisual,
+        string objectName,
+        float expectedMaxBendAngleCap,
+        float expectedMaxCollisionRadius,
+        bool allowSoftTailPreset)
+    {
+        Transform boingObjectTransform = FindDirectChild(boingVisual, objectName);
+        if (boingObjectTransform == null)
+        {
+            Debug.LogWarning($"{LogPrefix} {objectName} is missing under Boing_Visual.");
+            return;
+        }
+
+        BoingKit.BoingBones boingBones = boingObjectTransform.GetComponent<BoingKit.BoingBones>();
+        if (boingBones == null)
+        {
+            Debug.LogWarning($"{LogPrefix} {objectName} BoingBones is missing.");
+            return;
+        }
+
+        Debug.Log($"{LogPrefix} {objectName} BoingBones found. Enabled={boingBones.enabled}");
+        if (!boingBones.enabled)
+            Debug.LogWarning($"{LogPrefix} {objectName} BoingBones is disabled.");
+
+        Debug.Log($"{LogPrefix} {objectName} UpdateMode={boingBones.UpdateMode}");
+        if (boingBones.UpdateMode != BoingKit.BoingManager.UpdateMode.LateUpdate)
+            Debug.LogWarning($"{LogPrefix} {objectName} UpdateMode should be LateUpdate.");
+
+        BoingKit.BoingBones.Chain chain = GetFirstPhase2BoingChain(boingBones);
+        if (chain == null)
+        {
+            Debug.LogWarning($"{LogPrefix} {objectName} BoingBones has no BoneChains.");
+            return;
+        }
+
+        if (chain.Root == null)
+        {
+            Debug.LogWarning($"{LogPrefix} {objectName} root missing.");
+        }
+        else
+        {
+            Debug.Log($"{LogPrefix} {objectName} Root={GetHierarchyPath(chain.Root)}");
+            if (chain.Root != visualRoot && !IsChildOf(chain.Root, visualRoot))
+                Debug.LogWarning($"{LogPrefix} Root does not belong to VisualPreviewRoot: {objectName} Root={GetHierarchyPath(chain.Root)}");
+
+            if (allowSoftTailPreset)
+            {
+                Transform tailSearchRoot = FindPhase2VisualModelRoot(visualRoot);
+                int tailCandidateCount = CountPhase2TailCandidates(tailSearchRoot);
+                int descendantTailCandidateCount = CountPhase2TailCandidateDescendants(chain.Root);
+                Debug.Log($"{LogPrefix} BK_Tail selected root name={chain.Root.name}");
+                Debug.Log($"{LogPrefix} BK_Tail root full path={GetHierarchyPath(chain.Root)}");
+                Debug.Log($"{LogPrefix} BK_Tail visual model tail candidate count={tailCandidateCount}");
+                Debug.Log($"{LogPrefix} BK_Tail selected root descendant tail candidate count={descendantTailCandidateCount}");
+                if (descendantTailCandidateCount < 2)
+                    Debug.LogWarning($"{LogPrefix} BK_Tail selected root has fewer than 2 tail candidate bones. Full-chain soft preset may have limited effect.");
+            }
+        }
+
+        bool maxBendMatchesDefault = Mathf.Approximately(chain.MaxBendAngleCap, expectedMaxBendAngleCap);
+        bool maxBendMatchesSoftTail = allowSoftTailPreset && Mathf.Approximately(chain.MaxBendAngleCap, Phase2TailSoftMaxBendAngleCap);
+        bool maxBendMatchesFullChainSoftTail = allowSoftTailPreset && Mathf.Approximately(chain.MaxBendAngleCap, Phase2TailFullChainSoftMaxBendAngleCap);
+        bool radiusMatchesDefault = Mathf.Approximately(chain.MaxCollisionRadius, expectedMaxCollisionRadius);
+
+        Debug.Log($"{LogPrefix} {objectName} MaxBendAngleCap={chain.MaxBendAngleCap} MaxCollisionRadius={chain.MaxCollisionRadius}");
+        if (!maxBendMatchesDefault && !maxBendMatchesSoftTail && !maxBendMatchesFullChainSoftTail)
+            Debug.LogWarning($"{LogPrefix} {objectName} MaxBendAngleCap differs from preset. Current={chain.MaxBendAngleCap} Expected={expectedMaxBendAngleCap} or soft tail presets");
+        else if (maxBendMatchesFullChainSoftTail)
+            Debug.Log($"{LogPrefix} {objectName} full-chain soft tail preset active.");
+        else if (maxBendMatchesSoftTail)
+            Debug.Log($"{LogPrefix} {objectName} soft tail preset active.");
+        else
+            Debug.Log($"{LogPrefix} {objectName} default bend preset active.");
+
+        if (!radiusMatchesDefault)
+            Debug.LogWarning($"{LogPrefix} {objectName} MaxCollisionRadius differs from preset. Current={chain.MaxCollisionRadius} Expected={expectedMaxCollisionRadius}");
+
+        if (allowSoftTailPreset)
+        {
+            Phase2TailBoingTuningSnapshot snapshot = CapturePhase2TailBoingTuning(boingBones, chain);
+            LogPhase2TailBoingTuningSnapshot(snapshot);
+        }
+        else if (maxBendMatchesDefault && radiusMatchesDefault)
+        {
+            Debug.Log($"{LogPrefix} {objectName} values match the Phase 2 ear success preset; not changed by tail soft preset.");
+        }
+
+        if (chain.EnableBoingKitCollision)
+            Debug.LogWarning($"{LogPrefix} Boing collision is enabled: {objectName}");
+        else
+            Debug.Log($"{LogPrefix} {objectName} EnableBoingKitCollision is Off.");
+
+        if (chain.EnableUnityCollision)
+            Debug.LogWarning($"{LogPrefix} Unity collision is enabled: {objectName}");
+        else
+            Debug.Log($"{LogPrefix} {objectName} EnableUnityCollision is Off.");
+
+        if (chain.EnableInterChainCollision)
+            Debug.LogWarning($"{LogPrefix} InterChain collision is enabled: {objectName}");
+        else
+            Debug.Log($"{LogPrefix} {objectName} EnableInterChainCollision is Off.");
+
+        int boingColliderCount = boingBones.BoingColliders != null ? boingBones.BoingColliders.Length : 0;
+        int unityColliderCount = boingBones.UnityColliders != null ? boingBones.UnityColliders.Length : 0;
+        Debug.Log($"{LogPrefix} {objectName} BoingColliders count={boingColliderCount}");
+        Debug.Log($"{LogPrefix} {objectName} UnityColliders count={unityColliderCount}");
+
+        if (boingColliderCount != 0)
+            Debug.LogWarning($"{LogPrefix} Boing collider list is not empty: {objectName}");
+
+        if (unityColliderCount != 0)
+            Debug.LogWarning($"{LogPrefix} Unity collider list is not empty: {objectName}");
+    }
+
+    private static BoingKit.BoingBones.Chain GetFirstPhase2BoingChain(BoingKit.BoingBones boingBones)
+    {
+        if (boingBones == null || boingBones.BoneChains == null || boingBones.BoneChains.Length == 0)
+            return null;
+
+        return boingBones.BoneChains[0];
     }
 
     private static void ValidateGeneratedVisualControllerMotions(AnimatorController controller)
@@ -4746,6 +6110,16 @@ public static class HamsterFullRagdollTestSetupUtility
         {
             return false;
         }
+    }
+
+    private static bool IsBoingKitComponent(Component component)
+    {
+        if (component == null)
+            return false;
+
+        Type componentType = component.GetType();
+        return string.Equals(componentType.Namespace, "BoingKit", StringComparison.Ordinal)
+            || (componentType.Namespace != null && componentType.Namespace.StartsWith("BoingKit.", StringComparison.Ordinal));
     }
 
     private static Rigidbody FindRigidbodyByCandidates(Rigidbody[] rigidbodies, string[] candidates)
