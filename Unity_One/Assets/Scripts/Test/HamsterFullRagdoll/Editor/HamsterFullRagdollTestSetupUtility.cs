@@ -45,6 +45,35 @@ public static class HamsterFullRagdollTestSetupUtility
     private const float Phase2TailFullChainSoftMaxBendAngleCap = 44f;
     private const float Phase2EarMaxBendAngleCap = 45f;
     private const float Phase2EarMaxCollisionRadius = 0.03f;
+    private const string Phase3ImpactResponderTypeName = "HamsterImpactVisualResponder";
+    private const float Phase3ImpactMinRelativeSpeed = 1.0f;
+    private const float Phase3ImpactMediumRelativeSpeed = 2.75f;
+    private const float Phase3ImpactHeavyRelativeSpeed = 5.0f;
+    private const float Phase3ImpactCooldown = 0.22f;
+    private const float Phase3ImpactLightIntensity = 0.30f;
+    private const float Phase3ImpactMediumIntensity = 0.55f;
+    private const float Phase3ImpactHeavyIntensity = 0.85f;
+    private const float Phase3ImpactForMaxWobble = 5.0f;
+    private const float Phase3ImpactMaxForwardWobbleDegrees = 6.0f;
+    private const float Phase3ImpactMaxSideWobbleDegrees = 8.0f;
+    private const float Phase3ImpactWobbleSmoothTime = 0.08f;
+    private const float Phase3ImpactWobbleReturnSmoothTime = 0.22f;
+    private const float Phase3ImpactDiagnosticMinRelativeSpeed = 0.1f;
+    private const float Phase3ImpactDiagnosticMediumRelativeSpeed = 1.2f;
+    private const float Phase3ImpactDiagnosticHeavyRelativeSpeed = 2.5f;
+    private const float Phase3ImpactTunedMinRelativeSpeed = 0.25f;
+    private const float Phase3ImpactTunedMediumRelativeSpeed = 0.70f;
+    private const float Phase3ImpactTunedHeavyRelativeSpeed = 1.20f;
+    private const float Phase3ImpactTunedLightIntensity = 0.35f;
+    private const float Phase3ImpactTunedMediumIntensity = 0.65f;
+    private const float Phase3ImpactTunedHeavyIntensity = 0.90f;
+    private const float Phase3ImpactTunedForMaxWobble = 4.0f;
+    private const float Phase3ImpactTunedMaxForwardWobbleDegrees = 8.0f;
+    private const float Phase3ImpactTunedMaxSideWobbleDegrees = 10.0f;
+    private const float Phase3ImpactTunedWobbleSmoothTime = 0.07f;
+    private const float Phase3ImpactTunedWobbleReturnSmoothTime = 0.24f;
+    private const string Phase3ImpactTestWallName = "ImpactTestWall_Phase3";
+    private const float Phase3ImpactTestWallForwardDistance = 1.35f;
     private const RigidbodyConstraints MotorShellRotationStabilityConstraints =
         RigidbodyConstraints.FreezeRotationX | RigidbodyConstraints.FreezeRotationZ;
 
@@ -132,6 +161,19 @@ public static class HamsterFullRagdollTestSetupUtility
         "right ear",
         "귀_R",
         "오른귀"
+    };
+
+    private static readonly string[] Phase3ImpactIgnoredNames =
+    {
+        "Plane",
+        "Ground",
+        "RagdollTestGround"
+    };
+
+    private static readonly string[] Phase3ImpactIgnoredTagCandidates =
+    {
+        "RagdollTestGround",
+        "Ground"
     };
 
     private static readonly string[] BlockedAnimationClipNameFragments =
@@ -653,6 +695,71 @@ public static class HamsterFullRagdollTestSetupUtility
 
         Debug.Log($"{LogPrefix} Phase 2b wobble values, invert options, Animator links, and Tail/Ear Boing values were not modified.");
         LogVerifiedVisualHeightProfileNextTest();
+    }
+
+    [MenuItem("Project ONE/Hamster Full Ragdoll/Configure Phase 3 Impact Visual Reaction")]
+    private static void ConfigurePhase3ImpactVisualReaction()
+    {
+        Scene activeScene;
+        if (!TryGetCurrentDestinationTestScene(out activeScene))
+            return;
+
+        if (!ConfigurePhase3ImpactVisualReaction(activeScene))
+            return;
+
+        if (!SaveCurrentDestinationTestScene(activeScene, "Phase 3 Impact Visual Reaction setup"))
+            return;
+
+        Debug.Log($"{LogPrefix} Ready for Phase 3a manual collision test");
+        LogPhase3ImpactVisualReactionNextTest();
+    }
+
+    [MenuItem("Project ONE/Hamster Full Ragdoll/Apply Phase 3 Impact Diagnostic Preset")]
+    private static void ApplyPhase3ImpactDiagnosticPreset()
+    {
+        Scene activeScene;
+        if (!TryGetCurrentDestinationTestScene(out activeScene))
+            return;
+
+        if (!ApplyPhase3ImpactDiagnosticPreset(activeScene))
+            return;
+
+        if (!SaveCurrentDestinationTestScene(activeScene, "Phase 3 Impact Diagnostic preset"))
+            return;
+
+        LogPhase3ImpactDiagnosticNextTest();
+    }
+
+    [MenuItem("Project ONE/Hamster Full Ragdoll/Apply Phase 3 Impact Tuned Preset")]
+    private static void ApplyPhase3ImpactTunedPreset()
+    {
+        Scene activeScene;
+        if (!TryGetCurrentDestinationTestScene(out activeScene))
+            return;
+
+        if (!ApplyPhase3ImpactTunedPreset(activeScene))
+            return;
+
+        if (!SaveCurrentDestinationTestScene(activeScene, "Phase 3 Impact Tuned preset"))
+            return;
+
+        LogPhase3ImpactTunedNextTest();
+    }
+
+    [MenuItem("Project ONE/Hamster Full Ragdoll/Create Phase 3 Impact Test Wall")]
+    private static void CreatePhase3ImpactTestWall()
+    {
+        Scene activeScene;
+        if (!TryGetCurrentDestinationTestScene(out activeScene))
+            return;
+
+        if (!CreatePhase3ImpactTestWall(activeScene))
+            return;
+
+        if (!SaveCurrentDestinationTestScene(activeScene, "Phase 3 Impact Test Wall"))
+            return;
+
+        LogPhase3ImpactDiagnosticNextTest();
     }
 
     [MenuItem("Project ONE/Hamster Full Ragdoll/Apply Visual Idle No-Lean Diagnostic")]
@@ -1894,6 +2001,525 @@ public static class HamsterFullRagdollTestSetupUtility
         Debug.Log($"{LogPrefix} 6. Idle: verify feet stay on ground and character does not float.");
         Debug.Log($"{LogPrefix} 7. Move with W/A/S/D and verify walk height does not sink into ground.");
         Debug.Log($"{LogPrefix} 8. Run Validate Current Test Scene.");
+    }
+
+    private static bool ConfigurePhase3ImpactVisualReaction(Scene scene)
+    {
+        GameObject shellRoot = FindGameObjectByName(scene, JointFreeShellRootName);
+        if (shellRoot == null)
+        {
+            Debug.LogWarning($"{LogPrefix} Hamster_JointFreeMotorShell_Test not found. Run Create Phase 1 Joint-Free Motor Shell first.");
+            return false;
+        }
+
+        Transform bodyTransform = FindDirectChild(shellRoot.transform, JointFreeShellBodyName);
+        if (bodyTransform == null)
+        {
+            Debug.LogError($"{LogPrefix} {JointFreeShellBodyName} is missing under {JointFreeShellRootName}.");
+            return false;
+        }
+
+        Rigidbody bodyRigidbody = bodyTransform.GetComponent<Rigidbody>();
+        if (bodyRigidbody == null)
+        {
+            Debug.LogError($"{LogPrefix} Rigidbody missing on MotorShellBody.");
+            return false;
+        }
+
+        HamsterVisualFollower visualFollower = bodyTransform.GetComponent<HamsterVisualFollower>();
+        if (visualFollower == null)
+        {
+            Debug.LogWarning($"{LogPrefix} HamsterVisualFollower missing. Run Configure Visual Follower For Joint-Free Shell first.");
+            return false;
+        }
+
+        Type responderType;
+        if (!TryGetPhase3ImpactResponderType(out responderType))
+            return false;
+
+        Component[] responders = bodyTransform.GetComponents(responderType);
+        if (responders.Length > 1)
+            Debug.LogWarning($"{LogPrefix} Multiple HamsterImpactVisualResponder components found on MotorShellBody. First one will be configured; remove duplicates manually if needed.");
+
+        bool addedResponder = false;
+        Component responder = responders.Length > 0 ? responders[0] : null;
+        if (responder == null)
+        {
+            responder = bodyTransform.gameObject.AddComponent(responderType);
+            addedResponder = true;
+        }
+
+        if (responder == null)
+        {
+            Debug.LogError($"{LogPrefix} Failed to add HamsterImpactVisualResponder to MotorShellBody.");
+            return false;
+        }
+
+        ConfigurePhase3ImpactResponderSerializedFields(responder, bodyRigidbody, visualFollower);
+        ConfigurePhase3ImpactVisualFollowerSerializedFields(visualFollower);
+        DisableExistingSkinnedTestInstanceForPhase3(scene);
+
+        EditorUtility.SetDirty(shellRoot);
+        EditorUtility.SetDirty(bodyTransform.gameObject);
+        EditorUtility.SetDirty(responder);
+        EditorUtility.SetDirty(visualFollower);
+
+        Debug.Log($"{LogPrefix} Configured Phase 3 Impact Visual Reaction");
+        Debug.Log($"{LogPrefix} HamsterImpactVisualResponder {(addedResponder ? "added" : "reused")} on MotorShellBody");
+        Debug.Log($"{LogPrefix} targetBody assigned");
+        Debug.Log($"{LogPrefix} visualFollower assigned");
+        Debug.Log($"{LogPrefix} impact thresholds applied");
+        Debug.Log($"{LogPrefix} HamsterVisualFollower impact visual reaction values applied");
+        return true;
+    }
+
+    private static bool TryGetPhase3ImpactResponderType(out Type responderType)
+    {
+        responderType = null;
+        System.Reflection.Assembly[] assemblies = AppDomain.CurrentDomain.GetAssemblies();
+        for (int assemblyIndex = 0; assemblyIndex < assemblies.Length; assemblyIndex++)
+        {
+            System.Reflection.Assembly assembly = assemblies[assemblyIndex];
+            if (assembly == null)
+                continue;
+
+            responderType = assembly.GetType(Phase3ImpactResponderTypeName, false);
+            if (responderType != null)
+                break;
+        }
+
+        if (responderType == null)
+        {
+            Debug.LogError($"{LogPrefix} HamsterImpactVisualResponder type not found. Compile runtime scripts first.");
+            return false;
+        }
+
+        if (!typeof(Component).IsAssignableFrom(responderType))
+        {
+            Debug.LogError($"{LogPrefix} HamsterImpactVisualResponder type is not a Unity Component: {responderType.FullName}");
+            return false;
+        }
+
+        return true;
+    }
+
+    private static void ConfigurePhase3ImpactResponderSerializedFields(
+        Component responder,
+        Rigidbody bodyRigidbody,
+        HamsterVisualFollower visualFollower)
+    {
+        SerializedObject responderObject = new SerializedObject(responder);
+        AssignObjectField(responderObject, "targetBody", bodyRigidbody, required: true);
+        AssignObjectField(responderObject, "visualFollower", visualFollower, required: true);
+
+        SetBoolField(responderObject, "ignoreGroundLikeCollisions", true);
+        SetBoolField(responderObject, "ignoreTriggers", true);
+        SetStringArrayField(responderObject, "ignoredNames", Phase3ImpactIgnoredNames);
+
+        string[] ignoredTags = ResolveDefinedPhase3ImpactIgnoredTags();
+        SetStringArrayField(responderObject, "ignoredTags", ignoredTags);
+
+        int ignoredLayerMask = ResolvePhase3ImpactIgnoredLayerMask();
+        SetLayerMaskField(responderObject, "ignoredLayers", ignoredLayerMask);
+
+        SetFloatField(responderObject, "minRelativeSpeed", Phase3ImpactMinRelativeSpeed);
+        SetFloatField(responderObject, "mediumRelativeSpeed", Phase3ImpactMediumRelativeSpeed);
+        SetFloatField(responderObject, "heavyRelativeSpeed", Phase3ImpactHeavyRelativeSpeed);
+        SetFloatField(responderObject, "impactCooldown", Phase3ImpactCooldown);
+        SetFloatField(responderObject, "lightIntensity", Phase3ImpactLightIntensity);
+        SetFloatField(responderObject, "mediumIntensity", Phase3ImpactMediumIntensity);
+        SetFloatField(responderObject, "heavyIntensity", Phase3ImpactHeavyIntensity);
+        SetBoolField(responderObject, "useCollisionRelativeVelocityDirection", true);
+        SetBoolField(responderObject, "debugLogs", true);
+        SetBoolField(responderObject, "drawDebugGizmos", true);
+        SetBoolField(responderObject, "logAllCollisionEnter", false);
+        SetBoolField(responderObject, "logIgnoredCollisions", false);
+        SetBoolField(responderObject, "logBelowThresholdCollisions", false);
+        SetBoolField(responderObject, "logAcceptedImpacts", true);
+        SetBoolField(responderObject, "drawLastCollisionGizmo", true);
+
+        responderObject.ApplyModifiedProperties();
+        Debug.Log($"{LogPrefix} ignoredLayers assigned: {FormatLayerMask(ignoredLayerMask)} Value={ignoredLayerMask}");
+        Debug.Log($"{LogPrefix} ignoredTags assigned: {FormatStringArray(ignoredTags)}");
+        Debug.Log($"{LogPrefix} ignoredNames assigned: {FormatStringArray(Phase3ImpactIgnoredNames)}");
+        if (ignoredLayerMask == 0)
+            Debug.LogWarning($"{LogPrefix} ignoredLayers is empty");
+    }
+
+    private static void ConfigurePhase3ImpactVisualFollowerSerializedFields(HamsterVisualFollower visualFollower)
+    {
+        SerializedObject followerObject = new SerializedObject(visualFollower);
+        SetBoolField(followerObject, "enableImpactVisualReaction", true);
+        SetFloatField(followerObject, "impactForMaxWobble", Phase3ImpactForMaxWobble);
+        SetFloatField(followerObject, "maxImpactForwardWobbleDegrees", Phase3ImpactMaxForwardWobbleDegrees);
+        SetFloatField(followerObject, "maxImpactSideWobbleDegrees", Phase3ImpactMaxSideWobbleDegrees);
+        SetFloatField(followerObject, "impactWobbleSmoothTime", Phase3ImpactWobbleSmoothTime);
+        SetFloatField(followerObject, "impactWobbleReturnSmoothTime", Phase3ImpactWobbleReturnSmoothTime);
+        followerObject.ApplyModifiedProperties();
+
+        Debug.Log($"{LogPrefix} HamsterVisualFollower impact visual reaction values applied");
+        Debug.Log($"{LogPrefix} enableImpactVisualReaction=True impactForMaxWobble={Phase3ImpactForMaxWobble:F2} maxForward={Phase3ImpactMaxForwardWobbleDegrees:F2} maxSide={Phase3ImpactMaxSideWobbleDegrees:F2} smooth={Phase3ImpactWobbleSmoothTime:F2} return={Phase3ImpactWobbleReturnSmoothTime:F2}");
+        Debug.Log($"{LogPrefix} Preserved invertImpactForwardWobble/invertImpactSideWobble and all Phase 1/2/2b height, wobble, Animator, and Boing values.");
+    }
+
+    private static void DisableExistingSkinnedTestInstanceForPhase3(Scene scene)
+    {
+        GameObject existingSkinnedInstance = FindDestinationPrefabInstance(scene);
+        if (existingSkinnedInstance == null)
+            return;
+
+        if (!existingSkinnedInstance.activeSelf)
+        {
+            Debug.Log($"{LogPrefix} Hamster_FullRagdoll_Test inactive for Phase 3a impact visual reaction test.");
+            return;
+        }
+
+        existingSkinnedInstance.SetActive(false);
+        EditorUtility.SetDirty(existingSkinnedInstance);
+        Debug.LogWarning($"{LogPrefix} Hamster_FullRagdoll_Test was active and has been disabled");
+    }
+
+    private static string[] ResolveDefinedPhase3ImpactIgnoredTags()
+    {
+        List<string> tags = new List<string>();
+        for (int candidateIndex = 0; candidateIndex < Phase3ImpactIgnoredTagCandidates.Length; candidateIndex++)
+        {
+            string candidate = Phase3ImpactIgnoredTagCandidates[candidateIndex];
+            if (IsTagDefined(candidate))
+            {
+                tags.Add(candidate);
+            }
+            else
+            {
+                Debug.LogWarning($"{LogPrefix} {candidate} tag not found, skipped undefined tag");
+            }
+        }
+
+        return tags.ToArray();
+    }
+
+    private static int ResolvePhase3ImpactIgnoredLayerMask()
+    {
+        int mask = 0;
+        List<string> assignedLayers = new List<string>();
+        for (int layer = 0; layer < 32; layer++)
+        {
+            string layerName = LayerMask.LayerToName(layer);
+            if (string.IsNullOrEmpty(layerName))
+                continue;
+
+            if (!IsPhase3ImpactGroundLayerName(layerName))
+                continue;
+
+            mask |= 1 << layer;
+            assignedLayers.Add($"{layerName.Trim()}({layer})");
+            Debug.Log($"{LogPrefix} Found Phase 3 ignored ground layer candidate: {layerName} index={layer}");
+        }
+
+        if (assignedLayers.Count == 0)
+            Debug.LogWarning($"{LogPrefix} Ground/RagdollTestGround layer not found");
+
+        return mask;
+    }
+
+    private static bool IsPhase3ImpactGroundLayerName(string layerName)
+    {
+        string normalized = NormalizeName(layerName);
+        return string.Equals(normalized, "ground", StringComparison.Ordinal)
+            || string.Equals(normalized, "ragdolltestground", StringComparison.Ordinal)
+            || normalized.Contains("ragdolltestground")
+            || normalized.Contains("testground");
+    }
+
+    private static void LogPhase3ImpactVisualReactionNextTest()
+    {
+        Debug.Log($"{LogPrefix} Next test:");
+        Debug.Log($"{LogPrefix} 1. Keep Hamster_FullRagdoll_Test inactive.");
+        Debug.Log($"{LogPrefix} 2. Keep Hamster_JointFreeMotorShell_Test active.");
+        Debug.Log($"{LogPrefix} 3. Press Play with no obstacle.");
+        Debug.Log($"{LogPrefix} 4. Verify no ground impact log spam.");
+        Debug.Log($"{LogPrefix} 5. Move W/A/S/D on Plane and verify no ground impact spam.");
+        Debug.Log($"{LogPrefix} 6. Add a simple Cube with BoxCollider in front of the character.");
+        Debug.Log($"{LogPrefix} 7. Move into Cube and verify Light/Medium impact logs.");
+        Debug.Log($"{LogPrefix} 8. Verify visual impact wobble only, no Rigidbody force change.");
+        Debug.Log($"{LogPrefix} 9. If response is too strong, lower maxImpactForward/Side or intensities.");
+        Debug.Log($"{LogPrefix} 10. If no response, check visualFollower reference and ignoredLayers.");
+    }
+
+    private static bool ApplyPhase3ImpactDiagnosticPreset(Scene scene)
+    {
+        Transform bodyTransform;
+        Rigidbody bodyRigidbody;
+        HamsterVisualFollower visualFollower;
+        Component responder;
+        if (!TryGetPhase3ImpactResponderContext(scene, out bodyTransform, out bodyRigidbody, out visualFollower, out responder))
+            return false;
+
+        SerializedObject responderObject = new SerializedObject(responder);
+        AssignObjectField(responderObject, "targetBody", bodyRigidbody, required: true);
+        AssignObjectField(responderObject, "visualFollower", visualFollower, required: true);
+        SetBoolField(responderObject, "ignoreGroundLikeCollisions", true);
+        SetBoolField(responderObject, "ignoreTriggers", true);
+        SetStringArrayField(responderObject, "ignoredNames", Phase3ImpactIgnoredNames);
+        SetStringArrayField(responderObject, "ignoredTags", ResolveDefinedPhase3ImpactIgnoredTags());
+        SetLayerMaskField(responderObject, "ignoredLayers", ResolvePhase3ImpactIgnoredLayerMask());
+        SetFloatField(responderObject, "minRelativeSpeed", Phase3ImpactDiagnosticMinRelativeSpeed);
+        SetFloatField(responderObject, "mediumRelativeSpeed", Phase3ImpactDiagnosticMediumRelativeSpeed);
+        SetFloatField(responderObject, "heavyRelativeSpeed", Phase3ImpactDiagnosticHeavyRelativeSpeed);
+        SetFloatField(responderObject, "impactCooldown", Phase3ImpactCooldown);
+        SetFloatField(responderObject, "lightIntensity", Phase3ImpactLightIntensity);
+        SetFloatField(responderObject, "mediumIntensity", Phase3ImpactMediumIntensity);
+        SetFloatField(responderObject, "heavyIntensity", Phase3ImpactHeavyIntensity);
+        SetBoolField(responderObject, "useCollisionRelativeVelocityDirection", true);
+        SetBoolField(responderObject, "debugLogs", true);
+        SetBoolField(responderObject, "drawDebugGizmos", true);
+        SetBoolField(responderObject, "logAllCollisionEnter", true);
+        SetBoolField(responderObject, "logIgnoredCollisions", true);
+        SetBoolField(responderObject, "logBelowThresholdCollisions", true);
+        SetBoolField(responderObject, "logAcceptedImpacts", true);
+        SetBoolField(responderObject, "drawLastCollisionGizmo", true);
+        responderObject.ApplyModifiedProperties();
+
+        EditorUtility.SetDirty(responder);
+        Debug.Log($"{LogPrefix} Applied Phase 3 Impact Diagnostic Preset");
+        Debug.Log($"{LogPrefix} Diagnostic thresholds: min={Phase3ImpactDiagnosticMinRelativeSpeed:F2} medium={Phase3ImpactDiagnosticMediumRelativeSpeed:F2} heavy={Phase3ImpactDiagnosticHeavyRelativeSpeed:F2} cooldown={Phase3ImpactCooldown:F2}");
+        Debug.Log($"{LogPrefix} Diagnostic logging enabled: allCollisionEnter=True ignored=True belowThreshold=True accepted=True drawLastCollisionGizmo=True");
+        return true;
+    }
+
+    private static bool ApplyPhase3ImpactTunedPreset(Scene scene)
+    {
+        Transform bodyTransform;
+        Rigidbody bodyRigidbody;
+        HamsterVisualFollower visualFollower;
+        Component responder;
+        if (!TryGetPhase3ImpactResponderContext(scene, out bodyTransform, out bodyRigidbody, out visualFollower, out responder))
+            return false;
+
+        SerializedObject responderObject = new SerializedObject(responder);
+        AssignObjectField(responderObject, "targetBody", bodyRigidbody, required: true);
+        AssignObjectField(responderObject, "visualFollower", visualFollower, required: true);
+        SetBoolField(responderObject, "ignoreGroundLikeCollisions", true);
+        SetBoolField(responderObject, "ignoreTriggers", true);
+        SetStringArrayField(responderObject, "ignoredNames", Phase3ImpactIgnoredNames);
+        SetStringArrayField(responderObject, "ignoredTags", ResolveDefinedPhase3ImpactIgnoredTags());
+        int ignoredLayerMask = ResolvePhase3ImpactIgnoredLayerMask();
+        SetLayerMaskField(responderObject, "ignoredLayers", ignoredLayerMask);
+        SetFloatField(responderObject, "minRelativeSpeed", Phase3ImpactTunedMinRelativeSpeed);
+        SetFloatField(responderObject, "mediumRelativeSpeed", Phase3ImpactTunedMediumRelativeSpeed);
+        SetFloatField(responderObject, "heavyRelativeSpeed", Phase3ImpactTunedHeavyRelativeSpeed);
+        SetFloatField(responderObject, "impactCooldown", Phase3ImpactCooldown);
+        SetFloatField(responderObject, "lightIntensity", Phase3ImpactTunedLightIntensity);
+        SetFloatField(responderObject, "mediumIntensity", Phase3ImpactTunedMediumIntensity);
+        SetFloatField(responderObject, "heavyIntensity", Phase3ImpactTunedHeavyIntensity);
+        SetBoolField(responderObject, "useCollisionRelativeVelocityDirection", true);
+        SetBoolField(responderObject, "debugLogs", true);
+        SetBoolField(responderObject, "drawDebugGizmos", true);
+        SetBoolField(responderObject, "logAllCollisionEnter", false);
+        SetBoolField(responderObject, "logIgnoredCollisions", false);
+        SetBoolField(responderObject, "logBelowThresholdCollisions", false);
+        SetBoolField(responderObject, "logAcceptedImpacts", true);
+        SetBoolField(responderObject, "drawLastCollisionGizmo", true);
+        responderObject.ApplyModifiedProperties();
+
+        SerializedObject followerObject = new SerializedObject(visualFollower);
+        SetBoolField(followerObject, "enableImpactVisualReaction", true);
+        SetFloatField(followerObject, "impactForMaxWobble", Phase3ImpactTunedForMaxWobble);
+        SetFloatField(followerObject, "maxImpactForwardWobbleDegrees", Phase3ImpactTunedMaxForwardWobbleDegrees);
+        SetFloatField(followerObject, "maxImpactSideWobbleDegrees", Phase3ImpactTunedMaxSideWobbleDegrees);
+        SetFloatField(followerObject, "impactWobbleSmoothTime", Phase3ImpactTunedWobbleSmoothTime);
+        SetFloatField(followerObject, "impactWobbleReturnSmoothTime", Phase3ImpactTunedWobbleReturnSmoothTime);
+        followerObject.ApplyModifiedProperties();
+
+        EditorUtility.SetDirty(responder);
+        EditorUtility.SetDirty(visualFollower);
+        Debug.Log($"{LogPrefix} Applied Phase 3 Impact Tuned Preset");
+        Debug.Log($"{LogPrefix} Impact thresholds tuned for current MotorShellBody speed");
+        Debug.Log($"{LogPrefix} min={Phase3ImpactTunedMinRelativeSpeed:F2} medium={Phase3ImpactTunedMediumRelativeSpeed:F2} heavy={Phase3ImpactTunedHeavyRelativeSpeed:F2}");
+        Debug.Log($"{LogPrefix} intensities light={Phase3ImpactTunedLightIntensity:F2} medium={Phase3ImpactTunedMediumIntensity:F2} heavy={Phase3ImpactTunedHeavyIntensity:F2}");
+        Debug.Log($"{LogPrefix} accepted impact logging kept on");
+        Debug.Log($"{LogPrefix} diagnostic spam logs disabled");
+        Debug.Log($"{LogPrefix} VisualFollower impact values applied");
+        if (ignoredLayerMask == 0)
+            Debug.LogWarning($"{LogPrefix} ignoredLayers empty");
+
+        return true;
+    }
+
+    private static bool TryGetPhase3ImpactResponderContext(
+        Scene scene,
+        out Transform bodyTransform,
+        out Rigidbody bodyRigidbody,
+        out HamsterVisualFollower visualFollower,
+        out Component responder)
+    {
+        bodyTransform = null;
+        bodyRigidbody = null;
+        visualFollower = null;
+        responder = null;
+
+        GameObject shellRoot = FindGameObjectByName(scene, JointFreeShellRootName);
+        if (shellRoot == null)
+        {
+            Debug.LogWarning($"{LogPrefix} Hamster_JointFreeMotorShell_Test not found. Run Create Phase 1 Joint-Free Motor Shell first.");
+            return false;
+        }
+
+        bodyTransform = FindDirectChild(shellRoot.transform, JointFreeShellBodyName);
+        if (bodyTransform == null)
+        {
+            Debug.LogError($"{LogPrefix} MotorShellBody missing");
+            return false;
+        }
+
+        bodyRigidbody = bodyTransform.GetComponent<Rigidbody>();
+        if (bodyRigidbody == null)
+        {
+            Debug.LogError($"{LogPrefix} Rigidbody missing");
+            return false;
+        }
+
+        visualFollower = bodyTransform.GetComponent<HamsterVisualFollower>();
+        if (visualFollower == null)
+        {
+            Debug.LogWarning($"{LogPrefix} HamsterVisualFollower missing. Run Configure Visual Follower For Joint-Free Shell first.");
+            return false;
+        }
+
+        Type responderType;
+        if (!TryGetPhase3ImpactResponderType(out responderType))
+            return false;
+
+        Component[] responders = bodyTransform.GetComponents(responderType);
+        if (responders.Length == 0)
+        {
+            Debug.LogWarning($"{LogPrefix} HamsterImpactVisualResponder missing. Run Configure Phase 3 Impact Visual Reaction first.");
+            return false;
+        }
+
+        if (responders.Length > 1)
+            Debug.LogWarning($"{LogPrefix} Multiple HamsterImpactVisualResponder components found on MotorShellBody. First one will be configured.");
+
+        responder = responders[0];
+        return true;
+    }
+
+    private static bool CreatePhase3ImpactTestWall(Scene scene)
+    {
+        GameObject shellRoot = FindGameObjectByName(scene, JointFreeShellRootName);
+        if (shellRoot == null)
+        {
+            Debug.LogWarning($"{LogPrefix} Hamster_JointFreeMotorShell_Test not found. Run Create Phase 1 Joint-Free Motor Shell first.");
+            return false;
+        }
+
+        Transform bodyTransform = FindDirectChild(shellRoot.transform, JointFreeShellBodyName);
+        if (bodyTransform == null)
+        {
+            Debug.LogError($"{LogPrefix} MotorShellBody missing");
+            return false;
+        }
+
+        BoxCollider bodyCollider = bodyTransform.GetComponent<BoxCollider>();
+        if (bodyCollider == null)
+            Debug.LogWarning($"{LogPrefix} MotorShellBody BoxCollider missing. ImpactTestWall will use body transform center fallback.");
+
+        GameObject wall = FindGameObjectByName(scene, Phase3ImpactTestWallName);
+        bool created = false;
+        if (wall == null)
+        {
+            wall = GameObject.CreatePrimitive(PrimitiveType.Cube);
+            wall.name = Phase3ImpactTestWallName;
+            SceneManager.MoveGameObjectToScene(wall, scene);
+            wall.transform.SetParent(shellRoot.transform, true);
+            created = true;
+        }
+        else if (wall.transform.parent != shellRoot.transform)
+        {
+            wall.transform.SetParent(shellRoot.transform, true);
+        }
+
+        int defaultLayer = LayerMask.NameToLayer("Default");
+        if (defaultLayer >= 0)
+            wall.layer = defaultLayer;
+        else
+            Debug.LogWarning($"{LogPrefix} Default layer not found. ImpactTestWall layer was left unchanged.");
+
+        wall.tag = "Untagged";
+        Vector3 forward = bodyTransform.forward;
+        forward.y = 0f;
+        if (forward.sqrMagnitude <= 0.0001f)
+            forward = Vector3.forward;
+        else
+            forward.Normalize();
+
+        float centerY = bodyCollider != null
+            ? bodyTransform.TransformPoint(bodyCollider.center).y
+            : 0.5f;
+        Vector3 bodyCenter = bodyCollider != null
+            ? bodyTransform.TransformPoint(bodyCollider.center)
+            : bodyTransform.position;
+        Vector3 wallPosition = bodyCenter + forward * Phase3ImpactTestWallForwardDistance;
+        wallPosition.y = centerY;
+
+        wall.transform.position = wallPosition;
+        wall.transform.rotation = Quaternion.LookRotation(forward, Vector3.up);
+        wall.transform.localScale = new Vector3(2.0f, 1.0f, 0.25f);
+
+        BoxCollider wallCollider = wall.GetComponent<BoxCollider>();
+        if (wallCollider == null)
+            wallCollider = wall.AddComponent<BoxCollider>();
+        wallCollider.enabled = true;
+        wallCollider.isTrigger = false;
+        wallCollider.center = Vector3.zero;
+        wallCollider.size = Vector3.one;
+
+        MeshFilter meshFilter = wall.GetComponent<MeshFilter>();
+        MeshRenderer meshRenderer = wall.GetComponent<MeshRenderer>();
+        if (meshFilter == null || meshRenderer == null)
+            Debug.LogWarning($"{LogPrefix} ImpactTestWall visual mesh component missing. Collider is still configured.");
+
+        Rigidbody wallBody = wall.GetComponent<Rigidbody>();
+        if (wallBody != null)
+        {
+            wallBody.isKinematic = true;
+            wallBody.useGravity = false;
+            Debug.LogWarning($"{LogPrefix} Existing ImpactTestWall Rigidbody found and set kinematic. New Rigidbody was not added.");
+            EditorUtility.SetDirty(wallBody);
+        }
+
+        EditorUtility.SetDirty(wall);
+        EditorUtility.SetDirty(wallCollider);
+        Debug.Log($"{LogPrefix} Created/Reused ImpactTestWall_Phase3 layer={LayerMask.LayerToName(wall.layer)} tag={wall.tag} trigger={wallCollider.isTrigger}");
+        Debug.Log($"{LogPrefix} ImpactTestWall position={wall.transform.position} forwardDistance={Phase3ImpactTestWallForwardDistance:F2} created={created}");
+        return true;
+    }
+
+    private static void LogPhase3ImpactDiagnosticNextTest()
+    {
+        Debug.Log($"{LogPrefix} Next test:");
+        Debug.Log($"{LogPrefix} 1. Run Configure Phase 3 Impact Visual Reaction if needed.");
+        Debug.Log($"{LogPrefix} 2. Run Apply Phase 3 Impact Diagnostic Preset.");
+        Debug.Log($"{LogPrefix} 3. Run Create Phase 3 Impact Test Wall.");
+        Debug.Log($"{LogPrefix} 4. Press Play.");
+        Debug.Log($"{LogPrefix} 5. Verify collision enter logs appear when MotorShellBody BoxCollider hits ImpactTestWall_Phase3.");
+        Debug.Log($"{LogPrefix} 6. If collision enter logs appear but accepted impact does not, check ignored/below-threshold reason.");
+        Debug.Log($"{LogPrefix} 7. If no collision enter log appears, move wall so it intersects MotorShellBody collider path or check colliders.");
+        Debug.Log($"{LogPrefix} 8. After diagnosis, turn off logAllCollisionEnter/logIgnoredCollisions to avoid spam.");
+    }
+
+    private static void LogPhase3ImpactTunedNextTest()
+    {
+        Debug.Log($"{LogPrefix} Next test:");
+        Debug.Log($"{LogPrefix} 1. Run Apply Phase 3 Impact Tuned Preset.");
+        Debug.Log($"{LogPrefix} 2. Validate Current Test Scene.");
+        Debug.Log($"{LogPrefix} 3. Press Play.");
+        Debug.Log($"{LogPrefix} 4. Hit ImpactTestWall_Phase3 with W/A/S/D.");
+        Debug.Log($"{LogPrefix} 5. Expect Light around speed 0.3~0.69 and Medium around 0.70+.");
+        Debug.Log($"{LogPrefix} 6. Verify visual impact wobble is visible but not excessive.");
+        Debug.Log($"{LogPrefix} 7. If response is too weak, increase maxImpactForward/Side or intensities.");
+        Debug.Log($"{LogPrefix} 8. If response is too strong, lower maxImpactForward/Side or intensities.");
+        Debug.Log($"{LogPrefix} 9. Keep diagnostic spam logs off unless collision stops working again.");
     }
 
     private struct AnimationClipCandidate
@@ -3950,6 +4576,8 @@ public static class HamsterFullRagdollTestSetupUtility
         ValidateVisualFollowerOffsetAndDiagnosticState(visualFollower);
         ValidateVisualAnimatorSetup(visualRoot, visualFollower);
         ValidatePhase2TailEarBoing(visualRoot);
+        ValidatePhase3ImpactVisualReaction(bodyTransform, bodyRigidbody, visualFollower);
+        ValidatePhase3ImpactTestWall(bodyTransform.gameObject.scene, bodyTransform);
 
         if (existingSkinnedInstance == null)
             Debug.LogWarning($"{LogPrefix} Hamster_FullRagdoll_Test scene instance was not found for inactive-state validation.");
@@ -4120,6 +4748,266 @@ public static class HamsterFullRagdollTestSetupUtility
             Debug.LogWarning($"{LogPrefix} HamsterVisualFollower enableLocalLag field was not found.");
 
         Debug.Log($"{LogPrefix} If idle leans with enableBodyLean=false, check idle clip pose or visualLocalEulerOffset.");
+    }
+
+    private static void ValidatePhase3ImpactVisualReaction(
+        Transform bodyTransform,
+        Rigidbody bodyRigidbody,
+        HamsterVisualFollower visualFollower)
+    {
+        if (bodyTransform == null)
+        {
+            Debug.LogError($"{LogPrefix} MotorShellBody missing for Phase 3a impact validation.");
+            return;
+        }
+
+        if (bodyRigidbody == null)
+            Debug.LogError($"{LogPrefix} MotorShellBody Rigidbody missing for Phase 3a impact validation.");
+        else
+            Debug.Log($"{LogPrefix} Phase 3a MotorShellBody Rigidbody exists.");
+
+        if (visualFollower == null)
+            Debug.LogError($"{LogPrefix} HamsterVisualFollower missing for Phase 3a impact validation.");
+        else
+            Debug.Log($"{LogPrefix} Phase 3a HamsterVisualFollower exists.");
+
+        Type responderType;
+        if (!TryGetPhase3ImpactResponderType(out responderType))
+            return;
+
+        Component[] responders = bodyTransform.GetComponents(responderType);
+        if (responders.Length == 0)
+        {
+            Debug.LogWarning($"{LogPrefix} HamsterImpactVisualResponder missing. Run Configure Phase 3 Impact Visual Reaction.");
+            ValidatePhase3ImpactVisualFollowerSettings(visualFollower);
+            return;
+        }
+
+        if (responders.Length > 1)
+            Debug.LogWarning($"{LogPrefix} Multiple HamsterImpactVisualResponder components found on MotorShellBody. Count={responders.Length}");
+
+        Component responder = responders[0];
+        Debug.Log($"{LogPrefix} HamsterImpactVisualResponder found on MotorShellBody.");
+        SerializedObject responderObject = new SerializedObject(responder);
+        Rigidbody assignedTargetBody = GetObjectReference<Rigidbody>(responderObject, "targetBody");
+        HamsterVisualFollower assignedVisualFollower = GetObjectReference<HamsterVisualFollower>(responderObject, "visualFollower");
+
+        if (assignedTargetBody != bodyRigidbody)
+            Debug.LogError($"{LogPrefix} HamsterImpactVisualResponder targetBody should reference MotorShellBody Rigidbody.");
+        else
+            Debug.Log($"{LogPrefix} HamsterImpactVisualResponder targetBody references MotorShellBody Rigidbody.");
+
+        if (assignedVisualFollower != visualFollower)
+            Debug.LogError($"{LogPrefix} HamsterImpactVisualResponder visualFollower should reference MotorShellBody HamsterVisualFollower.");
+        else
+            Debug.Log($"{LogPrefix} HamsterImpactVisualResponder visualFollower references MotorShellBody HamsterVisualFollower.");
+
+        ValidatePhase3ImpactResponderBool(responderObject, "ignoreGroundLikeCollisions", true);
+        ValidatePhase3ImpactResponderBool(responderObject, "ignoreTriggers", true);
+
+        string[] ignoredNames = GetStringArrayField(responderObject, "ignoredNames");
+        Debug.Log($"{LogPrefix} Phase 3a ignoredNames={FormatStringArray(ignoredNames)}");
+        if (!ContainsStringIgnoreCase(ignoredNames, "Plane") && !ContainsStringIgnoreCase(ignoredNames, "Ground"))
+            Debug.LogWarning($"{LogPrefix} ignoredNames should contain Plane or Ground.");
+
+        string[] ignoredTags = GetStringArrayField(responderObject, "ignoredTags");
+        Debug.Log($"{LogPrefix} Phase 3a ignoredTags={FormatStringArray(ignoredTags)}");
+        ValidatePhase3IgnoredTagsAreDefined(ignoredTags);
+
+        int ignoredLayers = GetIntField(responderObject, "ignoredLayers");
+        Debug.Log($"{LogPrefix} Phase 3a ignoredLayers={FormatLayerMask(ignoredLayers)} Value={ignoredLayers}");
+        if (!LayerMaskContainsPhase3ImpactGroundCandidate(ignoredLayers))
+            Debug.LogWarning($"{LogPrefix} ignoredLayers does not include a Ground/RagdollTestGround candidate layer.");
+
+        ValidatePhase3ImpactResponderFloat(responderObject, "minRelativeSpeed", Phase3ImpactTunedMinRelativeSpeed);
+        ValidatePhase3ImpactResponderFloat(responderObject, "mediumRelativeSpeed", Phase3ImpactTunedMediumRelativeSpeed);
+        ValidatePhase3ImpactResponderFloat(responderObject, "heavyRelativeSpeed", Phase3ImpactTunedHeavyRelativeSpeed);
+        ValidatePhase3ImpactResponderFloat(responderObject, "impactCooldown", Phase3ImpactCooldown);
+        ValidatePhase3ImpactResponderFloat(responderObject, "lightIntensity", Phase3ImpactTunedLightIntensity);
+        ValidatePhase3ImpactResponderFloat(responderObject, "mediumIntensity", Phase3ImpactTunedMediumIntensity);
+        ValidatePhase3ImpactResponderFloat(responderObject, "heavyIntensity", Phase3ImpactTunedHeavyIntensity);
+        ValidatePhase3ImpactResponderBool(responderObject, "useCollisionRelativeVelocityDirection", true);
+        ValidatePhase3ImpactResponderBool(responderObject, "debugLogs", true);
+        ValidatePhase3ImpactResponderBool(responderObject, "drawDebugGizmos", true);
+        ValidatePhase3ImpactResponderBool(responderObject, "logAllCollisionEnter", false);
+        ValidatePhase3ImpactResponderBool(responderObject, "logIgnoredCollisions", false);
+        ValidatePhase3ImpactResponderBool(responderObject, "logBelowThresholdCollisions", false);
+        ValidatePhase3ImpactResponderBool(responderObject, "logAcceptedImpacts", true);
+        ValidatePhase3ImpactResponderBool(responderObject, "drawLastCollisionGizmo", true);
+        ValidatePhase3ImpactVisualFollowerSettings(visualFollower);
+    }
+
+    private static void ValidatePhase3ImpactVisualFollowerSettings(HamsterVisualFollower visualFollower)
+    {
+        if (visualFollower == null)
+            return;
+
+        SerializedObject followerObject = new SerializedObject(visualFollower);
+        bool enableImpactVisualReaction;
+        if (!TryGetBoolField(followerObject, "enableImpactVisualReaction", out enableImpactVisualReaction))
+            Debug.LogWarning($"{LogPrefix} HamsterVisualFollower enableImpactVisualReaction field was not found.");
+        else if (!enableImpactVisualReaction)
+            Debug.LogWarning($"{LogPrefix} HamsterVisualFollower enableImpactVisualReaction should be true for Phase 3a.");
+        else
+            Debug.Log($"{LogPrefix} HamsterVisualFollower enableImpactVisualReaction is true.");
+
+        ValidatePhase3ImpactResponderFloat(followerObject, "impactForMaxWobble", Phase3ImpactTunedForMaxWobble);
+        ValidatePhase3ImpactResponderFloat(followerObject, "maxImpactForwardWobbleDegrees", Phase3ImpactTunedMaxForwardWobbleDegrees);
+        ValidatePhase3ImpactResponderFloat(followerObject, "maxImpactSideWobbleDegrees", Phase3ImpactTunedMaxSideWobbleDegrees);
+        ValidatePhase3ImpactResponderFloat(followerObject, "impactWobbleSmoothTime", Phase3ImpactTunedWobbleSmoothTime);
+        ValidatePhase3ImpactResponderFloat(followerObject, "impactWobbleReturnSmoothTime", Phase3ImpactTunedWobbleReturnSmoothTime);
+    }
+
+    private static void ValidatePhase3ImpactResponderBool(SerializedObject serializedObject, string fieldName, bool expected)
+    {
+        bool value;
+        if (!TryGetBoolField(serializedObject, fieldName, out value))
+        {
+            Debug.LogWarning($"{LogPrefix} Phase 3a bool field was not found: {fieldName}");
+            return;
+        }
+
+        if (value != expected)
+            Debug.LogWarning($"{LogPrefix} {fieldName} should be {expected} for Phase 3a. Current={value}");
+        else
+            Debug.Log($"{LogPrefix} {fieldName}={value}");
+    }
+
+    private static void ValidatePhase3ImpactResponderFloat(SerializedObject serializedObject, string fieldName)
+    {
+        float value;
+        if (!TryGetFloatField(serializedObject, fieldName, out value))
+        {
+            Debug.LogWarning($"{LogPrefix} Phase 3a float field was not found: {fieldName}");
+            return;
+        }
+
+        Debug.Log($"{LogPrefix} {fieldName}={value:F3}");
+    }
+
+    private static void ValidatePhase3ImpactResponderFloat(SerializedObject serializedObject, string fieldName, float expected)
+    {
+        float value;
+        if (!TryGetFloatField(serializedObject, fieldName, out value))
+        {
+            Debug.LogWarning($"{LogPrefix} Phase 3a float field was not found: {fieldName}");
+            return;
+        }
+
+        if (Mathf.Abs(value - expected) > 0.01f)
+            Debug.LogWarning($"{LogPrefix} {fieldName} tuned mismatch. Current={value:F3} Expected={expected:F3}");
+        else
+            Debug.Log($"{LogPrefix} {fieldName} matches tuned value: {value:F3}");
+    }
+
+    private static void ValidatePhase3IgnoredTagsAreDefined(string[] ignoredTags)
+    {
+        if (ignoredTags == null)
+            return;
+
+        for (int i = 0; i < ignoredTags.Length; i++)
+        {
+            string tag = ignoredTags[i];
+            if (string.IsNullOrEmpty(tag))
+                continue;
+
+            if (!IsTagDefined(tag))
+                Debug.LogWarning($"{LogPrefix} ignoredTags contains undefined tag and should be reconfigured: {tag}");
+            else
+                Debug.Log($"{LogPrefix} ignoredTags defined: {tag}");
+        }
+    }
+
+    private static bool LayerMaskContainsPhase3ImpactGroundCandidate(int mask)
+    {
+        for (int layer = 0; layer < 32; layer++)
+        {
+            if ((mask & (1 << layer)) == 0)
+                continue;
+
+            string layerName = LayerMask.LayerToName(layer);
+            if (IsPhase3ImpactGroundLayerName(layerName))
+                return true;
+        }
+
+        return false;
+    }
+
+    private static void ValidatePhase3ImpactTestWall(Scene scene, Transform bodyTransform)
+    {
+        GameObject wall = FindGameObjectByName(scene, Phase3ImpactTestWallName);
+        if (wall == null)
+        {
+            Debug.LogWarning($"{LogPrefix} ImpactTestWall_Phase3 not found. Run Create Phase 3 Impact Test Wall for collision diagnosis.");
+            return;
+        }
+
+        Debug.Log($"{LogPrefix} ImpactTestWall_Phase3 exists: {GetHierarchyPath(wall.transform)}");
+
+        string layerName = LayerMask.LayerToName(wall.layer);
+        Debug.Log($"{LogPrefix} ImpactTestWall_Phase3 layer={layerName}({wall.layer})");
+        if (IsPhase3ImpactGroundLayerName(layerName))
+            Debug.LogError($"{LogPrefix} ImpactTestWall_Phase3 layer should not be Ground/RagdollTestGround.");
+
+        Debug.Log($"{LogPrefix} ImpactTestWall_Phase3 tag={wall.tag}");
+        if (string.Equals(wall.tag, "Ground", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(wall.tag, "RagdollTestGround", StringComparison.OrdinalIgnoreCase))
+        {
+            Debug.LogError($"{LogPrefix} ImpactTestWall_Phase3 tag should not be Ground/RagdollTestGround.");
+        }
+
+        if (ContainsIgnoreCase(wall.name, "Plane")
+            || ContainsIgnoreCase(wall.name, "Ground")
+            || ContainsIgnoreCase(wall.name, "RagdollTestGround"))
+        {
+            Debug.LogError($"{LogPrefix} ImpactTestWall_Phase3 name includes ignored ground fragment: {wall.name}");
+        }
+        else
+        {
+            Debug.Log($"{LogPrefix} ImpactTestWall_Phase3 name does not include Plane/Ground/RagdollTestGround.");
+        }
+
+        BoxCollider wallCollider = wall.GetComponent<BoxCollider>();
+        if (wallCollider == null)
+        {
+            Debug.LogError($"{LogPrefix} ImpactTestWall_Phase3 BoxCollider is missing.");
+        }
+        else
+        {
+            Debug.Log($"{LogPrefix} ImpactTestWall_Phase3 BoxCollider enabled={wallCollider.enabled} isTrigger={wallCollider.isTrigger} size={wallCollider.size}");
+            if (!wallCollider.enabled)
+                Debug.LogError($"{LogPrefix} ImpactTestWall_Phase3 BoxCollider should be enabled.");
+
+            if (wallCollider.isTrigger)
+                Debug.LogError($"{LogPrefix} ImpactTestWall_Phase3 BoxCollider should not be trigger.");
+        }
+
+        Rigidbody wallBody = wall.GetComponent<Rigidbody>();
+        if (wallBody == null)
+        {
+            Debug.Log($"{LogPrefix} ImpactTestWall_Phase3 Rigidbody absent.");
+        }
+        else
+        {
+            Debug.Log($"{LogPrefix} ImpactTestWall_Phase3 Rigidbody present. isKinematic={wallBody.isKinematic} useGravity={wallBody.useGravity}");
+            if (!wallBody.isKinematic)
+                Debug.LogError($"{LogPrefix} ImpactTestWall_Phase3 Rigidbody should be kinematic if present.");
+        }
+
+        if (bodyTransform == null)
+            return;
+
+        Vector3 forward = bodyTransform.forward;
+        forward.y = 0f;
+        if (forward.sqrMagnitude <= 0.0001f)
+            forward = Vector3.forward;
+        else
+            forward.Normalize();
+
+        Vector3 delta = wall.transform.position - bodyTransform.position;
+        float forwardDistance = Vector3.Dot(new Vector3(delta.x, 0f, delta.z), forward);
+        float verticalDelta = delta.y;
+        Debug.Log($"{LogPrefix} ImpactTestWall_Phase3 relative to MotorShellBody: delta={delta} forwardDistance={forwardDistance:F2} verticalDelta={verticalDelta:F2}");
     }
 
     private static void ValidateVisualAnimatorSetup(Transform visualRoot, HamsterVisualFollower visualFollower)
@@ -5480,6 +6368,14 @@ public static class HamsterFullRagdollTestSetupUtility
         return string.Join(", ", layerNames);
     }
 
+    private static string FormatStringArray(string[] values)
+    {
+        if (values == null || values.Length == 0)
+            return "<empty>";
+
+        return string.Join(", ", values);
+    }
+
     private static void ValidateRootPhase1Components(
         GameObject root,
         Rigidbody hipsBody,
@@ -6335,6 +7231,64 @@ public static class HamsterFullRagdollTestSetupUtility
         property.stringValue = value;
     }
 
+    private static void SetStringArrayField(SerializedObject serializedObject, string fieldName, string[] values)
+    {
+        SerializedProperty property = serializedObject.FindProperty(fieldName);
+        if (property == null)
+        {
+            Debug.LogWarning($"{LogPrefix} String array field was not found: {fieldName}");
+            return;
+        }
+
+        if (!property.isArray || property.propertyType == SerializedPropertyType.String)
+        {
+            Debug.LogWarning($"{LogPrefix} Field is not a string array: {fieldName}");
+            return;
+        }
+
+        int valueCount = values != null ? values.Length : 0;
+        property.arraySize = valueCount;
+        for (int i = 0; i < valueCount; i++)
+        {
+            SerializedProperty element = property.GetArrayElementAtIndex(i);
+            if (element == null || element.propertyType != SerializedPropertyType.String)
+            {
+                Debug.LogWarning($"{LogPrefix} Array element is not string: {fieldName}[{i}]");
+                continue;
+            }
+
+            element.stringValue = values[i] ?? string.Empty;
+        }
+    }
+
+    private static void SetLayerMaskField(SerializedObject serializedObject, string fieldName, int mask)
+    {
+        SerializedProperty property = serializedObject.FindProperty(fieldName);
+        if (property == null)
+        {
+            Debug.LogWarning($"{LogPrefix} LayerMask field was not found: {fieldName}");
+            return;
+        }
+
+        if (property.propertyType == SerializedPropertyType.Integer
+            || property.propertyType == SerializedPropertyType.LayerMask)
+        {
+            property.intValue = mask;
+            return;
+        }
+
+        SerializedProperty bitsProperty = property.FindPropertyRelative("m_Bits");
+        if (property.propertyType == SerializedPropertyType.Generic
+            && bitsProperty != null
+            && bitsProperty.propertyType == SerializedPropertyType.Integer)
+        {
+            bitsProperty.intValue = mask;
+            return;
+        }
+
+        Debug.LogWarning($"{LogPrefix} Field is not a LayerMask-compatible integer: {fieldName} Type={property.propertyType}");
+    }
+
     private static T GetObjectReference<T>(SerializedObject serializedObject, string fieldName) where T : UnityEngine.Object
     {
         SerializedProperty property = serializedObject.FindProperty(fieldName);
@@ -6409,6 +7363,33 @@ public static class HamsterFullRagdollTestSetupUtility
 
         value = property.stringValue;
         return true;
+    }
+
+    private static string[] GetStringArrayField(SerializedObject serializedObject, string fieldName)
+    {
+        SerializedProperty property = serializedObject.FindProperty(fieldName);
+        if (property == null)
+        {
+            Debug.LogWarning($"{LogPrefix} String array field was not found: {fieldName}");
+            return new string[0];
+        }
+
+        if (!property.isArray || property.propertyType == SerializedPropertyType.String)
+        {
+            Debug.LogWarning($"{LogPrefix} Field is not a string array: {fieldName}");
+            return new string[0];
+        }
+
+        string[] values = new string[property.arraySize];
+        for (int i = 0; i < property.arraySize; i++)
+        {
+            SerializedProperty element = property.GetArrayElementAtIndex(i);
+            values[i] = element != null && element.propertyType == SerializedPropertyType.String
+                ? element.stringValue
+                : string.Empty;
+        }
+
+        return values;
     }
 
     private static void ValidateRequiredRigidbody(string fieldName, Rigidbody body)
@@ -6549,6 +7530,35 @@ public static class HamsterFullRagdollTestSetupUtility
         return !string.IsNullOrEmpty(value)
             && !string.IsNullOrEmpty(fragment)
             && value.IndexOf(fragment, StringComparison.OrdinalIgnoreCase) >= 0;
+    }
+
+    private static bool ContainsStringIgnoreCase(string[] values, string expected)
+    {
+        if (values == null)
+            return false;
+
+        for (int i = 0; i < values.Length; i++)
+        {
+            if (string.Equals(values[i], expected, StringComparison.OrdinalIgnoreCase))
+                return true;
+        }
+
+        return false;
+    }
+
+    private static bool IsTagDefined(string tag)
+    {
+        if (string.IsNullOrEmpty(tag))
+            return false;
+
+        string[] projectTags = UnityEditorInternal.InternalEditorUtility.tags;
+        for (int i = 0; i < projectTags.Length; i++)
+        {
+            if (string.Equals(projectTags[i], tag, StringComparison.Ordinal))
+                return true;
+        }
+
+        return false;
     }
 
     private static bool ContainsAnyFragment(string value, string[] fragments)
