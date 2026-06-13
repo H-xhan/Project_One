@@ -24,6 +24,36 @@ public class HamsterFullRagdollMotor : MonoBehaviour
     [SerializeField] private float airControlMultiplier = 0.35f;
     [SerializeField] private float controlStrength = 1.0f;
 
+    [Header("Sprint Debug")]
+    [SerializeField] private bool debugSprintLogs = false;
+    [SerializeField] private float sprintLogInterval = 0.5f;
+
+    [Header("Sprint Pivot Assist")]
+    [SerializeField] private bool enableSprintPivotAssist = true;
+    [SerializeField] private float sprintPivotDotThreshold = -0.25f;
+    [SerializeField] private float sprintPivotAccelerationMultiplier = 1.8f;
+    [SerializeField] private float sprintPivotMinPlanarSpeed = 0.5f;
+    [SerializeField] private bool debugSprintPivotLogs = false;
+
+    [Header("Jump")]
+    [SerializeField] private bool enableJump = true;
+    [SerializeField] private KeyCode jumpKey = KeyCode.Space;
+    [SerializeField] private float jumpVelocityChange = 4.5f;
+    [SerializeField] private float jumpCooldown = 0.25f;
+    [SerializeField] private bool requireGroundedForJump = true;
+    [SerializeField] private float jumpBufferTime = 0.12f;
+    [SerializeField] private float jumpCoyoteTime = 0.08f;
+    [SerializeField] private bool cancelDownwardVelocityOnJump = false;
+    [SerializeField] private float maxUpwardVelocityBeforeJump = 0.5f;
+    [SerializeField] private float landingLogMinVerticalSpeed = 2.0f;
+    [SerializeField] private bool debugJumpLogs = false;
+
+    [Header("Jump Visual")]
+    [SerializeField] private HamsterVisualFollower visualFollower;
+    [SerializeField] private bool autoFindVisualFollower = true;
+    [SerializeField] private float jumpVisualIntensity = 1.0f;
+    [SerializeField] private float landingVisualIntensity = 1.0f;
+
     [Header("Upright")]
     [SerializeField] private float uprightStrength = 75f;
     [SerializeField] private float uprightDamping = 10f;
@@ -93,10 +123,22 @@ public class HamsterFullRagdollMotor : MonoBehaviour
     private string _lastStopDragSkipReason = "not evaluated";
     private bool _lastMoveForceApplied;
     private bool _lastStopDragApplied;
+    private float _jumpCooldownTimer;
+    private float _jumpBufferTimer;
+    private float _lastGroundedTime = float.NegativeInfinity;
+    private bool _wasGroundedForJump;
+    private float _lastAirborneVerticalSpeed;
+    private bool _jumpConsumedThisFixedStep;
+    private float _sprintLogTimer;
+    private bool _lastSprintHeld;
+    private float _lastSelectedMaxSpeed;
 
     public bool IsGrounded => _isGrounded;
+    public bool IsSprintHeld => _lastSprintHeld;
     public Vector3 SmoothedMoveWorldDirection => _smoothedMoveWorldDirection;
-    public float CurrentPlanarSpeed => GetPlanarVelocity(hipsBody).magnitude;
+    public Vector3 CurrentPlanarVelocity => GetPlanarVelocity(hipsBody);
+    public float CurrentPlanarSpeed => CurrentPlanarVelocity.magnitude;
+    public float CurrentVerticalVelocity => GetVerticalVelocity(hipsBody);
 
     public void SetControlStrength(float value)
     {
@@ -112,15 +154,23 @@ public class HamsterFullRagdollMotor : MonoBehaviour
             return;
         }
 
+        ResolveJumpVisualFollower();
         CaptureInitialPose();
     }
 
     private void OnEnable()
     {
+        ResolveJumpVisualFollower();
+
         if (captureInitialPoseOnEnable && HasRequiredReferences())
             CaptureInitialPose();
 
         LogMotorEnabledState();
+    }
+
+    private void Update()
+    {
+        CaptureJumpInput();
     }
 
     private void FixedUpdate()
@@ -132,6 +182,8 @@ public class HamsterFullRagdollMotor : MonoBehaviour
             CaptureInitialPose();
 
         float fixedDeltaTime = Time.fixedDeltaTime;
+        TickJumpCooldown(fixedDeltaTime);
+
         Vector2 rawMoveInput = ReadMoveInput();
         _lastRawMoveInput = rawMoveInput;
         _smoothedMoveInput = Vector2.SmoothDamp(
@@ -143,23 +195,30 @@ public class HamsterFullRagdollMotor : MonoBehaviour
             fixedDeltaTime);
 
         _isGrounded = CheckGrounded();
+        UpdateJumpGroundedState();
         _smoothedMoveWorldDirection = BuildMoveDirection(_smoothedMoveInput);
 
-        bool sprintHeld = IsSprintHeld();
+        bool sprintHeld = ReadSprintHeld();
         float maxSpeed = sprintHeld ? maxSprintSpeed : maxWalkSpeed;
         float acceleration = sprintHeld ? sprintAcceleration : walkAcceleration;
         float groundedMultiplier = _isGrounded ? 1f : airControlMultiplier;
         float effectiveControl = Mathf.Max(0f, controlStrength) * groundedMultiplier;
+        bool hasMoveInput = _smoothedMoveInput.sqrMagnitude > InputDeadzone * InputDeadzone;
+        acceleration = ApplySprintPivotAssist(_smoothedMoveWorldDirection, sprintHeld, hasMoveInput, acceleration);
         _lastMaxSpeed = maxSpeed;
+        _lastSelectedMaxSpeed = maxSpeed;
         _lastSelectedAcceleration = acceleration;
         _lastEffectiveControl = effectiveControl;
+        _lastSprintHeld = sprintHeld;
 
+        TryConsumeJump();
+        TickJumpBuffer(fixedDeltaTime);
         ApplyMovementForce(_smoothedMoveWorldDirection, maxSpeed, acceleration, effectiveControl);
         ApplyStopDragAssist(_smoothedMoveInput, effectiveControl);
+        LogSprintState(hasMoveInput);
         ApplyUprightTorque(hipsBody, uprightStrength, uprightDamping);
         ApplyUprightTorque(chestBody, uprightStrength * chestUprightMultiplier, uprightDamping * chestUprightMultiplier);
 
-        bool hasMoveInput = _smoothedMoveInput.sqrMagnitude > InputDeadzone * InputDeadzone;
         bool poseHoldActive = enableStandingPoseHold && _hasInitialPose;
         if (poseHoldActive)
             ApplyStandingPoseHold(hasMoveInput, fixedDeltaTime);
@@ -231,7 +290,7 @@ public class HamsterFullRagdollMotor : MonoBehaviour
         return Vector2.zero;
     }
 
-    private bool IsSprintHeld()
+    private bool ReadSprintHeld()
     {
         if (_legacyInputUnavailable)
             return false;
@@ -246,6 +305,237 @@ public class HamsterFullRagdollMotor : MonoBehaviour
         }
 
         return false;
+    }
+
+    private float ApplySprintPivotAssist(Vector3 moveDirection, bool sprintHeld, bool hasMoveInput, float selectedAcceleration)
+    {
+        if (!enableSprintPivotAssist
+            || !sprintHeld
+            || !hasMoveInput
+            || hipsBody == null
+            || selectedAcceleration <= 0f
+            || moveDirection.sqrMagnitude <= 0.0001f)
+        {
+            return selectedAcceleration;
+        }
+
+        Vector3 planarVelocity = GetPlanarVelocity(hipsBody);
+        float planarSpeed = planarVelocity.magnitude;
+        if (planarSpeed < sprintPivotMinPlanarSpeed)
+            return selectedAcceleration;
+
+        float dot = Vector3.Dot(planarVelocity.normalized, moveDirection.normalized);
+        if (dot > sprintPivotDotThreshold)
+            return selectedAcceleration;
+
+        float assistedAcceleration = selectedAcceleration * sprintPivotAccelerationMultiplier;
+        if (debugSprintPivotLogs)
+        {
+            Debug.Log(
+                $"[HamsterFullRagdollMotor:{gameObject.name}] sprintPivotAssist dot={dot:F2} acceleration={assistedAcceleration:F2} speed={planarSpeed:F2}",
+                this);
+        }
+
+        return assistedAcceleration;
+    }
+
+    private void CaptureJumpInput()
+    {
+        if (!enableJump || _legacyInputUnavailable)
+            return;
+
+        try
+        {
+            if (Input.GetKeyDown(jumpKey))
+                _jumpBufferTimer = Mathf.Max(0f, jumpBufferTime);
+        }
+        catch (System.InvalidOperationException exception)
+        {
+            DisableLegacyInput(exception.Message);
+        }
+    }
+
+    private void TickJumpCooldown(float deltaTime)
+    {
+        _jumpConsumedThisFixedStep = false;
+
+        if (_jumpCooldownTimer > 0f)
+            _jumpCooldownTimer = Mathf.Max(0f, _jumpCooldownTimer - deltaTime);
+    }
+
+    private void TickJumpBuffer(float deltaTime)
+    {
+        if (_jumpBufferTimer > 0f)
+            _jumpBufferTimer = Mathf.Max(0f, _jumpBufferTimer - deltaTime);
+    }
+
+    private void UpdateJumpGroundedState()
+    {
+        float verticalVelocity = GetVerticalVelocity(hipsBody);
+        if (_isGrounded)
+        {
+            _lastGroundedTime = Time.time;
+
+            if (!_wasGroundedForJump)
+                HandleLanding(verticalVelocity);
+
+            _lastAirborneVerticalSpeed = 0f;
+        }
+        else
+        {
+            _lastAirborneVerticalSpeed = Mathf.Max(_lastAirborneVerticalSpeed, Mathf.Max(0f, -verticalVelocity));
+        }
+
+        _wasGroundedForJump = _isGrounded;
+    }
+
+    private void TryConsumeJump()
+    {
+        if (_jumpBufferTimer <= 0f)
+            return;
+
+        if (!enableJump)
+        {
+            LogJumpSkip("disabled");
+            return;
+        }
+
+        Rigidbody jumpBody = hipsBody;
+        if (jumpBody == null)
+        {
+            LogJumpSkip("no body");
+            return;
+        }
+
+        if (jumpBody.isKinematic)
+        {
+            LogJumpSkip("body kinematic");
+            return;
+        }
+
+        if ((jumpBody.constraints & RigidbodyConstraints.FreezePositionY) != 0)
+        {
+            LogJumpSkip("freeze position y");
+            return;
+        }
+
+        if (_jumpCooldownTimer > 0f)
+        {
+            LogJumpSkip($"cooldown remaining={_jumpCooldownTimer:F2}");
+            return;
+        }
+
+        bool canUseCoyote = Time.time - _lastGroundedTime <= Mathf.Max(0f, jumpCoyoteTime);
+        if (requireGroundedForJump && !_isGrounded && !canUseCoyote)
+        {
+            LogJumpSkip("not grounded");
+            return;
+        }
+
+        Vector3 velocityBefore = jumpBody.linearVelocity;
+        if (velocityBefore.y > maxUpwardVelocityBeforeJump)
+        {
+            LogJumpSkip($"upward velocity too high y={velocityBefore.y:F2}");
+            return;
+        }
+
+        if (cancelDownwardVelocityOnJump && velocityBefore.y < 0f)
+        {
+            velocityBefore.y = 0f;
+            jumpBody.linearVelocity = velocityBefore;
+        }
+
+        jumpBody.AddForce(Vector3.up * jumpVelocityChange, ForceMode.VelocityChange);
+        NotifyJumpVisualReaction();
+        _jumpCooldownTimer = Mathf.Max(0f, jumpCooldown);
+        _jumpBufferTimer = 0f;
+        _jumpConsumedThisFixedStep = true;
+
+        if (debugJumpLogs)
+        {
+            Debug.Log(
+                $"[HamsterFullRagdollMotor:{gameObject.name}] Jump applied grounded={_isGrounded} coyote={canUseCoyote} force={jumpVelocityChange:F2} velocityBefore={FormatVector3(velocityBefore)}",
+                this);
+        }
+    }
+
+    private void HandleLanding(float currentVerticalVelocity)
+    {
+        float verticalSpeed = Mathf.Max(_lastAirborneVerticalSpeed, Mathf.Max(0f, -currentVerticalVelocity));
+        NotifyLandingVisualReaction(verticalSpeed);
+
+        if (debugJumpLogs && verticalSpeed >= landingLogMinVerticalSpeed)
+        {
+            Debug.Log(
+                $"[HamsterFullRagdollMotor:{gameObject.name}] Landed verticalSpeed={verticalSpeed:F2} planarSpeed={CurrentPlanarSpeed:F2}",
+                this);
+        }
+    }
+
+    private void LogJumpSkip(string reason)
+    {
+        if (!debugJumpLogs)
+            return;
+
+        Debug.Log($"[HamsterFullRagdollMotor:{gameObject.name}] Jump skipped reason={reason}", this);
+    }
+
+    private void NotifyJumpVisualReaction()
+    {
+        if (visualFollower == null && autoFindVisualFollower)
+            ResolveJumpVisualFollower();
+
+        if (visualFollower == null)
+        {
+            if (debugJumpLogs)
+                Debug.Log($"[HamsterFullRagdollMotor:{gameObject.name}] Jump visual skipped reason=no visualFollower", this);
+
+            return;
+        }
+
+        visualFollower.AddJumpVisualReaction(jumpVisualIntensity);
+    }
+
+    private void NotifyLandingVisualReaction(float verticalSpeed)
+    {
+        if (visualFollower == null && autoFindVisualFollower)
+            ResolveJumpVisualFollower();
+
+        if (visualFollower == null)
+        {
+            if (debugJumpLogs)
+                Debug.Log($"[HamsterFullRagdollMotor:{gameObject.name}] Landing visual skipped reason=no visualFollower", this);
+
+            return;
+        }
+
+        float intensity = Mathf.Clamp01(verticalSpeed / 5f) * landingVisualIntensity;
+        visualFollower.AddLandingVisualReaction(intensity);
+    }
+
+    private void ResolveJumpVisualFollower()
+    {
+        if (!autoFindVisualFollower || visualFollower != null)
+            return;
+
+        visualFollower = GetComponent<HamsterVisualFollower>();
+        if (visualFollower == null && debugJumpLogs)
+            Debug.Log($"[HamsterFullRagdollMotor:{gameObject.name}] HamsterVisualFollower not found on MotorShellBody.", this);
+    }
+
+    private void LogSprintState(bool hasMoveInput)
+    {
+        if (!debugSprintLogs)
+            return;
+
+        _sprintLogTimer -= Time.fixedDeltaTime;
+        if (_sprintLogTimer > 0f)
+            return;
+
+        _sprintLogTimer = Mathf.Max(0.02f, sprintLogInterval);
+        Debug.Log(
+            $"[HamsterFullRagdollMotor:{gameObject.name}] sprintHeld={_lastSprintHeld} selectedMaxSpeed={_lastSelectedMaxSpeed:F2} selectedAcceleration={_lastSelectedAcceleration:F2} planarSpeed={CurrentPlanarSpeed:F2} rawInput={FormatVector2(_lastRawMoveInput)} smoothedInput={FormatVector2(_smoothedMoveInput)} hasMoveInput={hasMoveInput}",
+            this);
     }
 
     private void DisableLegacyInput(string reason)
@@ -521,6 +811,11 @@ public class HamsterFullRagdollMotor : MonoBehaviour
         return velocity;
     }
 
+    private static float GetVerticalVelocity(Rigidbody targetBody)
+    {
+        return targetBody != null ? targetBody.linearVelocity.y : 0f;
+    }
+
     private void LogDebugState(bool hasMoveInput, bool poseHoldActive)
     {
         if (!debugLogs || Time.time < _nextDebugLogTime)
@@ -535,7 +830,7 @@ public class HamsterFullRagdollMotor : MonoBehaviour
             : "hipsBody=<null>";
 
         Debug.Log(
-            $"[HamsterFullRagdollMotor:{gameObject.name}] objectPath={motorPath} hipsBody={GetBodyName(hipsBody)} hipsPath={hipsPath} controlStrength={controlStrength:F2} effectiveControl={_lastEffectiveControl:F2} rawInput={FormatVector2(_lastRawMoveInput)} smoothedInput={FormatVector2(_smoothedMoveInput)} hasMoveInput={hasMoveInput} moveWorldDirection={FormatVector3(_smoothedMoveWorldDirection)} grounded={_isGrounded} maxWalkSpeed={maxWalkSpeed:F2} maxSprintSpeed={maxSprintSpeed:F2} walkAcceleration={walkAcceleration:F2} sprintAcceleration={sprintAcceleration:F2} selectedAcceleration={_lastSelectedAcceleration:F2} appliedAcceleration={_lastAppliedAcceleration:F2} accelerationScale={_lastAccelerationScale:F2} finalForce={FormatVector3(_lastAppliedMoveForce)} moveForceApplied={_lastMoveForceApplied} moveForceSkip='{_lastMoveForceSkipReason}' stopDragAssist={stopDragAssist:F2} airControlMultiplier={airControlMultiplier:F2} stopDragForce={FormatVector3(_lastAppliedStopDragForce)} stopDragApplied={_lastStopDragApplied} stopDragSkip='{_lastStopDragSkipReason}' hipsVelocity={hipsVelocity} planarSpeed={CurrentPlanarSpeed:F2} {hipsState} maxSpeed={_lastMaxSpeed:F2} poseHold={poseHoldActive} yawTarget={_lastPoseTargetYaw:F1}",
+            $"[HamsterFullRagdollMotor:{gameObject.name}] objectPath={motorPath} hipsBody={GetBodyName(hipsBody)} hipsPath={hipsPath} controlStrength={controlStrength:F2} effectiveControl={_lastEffectiveControl:F2} rawInput={FormatVector2(_lastRawMoveInput)} smoothedInput={FormatVector2(_smoothedMoveInput)} hasMoveInput={hasMoveInput} moveWorldDirection={FormatVector3(_smoothedMoveWorldDirection)} grounded={_isGrounded} maxWalkSpeed={maxWalkSpeed:F2} maxSprintSpeed={maxSprintSpeed:F2} walkAcceleration={walkAcceleration:F2} sprintAcceleration={sprintAcceleration:F2} selectedAcceleration={_lastSelectedAcceleration:F2} appliedAcceleration={_lastAppliedAcceleration:F2} accelerationScale={_lastAccelerationScale:F2} finalForce={FormatVector3(_lastAppliedMoveForce)} moveForceApplied={_lastMoveForceApplied} moveForceSkip='{_lastMoveForceSkipReason}' stopDragAssist={stopDragAssist:F2} airControlMultiplier={airControlMultiplier:F2} stopDragForce={FormatVector3(_lastAppliedStopDragForce)} stopDragApplied={_lastStopDragApplied} stopDragSkip='{_lastStopDragSkipReason}' hipsVelocity={hipsVelocity} planarSpeed={CurrentPlanarSpeed:F2} verticalVelocity={GetVerticalVelocity(hipsBody):F2} enableJump={enableJump} jumpBuffer={_jumpBufferTimer:F2} jumpCooldown={_jumpCooldownTimer:F2} jumpConsumed={_jumpConsumedThisFixedStep} {hipsState} maxSpeed={_lastMaxSpeed:F2} poseHold={poseHoldActive} yawTarget={_lastPoseTargetYaw:F1}",
             this);
     }
 
@@ -623,6 +918,18 @@ public class HamsterFullRagdollMotor : MonoBehaviour
         stopDragAssist = Mathf.Max(0f, stopDragAssist);
         airControlMultiplier = Mathf.Max(0f, airControlMultiplier);
         controlStrength = Mathf.Max(0f, controlStrength);
+        sprintLogInterval = Mathf.Max(0.02f, sprintLogInterval);
+        sprintPivotDotThreshold = Mathf.Clamp(sprintPivotDotThreshold, -1f, 1f);
+        sprintPivotAccelerationMultiplier = Mathf.Max(1f, sprintPivotAccelerationMultiplier);
+        sprintPivotMinPlanarSpeed = Mathf.Max(0f, sprintPivotMinPlanarSpeed);
+        jumpVelocityChange = Mathf.Max(0f, jumpVelocityChange);
+        jumpCooldown = Mathf.Max(0f, jumpCooldown);
+        jumpBufferTime = Mathf.Max(0f, jumpBufferTime);
+        jumpCoyoteTime = Mathf.Max(0f, jumpCoyoteTime);
+        maxUpwardVelocityBeforeJump = Mathf.Max(0f, maxUpwardVelocityBeforeJump);
+        landingLogMinVerticalSpeed = Mathf.Max(0f, landingLogMinVerticalSpeed);
+        jumpVisualIntensity = Mathf.Max(0f, jumpVisualIntensity);
+        landingVisualIntensity = Mathf.Max(0f, landingVisualIntensity);
         uprightStrength = Mathf.Max(0f, uprightStrength);
         uprightDamping = Mathf.Max(0f, uprightDamping);
         chestUprightMultiplier = Mathf.Max(0f, chestUprightMultiplier);

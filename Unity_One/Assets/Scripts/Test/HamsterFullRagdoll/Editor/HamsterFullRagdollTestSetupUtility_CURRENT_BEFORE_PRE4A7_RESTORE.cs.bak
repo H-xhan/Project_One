@@ -133,30 +133,32 @@ public static class HamsterFullRagdollTestSetupUtility
     private const float Phase4a6LandingPitchDegrees = 1.0f;
     private const float Phase4a6LandingVisualDuration = 0.14f;
     private const float Phase4a6JumpVisualReturnSmoothTime = 0.10f;
-    private const float Phase4aMotorOnlyMaxWalkSpeed = 1.5f;
-    private const float Phase4aMotorOnlyMaxSprintSpeed = 2.2f;
-    private const float Phase4aMotorOnlyWalkAcceleration = 15f;
-    private const float Phase4aMotorOnlySprintAcceleration = 12f;
-    private const float Phase4aMotorOnlyInputSmoothTime = 0.12f;
-    private const float Phase4aMotorOnlyStopDragAssist = 1.2f;
-    private const float Phase4aMotorOnlyControlStrength = 1.0f;
-    private const float Phase4aMotorOnlyJumpVelocityChange = 4.0f;
-    private const float Phase4aMotorOnlyJumpCooldown = 0.25f;
-    private const float Phase4aMotorOnlyVisualLocalOffsetY = 0.10f;
-    private const float Phase4aMotorOnlyIdleVisualYOffset = -0.03f;
-    private const float Phase4aMotorOnlyMovingVisualYOffset = 0.10f;
-    private const float Phase4aMotorOnlySpeedForMovingVisualYOffset = 0.60f;
-    private const float Phase4aMotorOnlyVisualHeightSmoothTime = 0.08f;
-    private const float Phase4aMotorOnlySpeedForMaxLean = 0.9f;
-    private const float Phase4aMotorOnlyMaxForwardLeanDegrees = 10f;
-    private const float Phase4aMotorOnlyMaxSideLeanDegrees = 14f;
-    private const float Phase4aMotorOnlyLeanSmoothTime = 0.12f;
-    private const float Phase4aMotorOnlyMaxBackLag = 0.08f;
-    private const float Phase4aMotorOnlyMaxSideLag = 0.03f;
-    private const float Phase4aMotorOnlyLagSmoothTime = 0.10f;
-    private const float Phase4aMotorOnlyJumpStretchAmount = 0.03f;
-    private const float Phase4aMotorOnlyLandingSquashAmount = 0f;
-    private const float Phase4aMotorOnlyLandingPitchDegrees = 0f;
+    private const float Phase4a7MaxWalkSpeed = 1.45f;
+    private const float Phase4a7MaxSprintSpeed = 2.15f;
+    private const float Phase4a7WalkAcceleration = 11f;
+    private const float Phase4a7SprintAcceleration = 13f;
+    private const float Phase4a7InputSmoothTime = 0.13f;
+    private const float Phase4a7StopDragAssist = 0.6f;
+    private const float Phase4a7ControlStrength = 0.82f;
+    private const float Phase4a7SprintPivotAccelerationMultiplier = 1.25f;
+    private const float Phase4a7JumpVelocityChange = 4.0f;
+    private const float Phase4a7JumpCooldown = 0.25f;
+    private const float Phase4a7VisualLocalOffsetY = 0.10f;
+    private const float Phase4a7IdleVisualYOffset = -0.03f;
+    private const float Phase4a7MovingVisualYOffset = 0.10f;
+    private const float Phase4a7SpeedForMovingVisualYOffset = 0.60f;
+    private const float Phase4a7VisualHeightSmoothTime = 0.08f;
+    private const float Phase4a7SpeedForMaxLean = 0.75f;
+    private const float Phase4a7MaxForwardLeanDegrees = 20f;
+    private const float Phase4a7MaxSideLeanDegrees = 28f;
+    private const float Phase4a7LeanSmoothTime = 0.16f;
+    private const float Phase4a7MaxBackLag = 0.16f;
+    private const float Phase4a7MaxSideLag = 0.07f;
+    private const float Phase4a7LagSmoothTime = 0.14f;
+    private const float Phase4a7JumpStretchAmount = 0.05f;
+    private const float Phase4a7LandingSquashAmount = 0.03f;
+    private const float Phase4a7LandingPitchDegrees = 1.0f;
+    private const float Phase4a7JumpVisualReturnSmoothTime = 0.12f;
     private const float VisualGroundOffsetPresetY = 0.10f;
     private const float VisualGroundOffsetPreserveThresholdY = 0.05f;
     private const string Phase2BoingVisualName = "Boing_Visual";
@@ -1105,19 +1107,19 @@ public static class HamsterFullRagdollTestSetupUtility
         LogPhase4a6SprintRunHeightSpeedTuningPresetNextTest();
     }
 
-    [MenuItem("Project ONE/Hamster Full Ragdoll/Apply Phase 4a Motor Only Diagnostic Reset")]
-    private static void ApplyPhase4aMotorOnlyDiagnosticReset()
+    [MenuItem("Project ONE/Hamster Full Ragdoll/Apply Phase 4a-7 Ragdoll Feel Locomotion Preset")]
+    private static void ApplyPhase4a7RagdollFeelLocomotionPreset()
     {
         Scene activeScene;
         if (!TryGetCurrentDestinationTestScene(out activeScene))
             return;
 
-        if (!ApplyPhase4aMotorOnlyDiagnosticReset(activeScene))
+        if (!ApplyPhase4a7RagdollFeelLocomotionPreset(activeScene))
             return;
 
         EditorSceneManager.MarkSceneDirty(activeScene);
-        Debug.Log($"{LogPrefix} Applied Phase 4a Motor Only Diagnostic Reset to current scene objects only. Scene was marked dirty but not saved.");
-        LogPhase4aMotorOnlyDiagnosticResetNextTest();
+        Debug.Log($"{LogPrefix} Applied Phase 4a-7 Ragdoll Feel Locomotion Preset to current scene objects only. Scene was marked dirty but not saved.");
+        LogPhase4a7RagdollFeelLocomotionPresetNextTest();
     }
 
     [MenuItem("Project ONE/Hamster Full Ragdoll/Configure Phase 2 Tail Ear Boing")]
@@ -3355,7 +3357,7 @@ public static class HamsterFullRagdollTestSetupUtility
         Debug.Log($"{LogPrefix} Phase 4a-6 HamsterVisualFollower preset applied. Existing wobble, impact, tail, ear, and Boing values were not overwritten.");
     }
 
-    private static bool ApplyPhase4aMotorOnlyDiagnosticReset(Scene scene)
+    private static bool ApplyPhase4a7RagdollFeelLocomotionPreset(Scene scene)
     {
         if (!scene.IsValid()
             || !string.Equals(NormalizeAssetPath(scene.path), SceneDestinationPath, StringComparison.OrdinalIgnoreCase))
@@ -3370,6 +3372,9 @@ public static class HamsterFullRagdollTestSetupUtility
             Debug.LogWarning($"{LogPrefix} {JointFreeShellRootName} not found. Run Create Phase 1 Joint-Free Motor Shell first.");
             return false;
         }
+
+        if (!shellRoot.activeInHierarchy)
+            Debug.LogWarning($"{LogPrefix} {JointFreeShellRootName} is inactive. Phase 4a-7 does not change GameObject active state.");
 
         Transform bodyTransform = FindDirectChild(shellRoot.transform, JointFreeShellBodyName);
         if (bodyTransform == null)
@@ -3408,172 +3413,118 @@ public static class HamsterFullRagdollTestSetupUtility
 
         Animator visualAnimator = visualRoot.GetComponentInChildren<Animator>(true);
         if (visualAnimator == null)
-            Debug.LogWarning($"{LogPrefix} No Animator was found under {JointFreeShellVisualRootName}. Motor-only diagnostic can still isolate Rigidbody/Motor movement.");
+        {
+            Debug.LogError($"{LogPrefix} First Animator under {JointFreeShellVisualRootName} was not found.");
+            return false;
+        }
 
         Component clipStateDriver = GetComponentByTypeName(bodyTransform.gameObject, "HamsterVisualClipStateDriver");
-        Component proceduralPoseController = GetComponentByTypeName(bodyTransform.gameObject, "HamsterProceduralPoseController");
-
-        SetGameObjectActive(shellRoot, true, JointFreeShellRootName);
-        GameObject existingSkinnedInstance = FindDestinationPrefabInstance(scene);
-        if (existingSkinnedInstance != null)
-            SetGameObjectActive(existingSkinnedInstance, false, TestPrefabName);
+        if (clipStateDriver == null)
+            Debug.LogWarning($"{LogPrefix} HamsterVisualClipStateDriver not found on MotorShellBody. Nothing to disable.");
         else
-            Debug.LogWarning($"{LogPrefix} {TestPrefabName} scene instance was not found. Confirm the legacy skinned test object is inactive manually if present.");
-
-        ApplyPhase4aMotorOnlyDiagnosticRigidbody(bodyRigidbody);
-        SetBehaviourEnabled(motor, true, "HamsterFullRagdollMotor");
-        SetBehaviourEnabled(visualFollower, true, "HamsterVisualFollower");
-
-        if (clipStateDriver != null)
             SetBehaviourEnabled(clipStateDriver, false, "HamsterVisualClipStateDriver");
+
+        Component proceduralPoseController = GetComponentByTypeName(bodyTransform.gameObject, "HamsterProceduralPoseController");
+        if (proceduralPoseController == null)
+            Debug.LogWarning($"{LogPrefix} HamsterProceduralPoseController not found on MotorShellBody. Phase 4a-7 ragdoll-feel pose assist cannot be enabled automatically.");
         else
-            Debug.Log($"{LogPrefix} HamsterVisualClipStateDriver not found on MotorShellBody; no clip-state influence to disable.");
+            SetBehaviourEnabled(proceduralPoseController, true, "HamsterProceduralPoseController");
 
-        if (proceduralPoseController != null)
-            SetBehaviourEnabled(proceduralPoseController, false, "HamsterProceduralPoseController");
-        else
-            Debug.LogWarning($"{LogPrefix} HamsterProceduralPoseController not found on MotorShellBody.");
+        SetBehaviourEnabled(visualFollower, true, "HamsterVisualFollower");
+        SetPhase4a7AnimatorEnabledAndRootMotion(visualAnimator);
 
-        SetPhase4aMotorOnlyDiagnosticAnimatorState(visualAnimator);
-        ApplyPhase4aMotorOnlyDiagnosticMotorSerializedFields(motor, bodyRigidbody, visualFollower, scene);
-        ApplyPhase4aMotorOnlyDiagnosticVisualFollowerSerializedFields(visualFollower, bodyRigidbody, visualRoot, visualAnimator);
+        ApplyPhase4a7MotorSerializedFields(motor, bodyRigidbody);
+        ApplyPhase4a7VisualFollowerSerializedFields(visualFollower, bodyRigidbody, visualRoot, visualAnimator, motor);
 
-        EditorUtility.SetDirty(shellRoot);
         EditorUtility.SetDirty(bodyTransform.gameObject);
-        EditorUtility.SetDirty(visualRoot.gameObject);
-        EditorUtility.SetDirty(bodyRigidbody);
         EditorUtility.SetDirty(motor);
         EditorUtility.SetDirty(visualFollower);
-        if (clipStateDriver != null)
-            EditorUtility.SetDirty(clipStateDriver);
-        if (proceduralPoseController != null)
-            EditorUtility.SetDirty(proceduralPoseController);
-        if (visualAnimator != null)
-            EditorUtility.SetDirty(visualAnimator);
+        EditorUtility.SetDirty(visualAnimator);
 
-        Debug.Log($"{LogPrefix} Phase 4a Motor Only Diagnostic Reset applied to scene instance: shell={GetHierarchyPath(shellRoot.transform)} body={GetHierarchyPath(bodyTransform)} visualRoot={GetHierarchyPath(visualRoot)}");
-        Debug.LogWarning($"{LogPrefix} AnimatorController, AnimationClips, FBX, prefab assets, production runtime scripts, Boing, and Impact responder values were not modified.");
+        Debug.Log($"{LogPrefix} Phase 4a-7 preset applied to scene instance: body={GetHierarchyPath(bodyTransform)} visualRoot={GetHierarchyPath(visualRoot)} animator={GetHierarchyPath(visualAnimator.transform)}");
+        Debug.LogWarning($"{LogPrefix} AnimatorController asset was not modified. AnimationClip, FBX, prefab, scene save, Rigidbody movement, and production code were not modified.");
         return true;
     }
 
-    private static void ApplyPhase4aMotorOnlyDiagnosticRigidbody(Rigidbody bodyRigidbody)
-    {
-        if (bodyRigidbody == null)
-            return;
-
-        Undo.RecordObject(bodyRigidbody, "Apply Phase 4a Motor Only Diagnostic Rigidbody Reset");
-        RigidbodyConstraints constraintsBefore = bodyRigidbody.constraints;
-        bodyRigidbody.isKinematic = false;
-        bodyRigidbody.useGravity = true;
-        bodyRigidbody.detectCollisions = true;
-        bodyRigidbody.interpolation = RigidbodyInterpolation.Interpolate;
-        bodyRigidbody.collisionDetectionMode = CollisionDetectionMode.ContinuousDynamic;
-        bodyRigidbody.constraints = MotorShellRotationStabilityConstraints;
-        EditorUtility.SetDirty(bodyRigidbody);
-
-        Debug.Log($"{LogPrefix} Phase 4a Motor Only Rigidbody reset applied. Constraints {constraintsBefore} -> {bodyRigidbody.constraints}. No Rigidbody velocities were modified.");
-    }
-
-    private static void ApplyPhase4aMotorOnlyDiagnosticMotorSerializedFields(
+    private static void ApplyPhase4a7MotorSerializedFields(
         HamsterFullRagdollMotor motor,
-        Rigidbody bodyRigidbody,
-        HamsterVisualFollower visualFollower,
-        Scene scene)
+        Rigidbody bodyRigidbody)
     {
-        Undo.RecordObject(motor, "Apply Phase 4a Motor Only Diagnostic Motor Preset");
+        Undo.RecordObject(motor, "Apply Phase 4a-7 Motor Preset");
         SerializedObject motorObject = new SerializedObject(motor);
 
-        AssignObjectField(motorObject, "hipsBody", bodyRigidbody, required: true);
-        AssignObjectField(motorObject, "chestBody", bodyRigidbody, required: true);
+        SetFloatField(motorObject, "maxWalkSpeed", Phase4a7MaxWalkSpeed);
+        SetFloatField(motorObject, "maxSprintSpeed", Phase4a7MaxSprintSpeed);
+        SetFloatField(motorObject, "walkAcceleration", Phase4a7WalkAcceleration);
+        SetFloatField(motorObject, "sprintAcceleration", Phase4a7SprintAcceleration);
+        SetFloatField(motorObject, "inputSmoothTime", Phase4a7InputSmoothTime);
+        SetFloatField(motorObject, "stopDragAssist", Phase4a7StopDragAssist);
+        SetFloatField(motorObject, "controlStrength", Phase4a7ControlStrength);
 
-        Transform assignedCamera = GetObjectReference<Transform>(motorObject, "cameraTransform");
-        if (assignedCamera == null)
-        {
-            Camera mainCamera = Camera.main;
-            AssignObjectField(motorObject, "cameraTransform", mainCamera != null ? mainCamera.transform : null, required: false);
-            if (mainCamera != null)
-                Debug.Log($"{LogPrefix} Assigned diagnostic cameraTransform from Main Camera: {GetHierarchyPath(mainCamera.transform)}");
-            else
-                Debug.LogWarning($"{LogPrefix} Main Camera was not found. cameraTransform remains empty.");
-        }
-        else
-        {
-            Debug.Log($"{LogPrefix} Existing cameraTransform preserved: {GetHierarchyPath(assignedCamera)}");
-        }
-
-        AssignGroundMask(motorObject, ResolvePhase4aMotorOnlyDiagnosticGroundMask(scene));
-        SetFloatField(motorObject, "maxWalkSpeed", Phase4aMotorOnlyMaxWalkSpeed);
-        SetFloatField(motorObject, "maxSprintSpeed", Phase4aMotorOnlyMaxSprintSpeed);
-        SetFloatField(motorObject, "walkAcceleration", Phase4aMotorOnlyWalkAcceleration);
-        SetFloatField(motorObject, "sprintAcceleration", Phase4aMotorOnlySprintAcceleration);
-        SetFloatField(motorObject, "inputSmoothTime", Phase4aMotorOnlyInputSmoothTime);
-        SetFloatField(motorObject, "stopDragAssist", Phase4aMotorOnlyStopDragAssist);
-        SetFloatField(motorObject, "controlStrength", Phase4aMotorOnlyControlStrength);
-        SetBoolField(motorObject, "enableSprintPivotAssist", false);
+        SetBoolField(motorObject, "enableSprintPivotAssist", true);
+        SetFloatField(motorObject, "sprintPivotDotThreshold", Phase4aSprintPivotDotThreshold);
+        SetFloatField(motorObject, "sprintPivotAccelerationMultiplier", Phase4a7SprintPivotAccelerationMultiplier);
+        SetFloatField(motorObject, "sprintPivotMinPlanarSpeed", Phase4aSprintPivotMinPlanarSpeed);
         SetBoolField(motorObject, "debugSprintLogs", true);
-        SetBoolField(motorObject, "debugSprintPivotLogs", false);
-        SetBoolField(motorObject, "enableJump", true);
-        SetFloatField(motorObject, "jumpVelocityChange", Phase4aMotorOnlyJumpVelocityChange);
-        SetFloatField(motorObject, "jumpCooldown", Phase4aMotorOnlyJumpCooldown);
+        SetBoolField(motorObject, "debugSprintPivotLogs", true);
+
+        SetFloatField(motorObject, "jumpVelocityChange", Phase4a7JumpVelocityChange);
+        SetFloatField(motorObject, "jumpCooldown", Phase4a7JumpCooldown);
         SetBoolField(motorObject, "requireGroundedForJump", true);
-        SetBoolField(motorObject, "debugJumpLogs", true);
-        SetBoolField(motorObject, "debugLogs", true);
-        SetBoolField(motorObject, "drawDebugGizmos", true);
-        AssignObjectField(motorObject, "visualFollower", visualFollower, required: false);
-        SetBoolField(motorObject, "autoFindVisualFollower", true);
 
         motorObject.ApplyModifiedProperties();
         EditorUtility.SetDirty(motor);
-        Debug.Log($"{LogPrefix} Phase 4a Motor Only Diagnostic Motor preset applied. Expected logs: selectedMaxSpeed around {Phase4aMotorOnlyMaxSprintSpeed:F1}, selectedAcceleration around {Phase4aMotorOnlySprintAcceleration:F0}.");
+        Debug.Log($"{LogPrefix} Phase 4a-7 Motor preset applied. Rigidbody values were not modified. body={GetHierarchyPath(bodyRigidbody.transform)}");
     }
 
-    private static void ApplyPhase4aMotorOnlyDiagnosticVisualFollowerSerializedFields(
+    private static void ApplyPhase4a7VisualFollowerSerializedFields(
         HamsterVisualFollower visualFollower,
         Rigidbody bodyRigidbody,
         Transform visualRoot,
-        Animator visualAnimator)
+        Animator visualAnimator,
+        HamsterFullRagdollMotor motor)
     {
-        Undo.RecordObject(visualFollower, "Apply Phase 4a Motor Only Diagnostic Visual Follower Preset");
+        Undo.RecordObject(visualFollower, "Apply Phase 4a-7 Visual Follower Preset");
         SerializedObject followerObject = new SerializedObject(visualFollower);
 
         AssignObjectField(followerObject, "targetBody", bodyRigidbody, required: true);
         AssignObjectField(followerObject, "visualRoot", visualRoot, required: true);
-        AssignObjectField(followerObject, "visualAnimator", visualAnimator, required: false);
-
-        SetVector3YField(followerObject, "visualLocalOffset", Phase4aMotorOnlyVisualLocalOffsetY);
-        SetBoolField(followerObject, "enableSpeedBasedVisualHeight", true);
-        SetFloatField(followerObject, "idleVisualYOffset", Phase4aMotorOnlyIdleVisualYOffset);
-        SetFloatField(followerObject, "movingVisualYOffset", Phase4aMotorOnlyMovingVisualYOffset);
-        SetFloatField(followerObject, "speedForMovingVisualYOffset", Phase4aMotorOnlySpeedForMovingVisualYOffset);
-        SetFloatField(followerObject, "visualHeightSmoothTime", Phase4aMotorOnlyVisualHeightSmoothTime);
-
-        SetBoolField(followerObject, "enableClipStateHeightOffsets", false);
-        SetBoolField(followerObject, "autoUseVisualAnimatorForHeight", false);
-        SetBoolField(followerObject, "debugClipHeightLogs", false);
+        AssignObjectField(followerObject, "visualAnimator", visualAnimator, required: true);
 
         SetBoolField(followerObject, "enableBodyLean", true);
+        SetFloatField(followerObject, "speedForMaxLean", Phase4a7SpeedForMaxLean);
+        SetFloatField(followerObject, "maxForwardLeanDegrees", Phase4a7MaxForwardLeanDegrees);
+        SetFloatField(followerObject, "maxSideLeanDegrees", Phase4a7MaxSideLeanDegrees);
+        SetFloatField(followerObject, "leanSmoothTime", Phase4a7LeanSmoothTime);
+
         SetBoolField(followerObject, "enableLocalLag", true);
-        SetFloatField(followerObject, "speedForMaxLean", Phase4aMotorOnlySpeedForMaxLean);
-        SetFloatField(followerObject, "maxForwardLeanDegrees", Phase4aMotorOnlyMaxForwardLeanDegrees);
-        SetFloatField(followerObject, "maxSideLeanDegrees", Phase4aMotorOnlyMaxSideLeanDegrees);
-        SetFloatField(followerObject, "leanSmoothTime", Phase4aMotorOnlyLeanSmoothTime);
-        SetFloatField(followerObject, "maxBackLag", Phase4aMotorOnlyMaxBackLag);
-        SetFloatField(followerObject, "maxSideLag", Phase4aMotorOnlyMaxSideLag);
-        SetFloatField(followerObject, "lagSmoothTime", Phase4aMotorOnlyLagSmoothTime);
+        SetFloatField(followerObject, "maxBackLag", Phase4a7MaxBackLag);
+        SetFloatField(followerObject, "maxSideLag", Phase4a7MaxSideLag);
+        SetFloatField(followerObject, "lagSmoothTime", Phase4a7LagSmoothTime);
+
+        SetVector3YField(followerObject, "visualLocalOffset", Phase4a7VisualLocalOffsetY);
+        SetBoolField(followerObject, "enableSpeedBasedVisualHeight", true);
+        SetFloatField(followerObject, "idleVisualYOffset", Phase4a7IdleVisualYOffset);
+        SetFloatField(followerObject, "movingVisualYOffset", Phase4a7MovingVisualYOffset);
+        SetFloatField(followerObject, "speedForMovingVisualYOffset", Phase4a7SpeedForMovingVisualYOffset);
+        SetFloatField(followerObject, "visualHeightSmoothTime", Phase4a7VisualHeightSmoothTime);
 
         SetBoolField(followerObject, "enableJumpVisualReaction", true);
-        SetFloatField(followerObject, "jumpStretchAmount", Phase4aMotorOnlyJumpStretchAmount);
-        SetFloatField(followerObject, "landingSquashAmount", Phase4aMotorOnlyLandingSquashAmount);
-        SetFloatField(followerObject, "landingPitchDegrees", Phase4aMotorOnlyLandingPitchDegrees);
+        SetFloatField(followerObject, "jumpStretchAmount", Phase4a7JumpStretchAmount);
+        SetFloatField(followerObject, "landingSquashAmount", Phase4a7LandingSquashAmount);
+        SetFloatField(followerObject, "landingPitchDegrees", Phase4a7LandingPitchDegrees);
+        SetFloatField(followerObject, "jumpVisualReturnSmoothTime", Phase4a7JumpVisualReturnSmoothTime);
 
-        SetBoolField(followerObject, "updateAnimator", false);
+        AssignObjectField(followerObject, "motorStateSource", motor, required: false);
+        SetBoolField(followerObject, "autoFindMotorStateSource", true);
+        SetBoolField(followerObject, "updateAnimator", true);
         SetBoolField(followerObject, "disableAnimatorRootMotion", true);
-        SetBoolField(followerObject, "debugLogs", true);
-        SetBoolField(followerObject, "drawGizmos", true);
+        SetStringField(followerObject, "speedParameter", VisualAnimatorSpeedParameter);
+        SetStringField(followerObject, "move01Parameter", VisualAnimatorMove01Parameter);
 
         followerObject.ApplyModifiedProperties();
         EditorUtility.SetDirty(visualFollower);
-        Debug.Log($"{LogPrefix} Phase 4a Motor Only Diagnostic HamsterVisualFollower preset applied. Tail/Ear Boing and Impact values were not overwritten.");
+        Debug.Log($"{LogPrefix} Phase 4a-7 HamsterVisualFollower ragdoll-feel preset applied. Tail/Ear Boing and Impact values were not overwritten.");
     }
 
     private static Transform FindPhase4a4VisualPreviewRoot(Transform bodyTransform, HamsterVisualFollower visualFollower)
@@ -3857,16 +3808,16 @@ public static class HamsterFullRagdollTestSetupUtility
         Debug.Log($"{LogPrefix} Visual Animator enabled={visualAnimator.enabled} applyRootMotion={visualAnimator.applyRootMotion}");
     }
 
-    private static void SetPhase4aMotorOnlyDiagnosticAnimatorState(Animator visualAnimator)
+    private static void SetPhase4a7AnimatorEnabledAndRootMotion(Animator visualAnimator)
     {
         if (visualAnimator == null)
             return;
 
-        Undo.RecordObject(visualAnimator, "Apply Phase 4a Motor Only Diagnostic Visual Animator State");
-        visualAnimator.enabled = false;
+        Undo.RecordObject(visualAnimator, "Apply Phase 4a-7 Visual Animator Preset");
+        visualAnimator.enabled = true;
         visualAnimator.applyRootMotion = false;
         EditorUtility.SetDirty(visualAnimator);
-        Debug.Log($"{LogPrefix} Visual Animator diagnostic state: enabled={visualAnimator.enabled} applyRootMotion={visualAnimator.applyRootMotion}");
+        Debug.Log($"{LogPrefix} Visual Animator enabled={visualAnimator.enabled} applyRootMotion={visualAnimator.applyRootMotion}");
     }
 
     private static Component GetOrAddComponentByTypeName(GameObject target, string typeName)
@@ -5098,20 +5049,19 @@ public static class HamsterFullRagdollTestSetupUtility
         Debug.LogWarning($"{LogPrefix} This menu does not save the scene. Save manually only after the test passes.");
     }
 
-    private static void LogPhase4aMotorOnlyDiagnosticResetNextTest()
+    private static void LogPhase4a7RagdollFeelLocomotionPresetNextTest()
     {
         Debug.Log($"{LogPrefix} Unity test order:");
-        Debug.Log($"{LogPrefix} 1. Apply Phase 4a Motor Only Diagnostic Reset.");
+        Debug.Log($"{LogPrefix} 1. Apply Phase 4a-7 Ragdoll Feel Locomotion Preset.");
         Debug.Log($"{LogPrefix} 2. Run Validate Current Test Scene.");
         Debug.Log($"{LogPrefix} 3. Press Play.");
-        Debug.Log($"{LogPrefix} 4. Press W.");
-        Debug.Log($"{LogPrefix} 5. In Console, confirm rawInput / hasMoveInput / selectedAcceleration / finalForce / moveForceApplied / planarSpeed.");
-        Debug.Log($"{LogPrefix} 6. Press Shift+W.");
-        Debug.Log($"{LogPrefix} 7. Press Space.");
-        Debug.Log($"{LogPrefix} 8. If planarSpeed increases, Motor is working.");
-        Debug.Log($"{LogPrefix} 9. If planarSpeed increases but visual does not move, isolate HamsterVisualFollower.");
-        Debug.Log($"{LogPrefix} 10. If rawInput exists but planarSpeed stays 0, isolate Rigidbody or Motor references.");
-        Debug.LogWarning($"{LogPrefix} This menu does not save the scene. Save manually only after the diagnostic pass is understood.");
+        Debug.Log($"{LogPrefix} 4. W move: confirm ragdoll feel and visual lag.");
+        Debug.Log($"{LogPrefix} 5. Shift+W: confirm Sprint remains but does not feel too rigid.");
+        Debug.Log($"{LogPrefix} 6. Shift+W reverse direction: check hesitation and ground sinking.");
+        Debug.Log($"{LogPrefix} 7. Space / Shift+Space: confirm jump and landing do not sink.");
+        Debug.Log($"{LogPrefix} 8. Confirm Tail/Ear Boing, Impact, and Visual height remain stable.");
+        Debug.Log($"{LogPrefix} 9. After pass, turn off debugSprintLogs and debugSprintPivotLogs.");
+        Debug.LogWarning($"{LogPrefix} This menu does not save the scene. Save manually only after the test passes.");
     }
 
     private static bool ConfigurePhase2TailEarBoing(Scene scene)
@@ -6372,7 +6322,7 @@ public static class HamsterFullRagdollTestSetupUtility
         Debug.Log($"{LogPrefix} Joint-Free Motor Shell found: {GetHierarchyPath(shellRoot.transform)}");
         Debug.Log($"{LogPrefix} {JointFreeShellRootName} activeSelf={shellRoot.activeSelf} activeInHierarchy={shellRoot.activeInHierarchy}");
         if (!shellRoot.activeInHierarchy)
-            Debug.LogWarning($"{LogPrefix} {JointFreeShellRootName} should be active for Phase 4a-6 shell testing.");
+            Debug.LogWarning($"{LogPrefix} {JointFreeShellRootName} should be active for Phase 4a-7 shell testing.");
 
         Transform bodyTransform = FindDirectChild(shellRoot.transform, JointFreeShellBodyName);
         if (bodyTransform == null)
@@ -6384,7 +6334,6 @@ public static class HamsterFullRagdollTestSetupUtility
         Rigidbody bodyRigidbody = bodyTransform.GetComponent<Rigidbody>();
         BoxCollider boxCollider = bodyTransform.GetComponent<BoxCollider>();
         HamsterFullRagdollMotor motor = bodyTransform.GetComponent<HamsterFullRagdollMotor>();
-        bool motorOnlyDiagnosticPreset = false;
 
         if (bodyRigidbody == null)
             Debug.LogError($"{LogPrefix} MotorShellBody Rigidbody is missing.");
@@ -6424,7 +6373,6 @@ public static class HamsterFullRagdollTestSetupUtility
             Rigidbody chestBody = GetObjectReference<Rigidbody>(motorObject, "chestBody");
             int groundMask = GetIntField(motorObject, "groundMask");
             float controlStrength;
-            motorOnlyDiagnosticPreset = IsPhase4aMotorOnlyDiagnosticMotorPreset(motorObject);
 
             if (hipsBody != bodyRigidbody)
                 Debug.LogError($"{LogPrefix} Shell hipsBody should reference MotorShellBody Rigidbody.");
@@ -6442,7 +6390,7 @@ public static class HamsterFullRagdollTestSetupUtility
                 Debug.LogWarning($"{LogPrefix} Shell controlStrength field was not found.");
 
             ValidateShellGroundMask(scene, bodyTransform.gameObject, groundMask);
-            ValidatePhase4aMotorLocomotionState(motor, motorObject, motorOnlyDiagnosticPreset);
+            ValidatePhase4aMotorLocomotionState(motor, motorObject);
         }
 
         Transform visualRoot = FindDirectChild(shellRoot.transform, JointFreeShellVisualRootName);
@@ -6451,12 +6399,8 @@ public static class HamsterFullRagdollTestSetupUtility
         else
             Debug.Log($"{LogPrefix} {JointFreeShellVisualRootName} exists as visual-only placeholder.");
 
-        ValidateShellVisualFollower(shellRoot, bodyTransform, bodyRigidbody, boxCollider, existingSkinnedInstance, motorOnlyDiagnosticPreset);
-        ValidatePhase4a4ShellSafety(shellRoot, bodyTransform, existingSkinnedInstance);
-        if (motorOnlyDiagnosticPreset)
-            ValidatePhase4aMotorOnlyDiagnosticResetState(scene, shellRoot, bodyTransform, bodyRigidbody, motor, visualRoot, existingSkinnedInstance);
-        else
-            Debug.Log($"{LogPrefix} Phase 4a Motor Only Diagnostic Reset validation skipped. Current motor values do not match the diagnostic preset signature.");
+        ValidateShellVisualFollower(shellRoot, bodyTransform, bodyRigidbody, boxCollider, existingSkinnedInstance);
+        ValidatePhase4a7ShellSafety(shellRoot, bodyTransform, existingSkinnedInstance);
 
         if (existingSkinnedInstance != null && existingSkinnedInstance.activeInHierarchy)
             Debug.LogWarning($"{LogPrefix} Existing skinned ragdoll test instance is still active; disable it when testing shell only.");
@@ -6518,363 +6462,32 @@ public static class HamsterFullRagdollTestSetupUtility
         }
     }
 
-    private static void ValidatePhase4aMotorLocomotionState(
-        HamsterFullRagdollMotor motor,
-        SerializedObject motorObject,
-        bool motorOnlyDiagnosticPreset)
+    private static void ValidatePhase4aMotorLocomotionState(HamsterFullRagdollMotor motor, SerializedObject motorObject)
     {
         if (motor == null || motorObject == null)
             return;
 
         Debug.Log($"{LogPrefix} Phase 4a Motor read-only state: IsGrounded={motor.IsGrounded} IsSprintHeld={motor.IsSprintHeld} CurrentPlanarSpeed={motor.CurrentPlanarSpeed:F2} CurrentVerticalVelocity={motor.CurrentVerticalVelocity:F2}");
 
-        if (motorOnlyDiagnosticPreset)
-        {
-            ValidatePhase4aMotorOnlyDiagnosticMotorValues(motorObject);
-            return;
-        }
+        ValidateSerializedFloatField(motorObject, "maxWalkSpeed", Phase4a7MaxWalkSpeed, "Phase 4a-7 maxWalkSpeed");
+        ValidateSerializedFloatField(motorObject, "maxSprintSpeed", Phase4a7MaxSprintSpeed, "Phase 4a-7 maxSprintSpeed");
+        ValidateSerializedFloatField(motorObject, "walkAcceleration", Phase4a7WalkAcceleration, "Phase 4a-7 walkAcceleration");
+        ValidateSerializedFloatField(motorObject, "sprintAcceleration", Phase4a7SprintAcceleration, "Phase 4a-7 sprintAcceleration");
+        ValidateSerializedFloatField(motorObject, "inputSmoothTime", Phase4a7InputSmoothTime, "Phase 4a-7 inputSmoothTime");
+        ValidateSerializedFloatField(motorObject, "stopDragAssist", Phase4a7StopDragAssist, "Phase 4a-7 stopDragAssist");
+        ValidateSerializedFloatField(motorObject, "controlStrength", Phase4a7ControlStrength, "Phase 4a-7 controlStrength");
+        ValidateSerializedBoolField(motorObject, "debugSprintLogs", expected: true, label: "Phase 4a-7 debugSprintLogs");
+        Debug.Log($"{LogPrefix} Phase 4a-7 expected motor sprint log: selectedMaxSpeed around {Phase4a7MaxSprintSpeed:F2} when sprinting.");
+        Debug.Log($"{LogPrefix} Phase 4a-7 expected motor sprint log: selectedAcceleration around {Phase4a7SprintAcceleration:F0} before pivot assist.");
 
-        ValidateSerializedFloatField(motorObject, "maxWalkSpeed", Phase4a6MaxWalkSpeed, "Phase 4a-6 maxWalkSpeed");
-        ValidateSerializedFloatField(motorObject, "maxSprintSpeed", Phase4a6MaxSprintSpeed, "Phase 4a-6 maxSprintSpeed");
-        ValidateSerializedFloatField(motorObject, "walkAcceleration", Phase4a6WalkAcceleration, "Phase 4a-6 walkAcceleration");
-        ValidateSerializedFloatField(motorObject, "sprintAcceleration", Phase4a6SprintAcceleration, "Phase 4a-6 sprintAcceleration");
-        ValidateSerializedFloatField(motorObject, "inputSmoothTime", Phase4a6InputSmoothTime, "Phase 4a-6 inputSmoothTime");
-        ValidateSerializedFloatField(motorObject, "stopDragAssist", Phase4a6StopDragAssist, "Phase 4a-6 stopDragAssist");
-        ValidateSerializedFloatField(motorObject, "controlStrength", Phase4a6ControlStrength, "Phase 4a-6 controlStrength");
-        ValidateSerializedBoolField(motorObject, "debugSprintLogs", expected: true, label: "Phase 4a-6 debugSprintLogs");
-        ValidateSerializedFloatField(motorObject, "sprintLogInterval", Phase4a6SprintLogInterval, "Phase 4a-6 sprintLogInterval");
-        Debug.Log($"{LogPrefix} Phase 4a-6 expected motor sprint log: selectedMaxSpeed around {Phase4a6MaxSprintSpeed:F1} when sprinting.");
-        Debug.Log($"{LogPrefix} Phase 4a-6 expected motor sprint log: selectedAcceleration around {Phase4a6SprintAcceleration:F0} when sprinting.");
-
-        ValidateSerializedBoolField(motorObject, "enableJump", expected: true, label: "Phase 4a Jump enable");
-        ValidateSerializedFloatField(motorObject, "jumpVelocityChange", Phase4a6JumpVelocityChange, "Phase 4a-6 jumpVelocityChange");
-        ValidateSerializedFloatField(motorObject, "jumpCooldown", Phase4a6JumpCooldown, "Phase 4a-6 jumpCooldown");
-        ValidateSerializedBoolField(motorObject, "requireGroundedForJump", expected: true, label: "Phase 4a-6 requireGroundedForJump");
-        ValidateSerializedFloatField(motorObject, "jumpBufferTime", Phase4a6JumpBufferTime, "Phase 4a-6 jumpBufferTime");
-        ValidateSerializedFloatField(motorObject, "jumpCoyoteTime", Phase4a6JumpCoyoteTime, "Phase 4a-6 jumpCoyoteTime");
-        ValidateSerializedBoolField(motorObject, "cancelDownwardVelocityOnJump", expected: false, label: "Phase 4a-6 cancelDownwardVelocityOnJump");
-        ValidateSerializedFloatField(motorObject, "maxUpwardVelocityBeforeJump", Phase4a6MaxUpwardVelocityBeforeJump, "Phase 4a-6 maxUpwardVelocityBeforeJump");
-        ValidateSerializedFloatField(motorObject, "landingLogMinVerticalSpeed", Phase4a6LandingLogMinVerticalSpeed, "Phase 4a-6 landingLogMinVerticalSpeed");
-        ValidateSerializedBoolField(motorObject, "debugJumpLogs", expected: false, label: "Phase 4a-6 debugJumpLogs");
+        ValidateSerializedFloatField(motorObject, "jumpVelocityChange", Phase4a7JumpVelocityChange, "Phase 4a-7 jumpVelocityChange");
+        ValidateSerializedFloatField(motorObject, "jumpCooldown", Phase4a7JumpCooldown, "Phase 4a-7 jumpCooldown");
+        ValidateSerializedBoolField(motorObject, "requireGroundedForJump", expected: true, label: "Phase 4a-7 requireGroundedForJump");
         ValidateSerializedBoolField(motorObject, "enableSprintPivotAssist", expected: true, label: "Phase 4a Sprint Pivot Assist");
         ValidateSerializedFloatField(motorObject, "sprintPivotDotThreshold", Phase4aSprintPivotDotThreshold, "Phase 4a sprintPivotDotThreshold");
-        ValidateSerializedFloatField(motorObject, "sprintPivotAccelerationMultiplier", Phase4a6SprintPivotAccelerationMultiplier, "Phase 4a-6 sprintPivotAccelerationMultiplier");
+        ValidateSerializedFloatField(motorObject, "sprintPivotAccelerationMultiplier", Phase4a7SprintPivotAccelerationMultiplier, "Phase 4a-7 sprintPivotAccelerationMultiplier");
         ValidateSerializedFloatField(motorObject, "sprintPivotMinPlanarSpeed", Phase4aSprintPivotMinPlanarSpeed, "Phase 4a sprintPivotMinPlanarSpeed");
-        ValidateSerializedBoolField(motorObject, "debugSprintPivotLogs", expected: true, label: "Phase 4a-6 debugSprintPivotLogs");
-        ValidateSerializedFloatField(motorObject, "jumpVisualIntensity", 1.0f, "Phase 4a-6 jumpVisualIntensity");
-        ValidateSerializedFloatField(motorObject, "landingVisualIntensity", 1.0f, "Phase 4a-6 landingVisualIntensity");
-    }
-
-    private static bool IsPhase4aMotorOnlyDiagnosticMotorPreset(SerializedObject motorObject)
-    {
-        if (motorObject == null)
-            return false;
-
-        return IsSerializedFloatFieldApproximately(motorObject, "maxWalkSpeed", Phase4aMotorOnlyMaxWalkSpeed)
-            && IsSerializedFloatFieldApproximately(motorObject, "maxSprintSpeed", Phase4aMotorOnlyMaxSprintSpeed)
-            && IsSerializedFloatFieldApproximately(motorObject, "sprintAcceleration", Phase4aMotorOnlySprintAcceleration)
-            && IsSerializedBoolFieldValue(motorObject, "enableSprintPivotAssist", false)
-            && IsSerializedBoolFieldValue(motorObject, "debugJumpLogs", true);
-    }
-
-    private static void ValidatePhase4aMotorOnlyDiagnosticResetState(
-        Scene scene,
-        GameObject shellRoot,
-        Transform bodyTransform,
-        Rigidbody bodyRigidbody,
-        HamsterFullRagdollMotor motor,
-        Transform visualRoot,
-        GameObject existingSkinnedInstance)
-    {
-        Debug.Log($"{LogPrefix} Phase 4a Motor Only Diagnostic Reset validation:");
-
-        if (shellRoot == null)
-            Debug.LogError($"{LogPrefix} Diagnostic shell root is missing.");
-        else if (!shellRoot.activeInHierarchy)
-            Debug.LogWarning($"{LogPrefix} Diagnostic shell root should be active: {JointFreeShellRootName}");
-        else
-            Debug.Log($"{LogPrefix} Diagnostic shell root is active: {JointFreeShellRootName}");
-
-        if (existingSkinnedInstance == null)
-            Debug.LogWarning($"{LogPrefix} {TestPrefabName} was not found for inactive-state validation.");
-        else if (existingSkinnedInstance.activeInHierarchy)
-            Debug.LogWarning($"{LogPrefix} {TestPrefabName} should be inactive for motor-only diagnostic.");
-        else
-            Debug.Log($"{LogPrefix} {TestPrefabName} is inactive for motor-only diagnostic.");
-
-        ValidatePhase4aMotorOnlyDiagnosticRigidbody(bodyRigidbody);
-
-        if (motor == null)
-        {
-            Debug.LogError($"{LogPrefix} HamsterFullRagdollMotor missing for motor-only diagnostic validation.");
-        }
-        else
-        {
-            if (!motor.enabled)
-                Debug.LogError($"{LogPrefix} HamsterFullRagdollMotor should be enabled for motor-only diagnostic.");
-            else
-                Debug.Log($"{LogPrefix} HamsterFullRagdollMotor is enabled.");
-
-            SerializedObject motorObject = new SerializedObject(motor);
-            Rigidbody hipsBody = GetObjectReference<Rigidbody>(motorObject, "hipsBody");
-            Rigidbody chestBody = GetObjectReference<Rigidbody>(motorObject, "chestBody");
-            if (hipsBody != bodyRigidbody)
-                Debug.LogError($"{LogPrefix} Diagnostic hipsBody should reference MotorShellBody Rigidbody.");
-            else
-                Debug.Log($"{LogPrefix} Diagnostic hipsBody references MotorShellBody Rigidbody.");
-
-            if (chestBody != bodyRigidbody)
-                Debug.LogError($"{LogPrefix} Diagnostic chestBody should reference MotorShellBody Rigidbody.");
-            else
-                Debug.Log($"{LogPrefix} Diagnostic chestBody references MotorShellBody Rigidbody.");
-
-            ValidatePhase4aMotorOnlyDiagnosticGroundMask(scene, GetIntField(motorObject, "groundMask"));
-        }
-
-        HamsterVisualFollower visualFollower = bodyTransform != null ? bodyTransform.GetComponent<HamsterVisualFollower>() : null;
-        if (visualFollower == null)
-        {
-            Debug.LogError($"{LogPrefix} HamsterVisualFollower missing for motor-only diagnostic validation.");
-        }
-        else if (!visualFollower.enabled)
-        {
-            Debug.LogError($"{LogPrefix} HamsterVisualFollower should be enabled for motor-only diagnostic.");
-        }
-        else
-        {
-            Debug.Log($"{LogPrefix} HamsterVisualFollower is enabled.");
-        }
-
-        Component clipStateDriver = bodyTransform != null ? GetComponentByTypeName(bodyTransform.gameObject, "HamsterVisualClipStateDriver") : null;
-        ValidatePhase4aMotorOnlyDiagnosticClipStateDriver(clipStateDriver);
-
-        Component proceduralPoseController = bodyTransform != null ? GetComponentByTypeName(bodyTransform.gameObject, "HamsterProceduralPoseController") : null;
-        ValidatePhase4aMotorOnlyDiagnosticOptionalDisabledComponent(proceduralPoseController, "HamsterProceduralPoseController");
-
-        Animator visualAnimator = visualRoot != null ? visualRoot.GetComponentInChildren<Animator>(true) : null;
-        ValidatePhase4aMotorOnlyDiagnosticAnimatorState(visualAnimator, visualFollower);
-    }
-
-    private static void ValidatePhase4aMotorOnlyDiagnosticMotorValues(SerializedObject motorObject)
-    {
-        Debug.Log($"{LogPrefix} Phase 4a Motor Only Diagnostic Motor values:");
-        ValidateSerializedFloatField(motorObject, "maxWalkSpeed", Phase4aMotorOnlyMaxWalkSpeed, "Phase 4a Motor Only maxWalkSpeed");
-        ValidateSerializedFloatField(motorObject, "maxSprintSpeed", Phase4aMotorOnlyMaxSprintSpeed, "Phase 4a Motor Only maxSprintSpeed");
-        ValidateSerializedFloatField(motorObject, "walkAcceleration", Phase4aMotorOnlyWalkAcceleration, "Phase 4a Motor Only walkAcceleration");
-        ValidateSerializedFloatField(motorObject, "sprintAcceleration", Phase4aMotorOnlySprintAcceleration, "Phase 4a Motor Only sprintAcceleration");
-        ValidateSerializedFloatField(motorObject, "inputSmoothTime", Phase4aMotorOnlyInputSmoothTime, "Phase 4a Motor Only inputSmoothTime");
-        ValidateSerializedFloatField(motorObject, "stopDragAssist", Phase4aMotorOnlyStopDragAssist, "Phase 4a Motor Only stopDragAssist");
-        ValidateSerializedFloatField(motorObject, "controlStrength", Phase4aMotorOnlyControlStrength, "Phase 4a Motor Only controlStrength");
-        ValidateSerializedBoolField(motorObject, "enableSprintPivotAssist", expected: false, label: "Phase 4a Motor Only enableSprintPivotAssist");
-        ValidateSerializedBoolField(motorObject, "debugSprintLogs", expected: true, label: "Phase 4a Motor Only debugSprintLogs");
-        ValidateSerializedBoolField(motorObject, "debugSprintPivotLogs", expected: false, label: "Phase 4a Motor Only debugSprintPivotLogs");
-        ValidateSerializedBoolField(motorObject, "enableJump", expected: true, label: "Phase 4a Motor Only enableJump");
-        ValidateSerializedFloatField(motorObject, "jumpVelocityChange", Phase4aMotorOnlyJumpVelocityChange, "Phase 4a Motor Only jumpVelocityChange");
-        ValidateSerializedFloatField(motorObject, "jumpCooldown", Phase4aMotorOnlyJumpCooldown, "Phase 4a Motor Only jumpCooldown");
-        ValidateSerializedBoolField(motorObject, "requireGroundedForJump", expected: true, label: "Phase 4a Motor Only requireGroundedForJump");
-        ValidateSerializedBoolField(motorObject, "debugJumpLogs", expected: true, label: "Phase 4a Motor Only debugJumpLogs");
-        ValidateSerializedBoolField(motorObject, "debugLogs", expected: true, label: "Phase 4a Motor Only debugLogs");
-        ValidateSerializedBoolField(motorObject, "drawDebugGizmos", expected: true, label: "Phase 4a Motor Only drawDebugGizmos");
-        Debug.Log($"{LogPrefix} Phase 4a Motor Only expected motor log: selectedMaxSpeed around {Phase4aMotorOnlyMaxSprintSpeed:F1}, selectedAcceleration around {Phase4aMotorOnlySprintAcceleration:F0}.");
-    }
-
-    private static void ValidatePhase4aMotorOnlyDiagnosticRigidbody(Rigidbody bodyRigidbody)
-    {
-        if (bodyRigidbody == null)
-        {
-            Debug.LogError($"{LogPrefix} MotorShellBody Rigidbody missing for motor-only diagnostic validation.");
-            return;
-        }
-
-        RigidbodyConstraints constraints = bodyRigidbody.constraints;
-        bool freezeRotationX = HasRigidbodyConstraint(constraints, RigidbodyConstraints.FreezeRotationX);
-        bool freezeRotationZ = HasRigidbodyConstraint(constraints, RigidbodyConstraints.FreezeRotationZ);
-        bool freezeRotationY = HasRigidbodyConstraint(constraints, RigidbodyConstraints.FreezeRotationY);
-        bool freezePositionX = HasRigidbodyConstraint(constraints, RigidbodyConstraints.FreezePositionX);
-        bool freezePositionY = HasRigidbodyConstraint(constraints, RigidbodyConstraints.FreezePositionY);
-        bool freezePositionZ = HasRigidbodyConstraint(constraints, RigidbodyConstraints.FreezePositionZ);
-
-        Debug.Log($"{LogPrefix} Phase 4a Motor Only Rigidbody: isKinematic={bodyRigidbody.isKinematic} useGravity={bodyRigidbody.useGravity} detectCollisions={bodyRigidbody.detectCollisions} interpolation={bodyRigidbody.interpolation} collision={bodyRigidbody.collisionDetectionMode} constraints={constraints}");
-
-        if (bodyRigidbody.isKinematic)
-            Debug.LogError($"{LogPrefix} Phase 4a Motor Only Rigidbody should be dynamic.");
-        if (!bodyRigidbody.useGravity)
-            Debug.LogError($"{LogPrefix} Phase 4a Motor Only Rigidbody useGravity should be true.");
-        if (!bodyRigidbody.detectCollisions)
-            Debug.LogError($"{LogPrefix} Phase 4a Motor Only Rigidbody detectCollisions should be true.");
-        if (bodyRigidbody.interpolation != RigidbodyInterpolation.Interpolate)
-            Debug.LogWarning($"{LogPrefix} Phase 4a Motor Only Rigidbody interpolation should be Interpolate.");
-        if (bodyRigidbody.collisionDetectionMode != CollisionDetectionMode.ContinuousDynamic)
-            Debug.LogWarning($"{LogPrefix} Phase 4a Motor Only Rigidbody collisionDetectionMode should be ContinuousDynamic.");
-        if (!freezeRotationX || !freezeRotationZ || freezeRotationY || freezePositionX || freezePositionY || freezePositionZ)
-            Debug.LogError($"{LogPrefix} Phase 4a Motor Only Rigidbody constraints should be FreezeRotationX | FreezeRotationZ only.");
-        else if (!bodyRigidbody.isKinematic && bodyRigidbody.useGravity && bodyRigidbody.detectCollisions)
-            Debug.Log($"{LogPrefix} Phase 4a Motor Only Rigidbody baseline OK.");
-    }
-
-    private static void ValidatePhase4aMotorOnlyDiagnosticClipStateDriver(Component clipStateDriver)
-    {
-        if (clipStateDriver == null)
-        {
-            Debug.Log($"{LogPrefix} Phase 4a Motor Only Diagnostic: HamsterVisualClipStateDriver is absent; no clip-state influence is active.");
-            return;
-        }
-
-        Behaviour behaviour = clipStateDriver as Behaviour;
-        if (behaviour == null)
-        {
-            Debug.LogWarning($"{LogPrefix} HamsterVisualClipStateDriver is not a Behaviour.");
-            return;
-        }
-
-        if (behaviour.enabled)
-            Debug.LogWarning($"{LogPrefix} HamsterVisualClipStateDriver should be disabled for motor-only diagnostic.");
-        else
-            Debug.Log($"{LogPrefix} HamsterVisualClipStateDriver is disabled for motor-only diagnostic.");
-    }
-
-    private static void ValidatePhase4aMotorOnlyDiagnosticOptionalDisabledComponent(Component component, string label)
-    {
-        if (component == null)
-        {
-            Debug.LogWarning($"{LogPrefix} {label} not found for motor-only diagnostic validation.");
-            return;
-        }
-
-        Behaviour behaviour = component as Behaviour;
-        if (behaviour == null)
-        {
-            Debug.LogWarning($"{LogPrefix} {label} is not a Behaviour.");
-            return;
-        }
-
-        if (behaviour.enabled)
-            Debug.LogWarning($"{LogPrefix} {label} should be disabled for motor-only diagnostic.");
-        else
-            Debug.Log($"{LogPrefix} {label} is disabled for motor-only diagnostic.");
-    }
-
-    private static void ValidatePhase4aMotorOnlyDiagnosticVisualFollowerSettings(SerializedObject followerObject)
-    {
-        Debug.Log($"{LogPrefix} Phase 4a Motor Only Diagnostic HamsterVisualFollower values:");
-
-        Vector3 visualLocalOffset;
-        if (TryGetVector3Field(followerObject, "visualLocalOffset", out visualLocalOffset))
-        {
-            Debug.Log($"{LogPrefix} Phase 4a Motor Only visualLocalOffset={visualLocalOffset}");
-            if (Mathf.Abs(visualLocalOffset.y - Phase4aMotorOnlyVisualLocalOffsetY) > VerifiedVisualOffsetYTolerance)
-                Debug.LogWarning($"{LogPrefix} Phase 4a Motor Only visualLocalOffset.y mismatch. Current={visualLocalOffset.y:F4} Expected={Phase4aMotorOnlyVisualLocalOffsetY:F4}");
-        }
-        else
-        {
-            Debug.LogWarning($"{LogPrefix} HamsterVisualFollower visualLocalOffset field was not found.");
-        }
-
-        ValidateSerializedBoolField(followerObject, "enableSpeedBasedVisualHeight", expected: true, label: "Phase 4a Motor Only enableSpeedBasedVisualHeight");
-        ValidateSerializedFloatField(followerObject, "idleVisualYOffset", Phase4aMotorOnlyIdleVisualYOffset, "Phase 4a Motor Only idleVisualYOffset");
-        ValidateSerializedFloatField(followerObject, "movingVisualYOffset", Phase4aMotorOnlyMovingVisualYOffset, "Phase 4a Motor Only movingVisualYOffset");
-        ValidateSerializedFloatField(followerObject, "speedForMovingVisualYOffset", Phase4aMotorOnlySpeedForMovingVisualYOffset, "Phase 4a Motor Only speedForMovingVisualYOffset");
-        ValidateSerializedFloatField(followerObject, "visualHeightSmoothTime", Phase4aMotorOnlyVisualHeightSmoothTime, "Phase 4a Motor Only visualHeightSmoothTime");
-        ValidateSerializedBoolField(followerObject, "enableClipStateHeightOffsets", expected: false, label: "Phase 4a Motor Only enableClipStateHeightOffsets");
-        ValidateSerializedBoolField(followerObject, "autoUseVisualAnimatorForHeight", expected: false, label: "Phase 4a Motor Only autoUseVisualAnimatorForHeight");
-        ValidateSerializedBoolField(followerObject, "debugClipHeightLogs", expected: false, label: "Phase 4a Motor Only debugClipHeightLogs");
-        ValidateSerializedBoolField(followerObject, "enableBodyLean", expected: true, label: "Phase 4a Motor Only enableBodyLean");
-        ValidateSerializedBoolField(followerObject, "enableLocalLag", expected: true, label: "Phase 4a Motor Only enableLocalLag");
-        ValidateSerializedFloatField(followerObject, "speedForMaxLean", Phase4aMotorOnlySpeedForMaxLean, "Phase 4a Motor Only speedForMaxLean");
-        ValidateSerializedFloatField(followerObject, "maxForwardLeanDegrees", Phase4aMotorOnlyMaxForwardLeanDegrees, "Phase 4a Motor Only maxForwardLeanDegrees");
-        ValidateSerializedFloatField(followerObject, "maxSideLeanDegrees", Phase4aMotorOnlyMaxSideLeanDegrees, "Phase 4a Motor Only maxSideLeanDegrees");
-        ValidateSerializedFloatField(followerObject, "leanSmoothTime", Phase4aMotorOnlyLeanSmoothTime, "Phase 4a Motor Only leanSmoothTime");
-        ValidateSerializedFloatField(followerObject, "maxBackLag", Phase4aMotorOnlyMaxBackLag, "Phase 4a Motor Only maxBackLag");
-        ValidateSerializedFloatField(followerObject, "maxSideLag", Phase4aMotorOnlyMaxSideLag, "Phase 4a Motor Only maxSideLag");
-        ValidateSerializedFloatField(followerObject, "lagSmoothTime", Phase4aMotorOnlyLagSmoothTime, "Phase 4a Motor Only lagSmoothTime");
-        ValidateSerializedFloatField(followerObject, "jumpStretchAmount", Phase4aMotorOnlyJumpStretchAmount, "Phase 4a Motor Only jumpStretchAmount");
-        ValidateSerializedFloatField(followerObject, "landingSquashAmount", Phase4aMotorOnlyLandingSquashAmount, "Phase 4a Motor Only landingSquashAmount");
-        ValidateSerializedFloatField(followerObject, "landingPitchDegrees", Phase4aMotorOnlyLandingPitchDegrees, "Phase 4a Motor Only landingPitchDegrees");
-        ValidateSerializedBoolField(followerObject, "updateAnimator", expected: false, label: "Phase 4a Motor Only updateAnimator");
-        ValidateSerializedBoolField(followerObject, "debugLogs", expected: true, label: "Phase 4a Motor Only VisualFollower debugLogs");
-        ValidateSerializedBoolField(followerObject, "drawGizmos", expected: true, label: "Phase 4a Motor Only VisualFollower drawGizmos");
-    }
-
-    private static void ValidatePhase4aMotorOnlyDiagnosticAnimatorState(
-        Animator visualAnimator,
-        HamsterVisualFollower visualFollower)
-    {
-        if (visualAnimator == null)
-        {
-            Debug.LogWarning($"{LogPrefix} No Visual Animator found for motor-only diagnostic validation.");
-            return;
-        }
-
-        if (visualAnimator.enabled && visualAnimator.applyRootMotion)
-            Debug.LogError($"{LogPrefix} Visual Animator should be disabled or at least have applyRootMotion=false for motor-only diagnostic.");
-        else if (visualAnimator.enabled)
-            Debug.LogWarning($"{LogPrefix} Visual Animator is enabled but applyRootMotion=false. This is allowed only if disabling Animator is unsafe.");
-        else
-            Debug.Log($"{LogPrefix} Visual Animator is disabled for motor-only diagnostic.");
-
-        if (visualAnimator.applyRootMotion)
-            Debug.LogError($"{LogPrefix} Visual Animator applyRootMotion should be false for motor-only diagnostic.");
-        else
-            Debug.Log($"{LogPrefix} Visual Animator applyRootMotion is false for motor-only diagnostic.");
-
-        if (visualFollower == null)
-            return;
-
-        SerializedObject followerObject = new SerializedObject(visualFollower);
-        Animator assignedAnimator = GetObjectReference<Animator>(followerObject, "visualAnimator");
-        if (assignedAnimator == null)
-            Debug.LogWarning($"{LogPrefix} HamsterVisualFollower visualAnimator is null for motor-only diagnostic.");
-        else if (assignedAnimator != visualAnimator)
-            Debug.LogWarning($"{LogPrefix} HamsterVisualFollower visualAnimator does not reference VisualPreviewRoot Animator.");
-        else
-            Debug.Log($"{LogPrefix} HamsterVisualFollower visualAnimator keeps the current VisualPreviewRoot Animator reference.");
-    }
-
-    private static void ValidatePhase4aMotorOnlyDiagnosticGroundMask(Scene scene, int groundMask)
-    {
-        Debug.Log($"{LogPrefix} Phase 4a Motor Only groundMask layers={FormatLayerMask(groundMask)} Value={groundMask}");
-        if (groundMask == 0)
-        {
-            Debug.LogError($"{LogPrefix} Phase 4a Motor Only groundMask is empty.");
-            return;
-        }
-
-        bool hasCandidate = LayerMaskContainsNamedLayer(groundMask, "RagdollTestGround")
-            || LayerMaskContainsNamedLayer(groundMask, "Ground")
-            || LayerMaskContainsSceneObjectLayer(scene, groundMask, "RagdollTestGround")
-            || LayerMaskContainsSceneObjectLayer(scene, groundMask, "Ground")
-            || LayerMaskContainsSceneObjectLayer(scene, groundMask, "Plane");
-
-        if (!hasCandidate)
-            Debug.LogWarning($"{LogPrefix} Phase 4a Motor Only groundMask does not include an existing RagdollTestGround/Ground/Plane candidate.");
-        else
-            Debug.Log($"{LogPrefix} Phase 4a Motor Only groundMask includes a ground candidate.");
-    }
-
-    private static bool LayerMaskContainsNamedLayer(int mask, string layerName)
-    {
-        int layer = LayerMask.NameToLayer(layerName);
-        return layer >= 0 && (mask & (1 << layer)) != 0;
-    }
-
-    private static bool LayerMaskContainsSceneObjectLayer(Scene scene, int mask, string objectName)
-    {
-        GameObject candidate = FindGameObjectByName(scene, objectName);
-        return candidate != null && (mask & (1 << candidate.layer)) != 0;
-    }
-
-    private static bool IsSerializedFloatFieldApproximately(SerializedObject serializedObject, string fieldName, float expected)
-    {
-        float value;
-        return TryGetFloatField(serializedObject, fieldName, out value)
-            && Mathf.Abs(value - expected) <= 0.01f;
-    }
-
-    private static bool IsSerializedBoolFieldValue(SerializedObject serializedObject, string fieldName, bool expected)
-    {
-        bool value;
-        return TryGetBoolField(serializedObject, fieldName, out value)
-            && value == expected;
+        ValidateSerializedBoolField(motorObject, "debugSprintPivotLogs", expected: true, label: "Phase 4a-7 debugSprintPivotLogs");
     }
 
     private static void ValidateSerializedBoolField(SerializedObject serializedObject, string fieldName, bool expected, string label)
@@ -6924,8 +6537,7 @@ public static class HamsterFullRagdollTestSetupUtility
         Transform bodyTransform,
         Rigidbody bodyRigidbody,
         BoxCollider boxCollider,
-        GameObject existingSkinnedInstance,
-        bool motorOnlyDiagnosticPreset)
+        GameObject existingSkinnedInstance)
     {
         HamsterVisualFollower visualFollower = bodyTransform.GetComponent<HamsterVisualFollower>();
         if (visualFollower == null)
@@ -6993,10 +6605,11 @@ public static class HamsterFullRagdollTestSetupUtility
                 Debug.LogError($"{LogPrefix} VisualPreviewRoot has active Network/Player/Ragdoll controller components.");
         }
 
-        ValidateVisualFollowerOffsetAndDiagnosticState(visualFollower, motorOnlyDiagnosticPreset);
-        ValidateVisualAnimatorSetup(visualRoot, visualFollower, motorOnlyDiagnosticPreset);
-        ValidatePhase4a4ClipStateDriver(bodyTransform, bodyRigidbody, visualRoot, motorOnlyDiagnosticPreset);
+        ValidateVisualFollowerOffsetAndDiagnosticState(visualFollower);
+        ValidateVisualAnimatorSetup(visualRoot, visualFollower);
+        ValidatePhase4a7ClipStateDriverToggle(bodyTransform);
         ValidatePhase2TailEarBoing(visualRoot);
+        Debug.Log($"{LogPrefix} Phase 4a-7 safety: Impact responder validation follows; tuned impact values should remain unchanged.");
         ValidatePhase3ImpactVisualReaction(bodyTransform, bodyRigidbody, visualFollower);
         ValidatePhase3ImpactTestWall(bodyTransform.gameObject.scene, bodyTransform);
 
@@ -7022,7 +6635,7 @@ public static class HamsterFullRagdollTestSetupUtility
             Debug.Log($"{LogPrefix} MotorShellBody BoxCollider is enabled.");
     }
 
-    private static void ValidatePhase4a4ShellSafety(
+    private static void ValidatePhase4a7ShellSafety(
         GameObject shellRoot,
         Transform bodyTransform,
         GameObject existingSkinnedInstance)
@@ -7031,38 +6644,34 @@ public static class HamsterFullRagdollTestSetupUtility
             return;
 
         if (!shellRoot.activeInHierarchy)
-            Debug.LogWarning($"{LogPrefix} Phase 4a-6 safety: {JointFreeShellRootName} should be active.");
+            Debug.LogWarning($"{LogPrefix} Phase 4a-7 safety: {JointFreeShellRootName} should be active.");
         else
-            Debug.Log($"{LogPrefix} Phase 4a-6 safety: {JointFreeShellRootName} is active.");
+            Debug.Log($"{LogPrefix} Phase 4a-7 safety: {JointFreeShellRootName} is active.");
 
         if (existingSkinnedInstance == null)
-            Debug.LogWarning($"{LogPrefix} Phase 4a-6 safety: {TestPrefabName} was not found for inactive-state validation.");
+            Debug.LogWarning($"{LogPrefix} Phase 4a-7 safety: {TestPrefabName} was not found for inactive-state validation.");
         else if (existingSkinnedInstance.activeInHierarchy)
-            Debug.LogWarning($"{LogPrefix} Phase 4a-6 safety: {TestPrefabName} should be inactive for shell-only testing.");
+            Debug.LogWarning($"{LogPrefix} Phase 4a-7 safety: {TestPrefabName} should be inactive for shell-only testing.");
         else
-            Debug.Log($"{LogPrefix} Phase 4a-6 safety: {TestPrefabName} is inactive.");
+            Debug.Log($"{LogPrefix} Phase 4a-7 safety: {TestPrefabName} is inactive.");
 
         Component proceduralPoseController = GetComponentByTypeName(bodyTransform.gameObject, "HamsterProceduralPoseController");
         if (proceduralPoseController == null)
         {
-            Debug.Log($"{LogPrefix} Phase 4a-6 safety: HamsterProceduralPoseController not present on MotorShellBody.");
+            Debug.LogWarning($"{LogPrefix} Phase 4a-7 safety: HamsterProceduralPoseController not present on MotorShellBody.");
             return;
         }
 
         Behaviour proceduralBehaviour = proceduralPoseController as Behaviour;
         if (proceduralBehaviour == null)
-            Debug.LogWarning($"{LogPrefix} Phase 4a-6 safety: HamsterProceduralPoseController is not a Behaviour.");
-        else if (proceduralBehaviour.enabled)
-            Debug.LogWarning($"{LogPrefix} Phase 4a-6 safety: HamsterProceduralPoseController should be disabled.");
+            Debug.LogWarning($"{LogPrefix} Phase 4a-7 safety: HamsterProceduralPoseController is not a Behaviour.");
+        else if (!proceduralBehaviour.enabled)
+            Debug.LogWarning($"{LogPrefix} Phase 4a-7 safety: HamsterProceduralPoseController should be enabled.");
         else
-            Debug.Log($"{LogPrefix} Phase 4a-6 safety: HamsterProceduralPoseController is disabled.");
+            Debug.Log($"{LogPrefix} Phase 4a-7 safety: HamsterProceduralPoseController is enabled.");
     }
 
-    private static void ValidatePhase4a4ClipStateDriver(
-        Transform bodyTransform,
-        Rigidbody bodyRigidbody,
-        Transform visualRoot,
-        bool motorOnlyDiagnosticPreset)
+    private static void ValidatePhase4a7ClipStateDriverToggle(Transform bodyTransform)
     {
         if (bodyTransform == null)
             return;
@@ -7070,72 +6679,17 @@ public static class HamsterFullRagdollTestSetupUtility
         Component clipStateDriver = GetComponentByTypeName(bodyTransform.gameObject, "HamsterVisualClipStateDriver");
         if (clipStateDriver == null)
         {
-            if (motorOnlyDiagnosticPreset)
-            {
-                Debug.Log($"{LogPrefix} Phase 4a Motor Only Diagnostic: HamsterVisualClipStateDriver is absent; no clip-state influence is active.");
-                return;
-            }
-
-            Debug.LogWarning($"{LogPrefix} Phase 4a-6 ClipStateDriver missing on MotorShellBody.");
+            Debug.LogWarning($"{LogPrefix} Phase 4a-7 ClipStateDriver missing on MotorShellBody.");
             return;
         }
 
         Behaviour driverBehaviour = clipStateDriver as Behaviour;
         if (driverBehaviour == null)
             Debug.LogWarning($"{LogPrefix} HamsterVisualClipStateDriver is not a Behaviour.");
+        else if (driverBehaviour.enabled)
+            Debug.LogWarning($"{LogPrefix} Phase 4a-7 ClipStateDriver should be disabled for ragdoll-feel locomotion.");
         else
-            Debug.Log($"{LogPrefix} HamsterVisualClipStateDriver exists. enabled={driverBehaviour.enabled}");
-
-        if (motorOnlyDiagnosticPreset)
-        {
-            ValidatePhase4aMotorOnlyDiagnosticClipStateDriver(clipStateDriver);
-            return;
-        }
-
-        SerializedObject driverObject = new SerializedObject(clipStateDriver);
-        Animator expectedAnimator = visualRoot != null ? visualRoot.GetComponentInChildren<Animator>(true) : null;
-        HamsterFullRagdollMotor expectedMotor = bodyTransform.GetComponent<HamsterFullRagdollMotor>();
-        Animator assignedAnimator = GetObjectReference<Animator>(driverObject, "visualAnimator");
-        HamsterFullRagdollMotor assignedMotor = GetObjectReference<HamsterFullRagdollMotor>(driverObject, "motorStateSource");
-        Rigidbody assignedBody = GetObjectReference<Rigidbody>(driverObject, "targetBody");
-
-        if (assignedAnimator == null)
-            Debug.LogWarning($"{LogPrefix} HamsterVisualClipStateDriver visualAnimator is not assigned.");
-        else if (expectedAnimator != null && assignedAnimator != expectedAnimator)
-            Debug.LogWarning($"{LogPrefix} HamsterVisualClipStateDriver visualAnimator differs from VisualPreviewRoot Animator. Current={GetHierarchyPath(assignedAnimator.transform)} Expected={GetHierarchyPath(expectedAnimator.transform)}");
-        else
-            Debug.Log($"{LogPrefix} HamsterVisualClipStateDriver visualAnimator assigned: {GetHierarchyPath(assignedAnimator.transform)}");
-
-        if (assignedMotor == null)
-            Debug.LogWarning($"{LogPrefix} HamsterVisualClipStateDriver motorStateSource is not assigned.");
-        else if (assignedMotor != expectedMotor)
-            Debug.LogWarning($"{LogPrefix} HamsterVisualClipStateDriver motorStateSource should reference MotorShellBody HamsterFullRagdollMotor.");
-        else
-            Debug.Log($"{LogPrefix} HamsterVisualClipStateDriver motorStateSource references MotorShellBody motor.");
-
-        if (assignedBody == null)
-            Debug.LogWarning($"{LogPrefix} HamsterVisualClipStateDriver targetBody is not assigned.");
-        else if (assignedBody != bodyRigidbody)
-            Debug.LogWarning($"{LogPrefix} HamsterVisualClipStateDriver targetBody should reference MotorShellBody Rigidbody.");
-        else
-            Debug.Log($"{LogPrefix} HamsterVisualClipStateDriver targetBody references MotorShellBody Rigidbody.");
-
-        ValidateSerializedBoolField(driverObject, "enableClipStateDriver", expected: true, label: "Phase 4a-6 ClipStateDriver enableClipStateDriver");
-        ValidateSerializedBoolField(driverObject, "driveGroundLocomotion", expected: true, label: "Phase 4a-6 ClipStateDriver driveGroundLocomotion");
-        ValidateSerializedBoolField(driverObject, "driveJump", expected: true, label: "Phase 4a-6 ClipStateDriver driveJump");
-        ValidateSerializedBoolField(driverObject, "disableFallAndLandForNow", expected: true, label: "Phase 4a-6 ClipStateDriver disableFallAndLandForNow");
-        ValidateSerializedBoolField(driverObject, "requireAnimatorController", expected: true, label: "Phase 4a-6 ClipStateDriver requireAnimatorController");
-        ValidateSerializedFloatField(driverObject, "minMoveSpeedForWalk", Phase4a6MinMoveSpeedForWalk, "Phase 4a-6 ClipStateDriver minMoveSpeedForWalk");
-        ValidateSerializedFloatField(driverObject, "minSprint01ForRun", Phase4a6MinSprint01ForRun, "Phase 4a-6 ClipStateDriver minSprint01ForRun");
-        ValidateSerializedFloatField(driverObject, "minSpeedForRun", Phase4a6MinSpeedForRun, "Phase 4a-6 ClipStateDriver minSpeedForRun");
-        ValidateSerializedFloatField(driverObject, "locomotionCrossFadeDuration", Phase4a6LocomotionCrossFadeDuration, "Phase 4a-6 ClipStateDriver locomotionCrossFadeDuration");
-        ValidateSerializedFloatField(driverObject, "minPlanarSpeedForSprintRunState", Phase4a6MinPlanarSpeedForSprintRunState, "Phase 4a-6 ClipStateDriver minPlanarSpeedForSprintRunState");
-        ValidateSerializedBoolField(driverObject, "requireMoveInputForRun", expected: true, label: "Phase 4a-6 ClipStateDriver requireMoveInputForRun");
-        ValidateSerializedBoolField(driverObject, "preventRunAtNearZeroSpeed", expected: true, label: "Phase 4a-6 ClipStateDriver preventRunAtNearZeroSpeed");
-        ValidateSerializedFloatField(driverObject, "maxJumpStateTime", Phase4a6MaxJumpStateTime, "Phase 4a-6 ClipStateDriver maxJumpStateTime");
-        ValidateSerializedFloatField(driverObject, "fallingReturnVerticalVelocity", Phase4a6FallingReturnVerticalVelocity, "Phase 4a-6 ClipStateDriver fallingReturnVerticalVelocity");
-        ValidateSerializedFloatField(driverObject, "groundedReturnDelay", Phase4a6GroundedReturnDelay, "Phase 4a-6 ClipStateDriver groundedReturnDelay");
-        ValidateSerializedBoolField(driverObject, "debugLogs", expected: true, label: "Phase 4a-6 ClipStateDriver debugLogs");
+            Debug.Log($"{LogPrefix} Phase 4a-7 ClipStateDriver is disabled.");
     }
 
     private static void ValidateAssignedVisualAnimator(SerializedObject followerObject)
@@ -7153,20 +6707,12 @@ public static class HamsterFullRagdollTestSetupUtility
             Debug.Log($"{LogPrefix} Visual Animator applyRootMotion is false: {GetHierarchyPath(visualAnimator.transform)}");
     }
 
-    private static void ValidateVisualFollowerOffsetAndDiagnosticState(
-        HamsterVisualFollower visualFollower,
-        bool motorOnlyDiagnosticPreset)
+    private static void ValidateVisualFollowerOffsetAndDiagnosticState(HamsterVisualFollower visualFollower)
     {
         if (visualFollower == null)
             return;
 
         SerializedObject followerObject = new SerializedObject(visualFollower);
-        if (motorOnlyDiagnosticPreset)
-        {
-            ValidatePhase4aMotorOnlyDiagnosticVisualFollowerSettings(followerObject);
-            return;
-        }
-
         Vector3 visualLocalOffset;
         Vector3 visualLocalEulerOffset;
         bool enableBodyLean;
@@ -7181,14 +6727,14 @@ public static class HamsterFullRagdollTestSetupUtility
         if (TryGetVector3Field(followerObject, "visualLocalOffset", out visualLocalOffset))
         {
             Debug.Log($"{LogPrefix} HamsterVisualFollower visualLocalOffset={visualLocalOffset}");
-            if (Mathf.Abs(visualLocalOffset.y - VerifiedVisualLocalOffsetY) > VerifiedVisualOffsetYTolerance)
+            if (Mathf.Abs(visualLocalOffset.y - Phase4a7VisualLocalOffsetY) > VerifiedVisualOffsetYTolerance)
             {
                 phaseHeightMismatch = true;
-                Debug.LogWarning($"{LogPrefix} visualLocalOffset.y differs from verified height profile. Current={visualLocalOffset.y:F4} Expected={VerifiedVisualLocalOffsetY:F4}");
+                Debug.LogWarning($"{LogPrefix} visualLocalOffset.y differs from Phase 4a-7 height profile. Current={visualLocalOffset.y:F4} Expected={Phase4a7VisualLocalOffsetY:F4}");
             }
             else
             {
-                Debug.Log($"{LogPrefix} visualLocalOffset.y matches verified height profile.");
+                Debug.Log($"{LogPrefix} visualLocalOffset.y matches Phase 4a-7 height profile.");
             }
         }
         else
@@ -7215,10 +6761,10 @@ public static class HamsterFullRagdollTestSetupUtility
         if (TryGetFloatField(followerObject, "idleVisualYOffset", out idleVisualYOffset))
         {
             Debug.Log($"{LogPrefix} HamsterVisualFollower idleVisualYOffset={idleVisualYOffset:F4}");
-            if (Mathf.Abs(idleVisualYOffset - VerifiedIdleVisualYOffset) > VerifiedVisualOffsetYTolerance)
+            if (Mathf.Abs(idleVisualYOffset - Phase4a7IdleVisualYOffset) > VerifiedVisualOffsetYTolerance)
             {
                 phaseHeightMismatch = true;
-                Debug.LogWarning($"{LogPrefix} idleVisualYOffset differs from verified profile. Current={idleVisualYOffset:F4} Expected={VerifiedIdleVisualYOffset:F4}");
+                Debug.LogWarning($"{LogPrefix} idleVisualYOffset differs from Phase 4a-7 profile. Current={idleVisualYOffset:F4} Expected={Phase4a7IdleVisualYOffset:F4}");
             }
         }
         else
@@ -7230,10 +6776,10 @@ public static class HamsterFullRagdollTestSetupUtility
         if (TryGetFloatField(followerObject, "movingVisualYOffset", out movingVisualYOffset))
         {
             Debug.Log($"{LogPrefix} HamsterVisualFollower movingVisualYOffset={movingVisualYOffset:F4}");
-            if (Mathf.Abs(movingVisualYOffset - Phase4a6MovingVisualYOffset) > VerifiedVisualOffsetYTolerance)
+            if (Mathf.Abs(movingVisualYOffset - Phase4a7MovingVisualYOffset) > VerifiedVisualOffsetYTolerance)
             {
                 phaseHeightMismatch = true;
-                Debug.LogWarning($"{LogPrefix} Moving visual Y offset differs from Phase 4a-6 preset. Current={movingVisualYOffset:F4} Expected={Phase4a6MovingVisualYOffset:F4}");
+                Debug.LogWarning($"{LogPrefix} Moving visual Y offset differs from Phase 4a-7 preset. Current={movingVisualYOffset:F4} Expected={Phase4a7MovingVisualYOffset:F4}");
             }
         }
         else
@@ -7245,10 +6791,10 @@ public static class HamsterFullRagdollTestSetupUtility
         if (TryGetFloatField(followerObject, "speedForMovingVisualYOffset", out speedForMovingVisualYOffset))
         {
             Debug.Log($"{LogPrefix} HamsterVisualFollower speedForMovingVisualYOffset={speedForMovingVisualYOffset:F4}");
-            if (Mathf.Abs(speedForMovingVisualYOffset - VerifiedSpeedForMovingVisualYOffset) > VerifiedVisualHeightFloatTolerance)
+            if (Mathf.Abs(speedForMovingVisualYOffset - Phase4a7SpeedForMovingVisualYOffset) > VerifiedVisualHeightFloatTolerance)
             {
                 phaseHeightMismatch = true;
-                Debug.LogWarning($"{LogPrefix} speedForMovingVisualYOffset differs from verified profile. Current={speedForMovingVisualYOffset:F4} Expected={VerifiedSpeedForMovingVisualYOffset:F4}");
+                Debug.LogWarning($"{LogPrefix} speedForMovingVisualYOffset differs from Phase 4a-7 profile. Current={speedForMovingVisualYOffset:F4} Expected={Phase4a7SpeedForMovingVisualYOffset:F4}");
             }
         }
         else
@@ -7260,10 +6806,10 @@ public static class HamsterFullRagdollTestSetupUtility
         if (TryGetFloatField(followerObject, "visualHeightSmoothTime", out visualHeightSmoothTime))
         {
             Debug.Log($"{LogPrefix} HamsterVisualFollower visualHeightSmoothTime={visualHeightSmoothTime:F4}");
-            if (Mathf.Abs(visualHeightSmoothTime - VerifiedVisualHeightSmoothTime) > VerifiedVisualHeightFloatTolerance)
+            if (Mathf.Abs(visualHeightSmoothTime - Phase4a7VisualHeightSmoothTime) > VerifiedVisualHeightFloatTolerance)
             {
                 phaseHeightMismatch = true;
-                Debug.LogWarning($"{LogPrefix} visualHeightSmoothTime differs from verified profile. Current={visualHeightSmoothTime:F4} Expected={VerifiedVisualHeightSmoothTime:F4}");
+                Debug.LogWarning($"{LogPrefix} visualHeightSmoothTime differs from Phase 4a-7 profile. Current={visualHeightSmoothTime:F4} Expected={Phase4a7VisualHeightSmoothTime:F4}");
             }
         }
         else
@@ -7273,9 +6819,9 @@ public static class HamsterFullRagdollTestSetupUtility
         }
 
         if (phaseHeightMismatch)
-            Debug.LogWarning($"{LogPrefix} Phase height profile mismatch. Expected visualLocalOffset.y=0.10 and speed-based height idle=-0.03 moving=0.04.");
+            Debug.LogWarning($"{LogPrefix} Phase height profile mismatch. Expected visualLocalOffset.y=0.10 and speed-based height idle=-0.03 moving=0.10.");
         else
-            Debug.Log($"{LogPrefix} Phase 4a-6 visual height profile OK.");
+            Debug.Log($"{LogPrefix} Phase 4a-7 visual height profile OK.");
 
         if (TryGetVector3Field(followerObject, "visualLocalEulerOffset", out visualLocalEulerOffset))
             Debug.Log($"{LogPrefix} HamsterVisualFollower visualLocalEulerOffset={visualLocalEulerOffset}");
@@ -7292,31 +6838,27 @@ public static class HamsterFullRagdollTestSetupUtility
         else
             Debug.LogWarning($"{LogPrefix} HamsterVisualFollower enableLocalLag field was not found.");
 
-        ValidatePhase4a4VisualFollowerClipHeightSettings(followerObject);
+        ValidatePhase4a7VisualFollowerRagdollFeelSettings(followerObject);
         Debug.Log($"{LogPrefix} If idle leans with enableBodyLean=false, check idle clip pose or visualLocalEulerOffset.");
     }
 
-    private static void ValidatePhase4a4VisualFollowerClipHeightSettings(SerializedObject followerObject)
+    private static void ValidatePhase4a7VisualFollowerRagdollFeelSettings(SerializedObject followerObject)
     {
-        ValidateSerializedBoolField(followerObject, "enableSpeedBasedVisualHeight", expected: true, label: "Phase 4a-6 HamsterVisualFollower enableSpeedBasedVisualHeight");
-        ValidateSerializedFloatField(followerObject, "movingVisualYOffset", Phase4a6MovingVisualYOffset, "Phase 4a-6 HamsterVisualFollower movingVisualYOffset");
-        ValidateSerializedBoolField(followerObject, "enableClipStateHeightOffsets", expected: true, label: "Phase 4a-6 HamsterVisualFollower enableClipStateHeightOffsets");
-        ValidateSerializedFloatField(followerObject, "idleStateYOffset", Phase4a6IdleStateYOffset, "Phase 4a-6 HamsterVisualFollower idleStateYOffset");
-        ValidateSerializedFloatField(followerObject, "walkStateYOffset", Phase4a6WalkStateYOffset, "Phase 4a-6 HamsterVisualFollower walkStateYOffset");
-        ValidateSerializedFloatField(followerObject, "runStateYOffset", Phase4a6RunStateYOffset, "Phase 4a-6 HamsterVisualFollower runStateYOffset");
-        ValidateSerializedFloatField(followerObject, "jumpStateYOffset", Phase4a6JumpStateYOffset, "Phase 4a-6 HamsterVisualFollower jumpStateYOffset");
-        ValidateSerializedFloatField(followerObject, "sprintPivotYOffset", Phase4a6SprintPivotYOffset, "Phase 4a-6 HamsterVisualFollower sprintPivotYOffset");
-        ValidateSerializedFloatField(followerObject, "landingYOffset", Phase4a6LandingYOffset, "Phase 4a-6 HamsterVisualFollower landingYOffset");
-        ValidateSerializedFloatField(followerObject, "clipHeightSmoothTime", Phase4a6ClipHeightSmoothTime, "Phase 4a-6 HamsterVisualFollower clipHeightSmoothTime");
-        ValidateSerializedBoolField(followerObject, "useNextAnimatorStateForClipHeight", expected: true, label: "Phase 4a-6 HamsterVisualFollower useNextAnimatorStateForClipHeight");
-        ValidateSerializedBoolField(followerObject, "prioritizeWalkNextStateHeight", expected: true, label: "Phase 4a-6 HamsterVisualFollower prioritizeWalkNextStateHeight");
-        ValidateSerializedFloatField(followerObject, "clipHeightUpSmoothTime", Phase4a6ClipHeightUpSmoothTime, "Phase 4a-6 HamsterVisualFollower clipHeightUpSmoothTime");
-        ValidateSerializedFloatField(followerObject, "clipHeightDownSmoothTime", Phase4a6ClipHeightDownSmoothTime, "Phase 4a-6 HamsterVisualFollower clipHeightDownSmoothTime");
-        ValidateSerializedBoolField(followerObject, "snapDownOnWalkEnter", expected: false, label: "Phase 4a-6 HamsterVisualFollower snapDownOnWalkEnter");
-        ValidateSerializedFloatField(followerObject, "walkEnterSnapMaxDelta", Phase4a6WalkEnterSnapMaxDelta, "Phase 4a-6 HamsterVisualFollower walkEnterSnapMaxDelta");
-        ValidateSerializedFloatField(followerObject, "landingSquashAmount", Phase4a6LandingSquashAmount, "Phase 4a-6 HamsterVisualFollower landingSquashAmount");
-        ValidateSerializedFloatField(followerObject, "landingPitchDegrees", Phase4a6LandingPitchDegrees, "Phase 4a-6 HamsterVisualFollower landingPitchDegrees");
-        ValidateSerializedBoolField(followerObject, "debugClipHeightLogs", expected: true, label: "Phase 4a-6 HamsterVisualFollower debugClipHeightLogs");
+        ValidateSerializedBoolField(followerObject, "enableBodyLean", expected: true, label: "Phase 4a-7 HamsterVisualFollower enableBodyLean");
+        ValidateSerializedFloatField(followerObject, "speedForMaxLean", Phase4a7SpeedForMaxLean, "Phase 4a-7 HamsterVisualFollower speedForMaxLean");
+        ValidateSerializedFloatField(followerObject, "maxForwardLeanDegrees", Phase4a7MaxForwardLeanDegrees, "Phase 4a-7 HamsterVisualFollower maxForwardLeanDegrees");
+        ValidateSerializedFloatField(followerObject, "maxSideLeanDegrees", Phase4a7MaxSideLeanDegrees, "Phase 4a-7 HamsterVisualFollower maxSideLeanDegrees");
+        ValidateSerializedFloatField(followerObject, "leanSmoothTime", Phase4a7LeanSmoothTime, "Phase 4a-7 HamsterVisualFollower leanSmoothTime");
+        ValidateSerializedBoolField(followerObject, "enableLocalLag", expected: true, label: "Phase 4a-7 HamsterVisualFollower enableLocalLag");
+        ValidateSerializedFloatField(followerObject, "maxBackLag", Phase4a7MaxBackLag, "Phase 4a-7 HamsterVisualFollower maxBackLag");
+        ValidateSerializedFloatField(followerObject, "maxSideLag", Phase4a7MaxSideLag, "Phase 4a-7 HamsterVisualFollower maxSideLag");
+        ValidateSerializedFloatField(followerObject, "lagSmoothTime", Phase4a7LagSmoothTime, "Phase 4a-7 HamsterVisualFollower lagSmoothTime");
+        ValidateSerializedBoolField(followerObject, "enableSpeedBasedVisualHeight", expected: true, label: "Phase 4a-7 HamsterVisualFollower enableSpeedBasedVisualHeight");
+        ValidateSerializedFloatField(followerObject, "movingVisualYOffset", Phase4a7MovingVisualYOffset, "Phase 4a-7 HamsterVisualFollower movingVisualYOffset");
+        ValidateSerializedFloatField(followerObject, "jumpStretchAmount", Phase4a7JumpStretchAmount, "Phase 4a-7 HamsterVisualFollower jumpStretchAmount");
+        ValidateSerializedFloatField(followerObject, "landingSquashAmount", Phase4a7LandingSquashAmount, "Phase 4a-7 HamsterVisualFollower landingSquashAmount");
+        ValidateSerializedFloatField(followerObject, "landingPitchDegrees", Phase4a7LandingPitchDegrees, "Phase 4a-7 HamsterVisualFollower landingPitchDegrees");
+        ValidateSerializedFloatField(followerObject, "jumpVisualReturnSmoothTime", Phase4a7JumpVisualReturnSmoothTime, "Phase 4a-7 HamsterVisualFollower jumpVisualReturnSmoothTime");
     }
 
     private static void ValidatePhase3ImpactVisualReaction(
@@ -7579,10 +7121,7 @@ public static class HamsterFullRagdollTestSetupUtility
         Debug.Log($"{LogPrefix} ImpactTestWall_Phase3 relative to MotorShellBody: delta={delta} forwardDistance={forwardDistance:F2} verticalDelta={verticalDelta:F2}");
     }
 
-    private static void ValidateVisualAnimatorSetup(
-        Transform visualRoot,
-        HamsterVisualFollower visualFollower,
-        bool motorOnlyDiagnosticPreset)
+    private static void ValidateVisualAnimatorSetup(Transform visualRoot, HamsterVisualFollower visualFollower)
     {
         if (visualRoot == null)
             return;
@@ -7596,14 +7135,8 @@ public static class HamsterFullRagdollTestSetupUtility
 
         Debug.Log($"{LogPrefix} Found Animator path: {GetHierarchyPath(visualAnimator.transform)}");
         Debug.Log($"{LogPrefix} Visual Animator enabled={visualAnimator.enabled}");
-        if (motorOnlyDiagnosticPreset)
-        {
-            ValidatePhase4aMotorOnlyDiagnosticAnimatorState(visualAnimator, visualFollower);
-            return;
-        }
-
         if (!visualAnimator.enabled)
-            Debug.LogWarning($"{LogPrefix} Visual Animator should be enabled for Phase 4a-6 clip driving.");
+            Debug.LogWarning($"{LogPrefix} Visual Animator should be enabled for Phase 4a-7 visual following.");
 
         RuntimeAnimatorController controller = visualAnimator.runtimeAnimatorController;
         if (controller == null)
@@ -7689,7 +7222,7 @@ public static class HamsterFullRagdollTestSetupUtility
         ValidateAnimatorBaseLayerState(visualAnimator, "JumpUp", required: true);
         ValidateAnimatorBaseLayerState(visualAnimator, "Fall", required: false);
         ValidateAnimatorBaseLayerState(visualAnimator, "Land", required: false);
-        Debug.LogWarning($"{LogPrefix} Manual validation required: Fall/Land transitions are not auto-modified. Remove or disconnect Fall/Land incoming transitions for Phase 4a-6.");
+        Debug.LogWarning($"{LogPrefix} Manual validation required: AnimatorController transitions are not auto-modified for Phase 4a-7.");
     }
 
     private static void ValidateAnimatorBaseLayerState(Animator visualAnimator, string stateName, bool required)
@@ -7700,7 +7233,7 @@ public static class HamsterFullRagdollTestSetupUtility
         else if (required)
             Debug.Log($"{LogPrefix} Visual Animator Base Layer has state: {stateName}");
         else if (hasState)
-            Debug.LogWarning($"{LogPrefix} Visual Animator Base Layer has optional {stateName} state. Confirm transitions do not enter it during Phase 4a-6.");
+            Debug.LogWarning($"{LogPrefix} Visual Animator Base Layer has optional {stateName} state. Confirm transitions do not conflict with Phase 4a-7 procedural feel.");
         else
             Debug.Log($"{LogPrefix} Visual Animator Base Layer optional state absent: {stateName}");
     }
@@ -9415,45 +8948,6 @@ public static class HamsterFullRagdollTestSetupUtility
 
         Debug.LogWarning($"{LogPrefix} Plane not found. Falling back to Default layer for groundMask.");
         return ResolveDefaultGroundMask();
-    }
-
-    private static int ResolvePhase4aMotorOnlyDiagnosticGroundMask(Scene scene)
-    {
-        int mask = 0;
-        AddNamedLayerToMask(ref mask, "RagdollTestGround");
-        AddNamedLayerToMask(ref mask, "Ground");
-        AddSceneObjectLayerToMask(scene, ref mask, "RagdollTestGround");
-        AddSceneObjectLayerToMask(scene, ref mask, "Ground");
-        AddSceneObjectLayerToMask(scene, ref mask, "Plane");
-
-        if (mask != 0)
-        {
-            Debug.Log($"{LogPrefix} Phase 4a Motor Only Diagnostic groundMask={FormatLayerMask(mask)} Value={mask}");
-            return mask;
-        }
-
-        Debug.LogWarning($"{LogPrefix} No RagdollTestGround/Ground/Plane candidates found. Falling back to existing scene groundMask resolver.");
-        return ResolveSceneGroundMask(scene);
-    }
-
-    private static void AddNamedLayerToMask(ref int mask, string layerName)
-    {
-        int layer = LayerMask.NameToLayer(layerName);
-        if (layer < 0)
-            return;
-
-        mask |= 1 << layer;
-        Debug.Log($"{LogPrefix} Added groundMask layer candidate: {layerName}({layer})");
-    }
-
-    private static void AddSceneObjectLayerToMask(Scene scene, ref int mask, string objectName)
-    {
-        GameObject candidate = FindGameObjectByName(scene, objectName);
-        if (candidate == null)
-            return;
-
-        mask |= 1 << candidate.layer;
-        Debug.Log($"{LogPrefix} Added groundMask scene object candidate: {objectName} layer={LayerMask.LayerToName(candidate.layer)}({candidate.layer})");
     }
 
     private static GameObject FindGameObjectByName(Scene scene, string objectName)

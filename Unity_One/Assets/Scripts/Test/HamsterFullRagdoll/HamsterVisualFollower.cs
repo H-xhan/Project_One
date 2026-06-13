@@ -2,6 +2,10 @@ using UnityEngine;
 
 public sealed class HamsterVisualFollower : MonoBehaviour
 {
+    private const int BaseLayerIndex = 0;
+    private const float ClipHeightBoostDuration = 0.16f;
+    private const float ClipHeightLogInterval = 0.75f;
+
     [Header("References")]
     [SerializeField] private Rigidbody targetBody;
     [SerializeField] private Transform visualRoot;
@@ -43,6 +47,32 @@ public sealed class HamsterVisualFollower : MonoBehaviour
     [SerializeField] private float speedForMovingVisualYOffset = 0.6f;
     [SerializeField] private float visualHeightSmoothTime = 0.08f;
 
+    [Header("Clip State Height Stabilization")]
+    [SerializeField] private bool enableClipStateHeightOffsets = true;
+    [SerializeField] private Animator stateHeightAnimator;
+    [SerializeField] private bool autoUseVisualAnimatorForHeight = true;
+    [SerializeField] private string idleStateName = "Idle";
+    [SerializeField] private string walkStateName = "Walk";
+    [SerializeField] private string runStateName = "Run";
+    [SerializeField] private string jumpStateName = "JumpUp";
+    [SerializeField] private float idleStateYOffset = 0.0f;
+    [SerializeField] private float walkStateYOffset = -0.02f;
+    [SerializeField] private float runStateYOffset = 0.0f;
+    [SerializeField] private float jumpStateYOffset = 0.04f;
+    [SerializeField] private float sprintPivotYOffset = 0.04f;
+    [SerializeField] private float landingYOffset = 0.05f;
+    [SerializeField] private float clipHeightSmoothTime = 0.06f;
+    [SerializeField] private float maxClipHeightYOffset = 0.12f;
+    [SerializeField] private bool debugClipHeightLogs = false;
+
+    [Header("Clip State Height Timing")]
+    [SerializeField] private bool useNextAnimatorStateForClipHeight = true;
+    [SerializeField] private bool prioritizeWalkNextStateHeight = true;
+    [SerializeField] private float clipHeightDownSmoothTime = 0.015f;
+    [SerializeField] private float clipHeightUpSmoothTime = 0.05f;
+    [SerializeField] private bool snapDownOnWalkEnter = false;
+    [SerializeField] private float walkEnterSnapMaxDelta = 0.04f;
+
     [Header("Acceleration Wobble")]
     [SerializeField] private bool enableAccelerationWobble = false;
     [SerializeField] private float accelerationForMaxWobble = 5.0f;
@@ -79,6 +109,18 @@ public sealed class HamsterVisualFollower : MonoBehaviour
     [SerializeField] private bool invertImpactForwardWobble = false;
     [SerializeField] private bool invertImpactSideWobble = false;
 
+    [Header("Jump Visual Reaction")]
+    [SerializeField] private bool enableJumpVisualReaction = true;
+    [SerializeField] private float jumpStretchAmount = 0.08f;
+    [SerializeField] private float jumpPitchDegrees = 6.0f;
+    [SerializeField] private float jumpVisualDuration = 0.16f;
+    [SerializeField] private float landingSquashAmount = 0.03f;
+    [SerializeField] private float landingPitchDegrees = 1.0f;
+    [SerializeField] private float landingVisualDuration = 0.18f;
+    [SerializeField] private float jumpVisualReturnSmoothTime = 0.12f;
+    [SerializeField] private bool invertJumpPitch = false;
+    [SerializeField] private bool invertLandingPitch = false;
+
     [Header("Animator")]
     [SerializeField] private bool updateAnimator = true;
     [SerializeField] private bool disableAnimatorRootMotion = true;
@@ -86,6 +128,17 @@ public sealed class HamsterVisualFollower : MonoBehaviour
     [SerializeField] private string move01Parameter = "Move01";
     [SerializeField] private float animatorDampTime = 0.10f;
     [SerializeField] private float speedForMove01 = 2.5f;
+
+    [Header("Locomotion Animator Parameters")]
+    [SerializeField] private HamsterFullRagdollMotor motorStateSource;
+    [SerializeField] private bool autoFindMotorStateSource = true;
+    [SerializeField] private string groundedParameter = "Grounded";
+    [SerializeField] private string verticalVelocityParameter = "VerticalVelocity";
+    [SerializeField] private string sprint01Parameter = "Sprint01";
+    [SerializeField] private float sprint01DampTime = 0.08f;
+    [SerializeField] private bool updateGroundedParameter = true;
+    [SerializeField] private bool updateVerticalVelocityParameter = true;
+    [SerializeField] private bool updateSprintParameter = true;
 
     [Header("Debug")]
     [SerializeField] private bool debugLogs = false;
@@ -106,6 +159,25 @@ public sealed class HamsterVisualFollower : MonoBehaviour
     private float _lastLogTime;
     private float _currentVisualYOffset;
     private float _visualYOffsetVelocity;
+    private float _currentClipHeightYOffset;
+    private float _targetClipHeightYOffset;
+    private float _clipHeightYOffsetVelocity;
+    private float _clipHeightPivotBoostTimer;
+    private float _clipHeightLandingBoostTimer;
+    private float _previousClipHeightVerticalVelocity;
+    private float _nextClipHeightLogTime;
+    private string _currentClipHeightStateName = "None";
+    private string _clipHeightCurrentStateName = "None";
+    private string _clipHeightNextStateName = "None";
+    private string _clipHeightSmoothMode = "Normal";
+    private bool _clipHeightGroundedInitialized;
+    private bool _wasClipHeightGrounded;
+    private bool _warnedClipHeightFallLand;
+    private bool _clipHeightIsInTransition;
+    private bool _usedNextStateForHeight;
+    private bool _clipHeightCurrentOrNextIsWalk;
+    private bool _wasClipHeightCurrentOrNextWalk;
+    private bool _loggedClipHeightCurrentTransition;
     private Vector3 _previousPlanarVelocity;
     private Vector3 _currentPlanarAcceleration;
     private float _accelForwardWobble;
@@ -127,15 +199,38 @@ public sealed class HamsterVisualFollower : MonoBehaviour
     private float _impactSideWobbleVelocity;
     private float _targetImpactForwardWobble;
     private float _targetImpactSideWobble;
+    private Vector3 _initialVisualLocalScale = Vector3.one;
+    private bool _hasInitialVisualLocalScale;
+    private float _jumpStretch;
+    private float _jumpStretchVelocity;
+    private float _jumpPitch;
+    private float _jumpPitchVelocity;
+    private float _landingSquash;
+    private float _landingSquashVelocity;
+    private float _landingPitch;
+    private float _landingPitchVelocity;
+    private float _jumpVisualTimer;
+    private float _landingVisualTimer;
+    private float _jumpVisualIntensity;
+    private float _landingVisualIntensity;
 
     private Vector3 _currentLagOffset;
     private Animator _cachedAnimator;
     private string _cachedSpeedParameter;
     private string _cachedMove01Parameter;
+    private string _cachedGroundedParameter;
+    private string _cachedVerticalVelocityParameter;
+    private string _cachedSprint01Parameter;
     private int _speedParameterHash;
     private int _move01ParameterHash;
+    private int _groundedParameterHash;
+    private int _verticalVelocityParameterHash;
+    private int _sprint01ParameterHash;
     private bool _hasSpeedParameter;
     private bool _hasMove01Parameter;
+    private bool _hasGroundedParameter;
+    private bool _hasVerticalVelocityParameter;
+    private bool _hasSprint01Parameter;
     private bool _missingVisualRootLogged;
     private bool _missingTargetBodyLogged;
 
@@ -177,8 +272,11 @@ public sealed class HamsterVisualFollower : MonoBehaviour
         Vector3 localVelocity = targetBody.transform.InverseTransformDirection(planarVelocity);
 
         UpdateMotionWobble(planarVelocity, planarSpeed, deltaTime);
+        UpdateJumpVisualReaction(deltaTime);
+        UpdateClipStateHeightOffset(planarVelocity, planarSpeed, velocity.y, deltaTime);
         UpdateVisualPosition(localVelocity, planarSpeed);
         UpdateVisualRotation(planarVelocity, planarSpeed, localVelocity);
+        UpdateJumpVisualScale();
         UpdateAnimator(planarSpeed);
         LogDebugState(velocity, planarSpeed, localVelocity);
         StorePreviousMotionState(planarVelocity, planarSpeed);
@@ -203,6 +301,13 @@ public sealed class HamsterVisualFollower : MonoBehaviour
             _missingVisualRootLogged = true;
             Debug.LogWarning("[HamsterVisualFollower] visualRoot is missing. Assign VisualPreviewRoot explicitly.", this);
         }
+
+        if (autoFindMotorStateSource && motorStateSource == null)
+        {
+            motorStateSource = GetComponent<HamsterFullRagdollMotor>();
+            if (motorStateSource == null)
+                motorStateSource = GetComponentInParent<HamsterFullRagdollMotor>();
+        }
     }
 
     private void CacheInitialLocalTransform()
@@ -213,6 +318,8 @@ public sealed class HamsterVisualFollower : MonoBehaviour
         _initialLocalPosition = visualRoot.localPosition;
         _initialLocalRotation = visualRoot.localRotation;
         _initialLocalScale = visualRoot.localScale;
+        _initialVisualLocalScale = visualRoot.localScale;
+        _hasInitialVisualLocalScale = true;
     }
 
     private void ResetVisualLocalTransform()
@@ -235,6 +342,25 @@ public sealed class HamsterVisualFollower : MonoBehaviour
         _sideLeanVelocity = 0f;
         _currentVisualYOffset = enableSpeedBasedVisualHeight ? idleVisualYOffset : visualLocalOffset.y;
         _visualYOffsetVelocity = 0f;
+        _currentClipHeightYOffset = 0f;
+        _targetClipHeightYOffset = 0f;
+        _clipHeightYOffsetVelocity = 0f;
+        _clipHeightPivotBoostTimer = 0f;
+        _clipHeightLandingBoostTimer = 0f;
+        _previousClipHeightVerticalVelocity = 0f;
+        _nextClipHeightLogTime = 0f;
+        _currentClipHeightStateName = "None";
+        _clipHeightCurrentStateName = "None";
+        _clipHeightNextStateName = "None";
+        _clipHeightSmoothMode = "Normal";
+        _clipHeightGroundedInitialized = false;
+        _wasClipHeightGrounded = false;
+        _warnedClipHeightFallLand = false;
+        _clipHeightIsInTransition = false;
+        _usedNextStateForHeight = false;
+        _clipHeightCurrentOrNextIsWalk = false;
+        _wasClipHeightCurrentOrNextWalk = false;
+        _loggedClipHeightCurrentTransition = false;
         _previousPlanarVelocity = Vector3.zero;
         _currentPlanarAcceleration = Vector3.zero;
         _accelForwardWobble = 0f;
@@ -256,6 +382,18 @@ public sealed class HamsterVisualFollower : MonoBehaviour
         _impactSideWobbleVelocity = 0f;
         _targetImpactForwardWobble = 0f;
         _targetImpactSideWobble = 0f;
+        _jumpStretch = 0f;
+        _jumpStretchVelocity = 0f;
+        _jumpPitch = 0f;
+        _jumpPitchVelocity = 0f;
+        _landingSquash = 0f;
+        _landingSquashVelocity = 0f;
+        _landingPitch = 0f;
+        _landingPitchVelocity = 0f;
+        _jumpVisualTimer = 0f;
+        _landingVisualTimer = 0f;
+        _jumpVisualIntensity = 0f;
+        _landingVisualIntensity = 0f;
 
         if (targetBody == null)
             return;
@@ -263,6 +401,12 @@ public sealed class HamsterVisualFollower : MonoBehaviour
         _previousPlanarVelocity = targetBody.linearVelocity;
         _previousPlanarVelocity.y = 0f;
         _lastPlanarSpeed = _previousPlanarVelocity.magnitude;
+        _previousClipHeightVerticalVelocity = targetBody.linearVelocity.y;
+        if (motorStateSource != null)
+        {
+            _wasClipHeightGrounded = motorStateSource.IsGrounded;
+            _clipHeightGroundedInitialized = true;
+        }
 
         Vector3 initialDirection = Vector3.ProjectOnPlane(targetBody.transform.forward, Vector3.up);
         _lastPlanarMoveDirection = initialDirection.sqrMagnitude > 0.0001f
@@ -292,6 +436,7 @@ public sealed class HamsterVisualFollower : MonoBehaviour
 
         Vector3 targetOffset = visualLocalOffset;
         targetOffset.y = ResolveVisualYOffset(planarSpeed);
+        targetOffset.y += _currentClipHeightYOffset;
         targetOffset += _currentLagOffset;
         if (visualRootIsChildOfTarget)
         {
@@ -332,6 +477,370 @@ public sealed class HamsterVisualFollower : MonoBehaviour
             Time.deltaTime);
 
         return _currentVisualYOffset;
+    }
+
+    private void UpdateClipStateHeightOffset(Vector3 planarVelocity, float planarSpeed, float verticalVelocity, float deltaTime)
+    {
+        if (!enableClipStateHeightOffsets)
+        {
+            _currentClipHeightStateName = "Disabled";
+            _clipHeightCurrentStateName = "Disabled";
+            _clipHeightNextStateName = "None";
+            _clipHeightIsInTransition = false;
+            _usedNextStateForHeight = false;
+            _clipHeightCurrentOrNextIsWalk = false;
+            _loggedClipHeightCurrentTransition = false;
+            _targetClipHeightYOffset = 0f;
+            _clipHeightPivotBoostTimer = 0f;
+            _clipHeightLandingBoostTimer = 0f;
+            _currentClipHeightYOffset = SmoothClipHeightYOffset(_targetClipHeightYOffset, deltaTime);
+            _wasClipHeightCurrentOrNextWalk = false;
+            StoreClipHeightMotionState(verticalVelocity);
+            return;
+        }
+
+        UpdateClipHeightBoostTriggers(planarVelocity, planarSpeed, verticalVelocity);
+
+        float stateYOffset = ResolveClipStateYOffset(out _currentClipHeightStateName);
+        float boostYOffset = ResolveClipHeightBoostYOffset();
+        _targetClipHeightYOffset = ClampClipHeightOffset(stateYOffset + boostYOffset);
+        _currentClipHeightYOffset = SmoothClipHeightYOffset(_targetClipHeightYOffset, deltaTime);
+        if (!_clipHeightIsInTransition || !_usedNextStateForHeight)
+            _loggedClipHeightCurrentTransition = false;
+
+        LogClipHeightState(planarSpeed, verticalVelocity, stateYOffset, boostYOffset);
+        _wasClipHeightCurrentOrNextWalk = _clipHeightCurrentOrNextIsWalk;
+        DecayClipHeightBoostTimers(deltaTime);
+        StoreClipHeightMotionState(verticalVelocity);
+    }
+
+    private float ResolveClipStateYOffset(out string stateName)
+    {
+        stateName = "None";
+        _clipHeightCurrentStateName = "None";
+        _clipHeightNextStateName = "None";
+        _clipHeightIsInTransition = false;
+        _usedNextStateForHeight = false;
+        _clipHeightCurrentOrNextIsWalk = false;
+
+        Animator animator = ResolveStateHeightAnimator();
+        if (animator == null || !animator.isActiveAndEnabled || animator.runtimeAnimatorController == null)
+            return 0f;
+
+        AnimatorStateInfo stateInfo = animator.GetCurrentAnimatorStateInfo(BaseLayerIndex);
+        bool hasCurrentOffset = TryResolveClipStateYOffset(stateInfo, true, out string currentStateName, out float currentYOffset);
+        bool currentIsWalk = MatchesAnimatorState(stateInfo, walkStateName);
+        _clipHeightCurrentStateName = currentStateName;
+        _clipHeightCurrentOrNextIsWalk = currentIsWalk;
+
+        if (useNextAnimatorStateForClipHeight && animator.IsInTransition(BaseLayerIndex))
+        {
+            _clipHeightIsInTransition = true;
+            AnimatorStateInfo nextStateInfo = animator.GetNextAnimatorStateInfo(BaseLayerIndex);
+            bool hasNextOffset = TryResolveClipStateYOffset(nextStateInfo, false, out string nextStateName, out float nextYOffset);
+            bool nextIsWalk = MatchesAnimatorState(nextStateInfo, walkStateName);
+            bool nextIsRun = MatchesAnimatorState(nextStateInfo, runStateName);
+            bool nextIsJump = MatchesAnimatorState(nextStateInfo, jumpStateName);
+            _clipHeightNextStateName = nextStateName;
+            _clipHeightCurrentOrNextIsWalk = currentIsWalk || nextIsWalk;
+
+            if (nextIsWalk && prioritizeWalkNextStateHeight)
+            {
+                _usedNextStateForHeight = true;
+                stateName = walkStateName;
+                return ClampClipHeightOffset(walkStateYOffset);
+            }
+
+            if (hasNextOffset && (nextIsRun || nextIsJump))
+            {
+                _usedNextStateForHeight = true;
+                stateName = nextStateName;
+                return nextYOffset;
+            }
+        }
+
+        stateName = currentStateName;
+        return hasCurrentOffset ? currentYOffset : 0f;
+    }
+
+    private bool TryResolveClipStateYOffset(
+        AnimatorStateInfo stateInfo,
+        bool allowFallLandFallback,
+        out string stateName,
+        out float yOffset)
+    {
+        yOffset = 0f;
+
+        if (MatchesAnimatorState(stateInfo, idleStateName))
+        {
+            stateName = idleStateName;
+            yOffset = ClampClipHeightOffset(idleStateYOffset);
+            return true;
+        }
+
+        if (MatchesAnimatorState(stateInfo, walkStateName))
+        {
+            stateName = walkStateName;
+            yOffset = ClampClipHeightOffset(walkStateYOffset);
+            return true;
+        }
+
+        if (MatchesAnimatorState(stateInfo, runStateName))
+        {
+            stateName = runStateName;
+            yOffset = ClampClipHeightOffset(runStateYOffset);
+            return true;
+        }
+
+        if (MatchesAnimatorState(stateInfo, jumpStateName))
+        {
+            stateName = jumpStateName;
+            yOffset = ClampClipHeightOffset(jumpStateYOffset);
+            return true;
+        }
+
+        if (MatchesAnimatorState(stateInfo, "Fall") || MatchesAnimatorState(stateInfo, "Land") || MatchesAnimatorState(stateInfo, "Landing"))
+        {
+            stateName = "Fall/Land";
+            WarnClipHeightFallLandState(allowFallLandFallback);
+            if (!allowFallLandFallback)
+                return false;
+
+            yOffset = ClampClipHeightOffset(jumpStateYOffset);
+            return true;
+        }
+
+        stateName = $"hash:{stateInfo.shortNameHash}";
+        return false;
+    }
+
+    private void WarnClipHeightFallLandState(bool usingJumpFallback)
+    {
+        if (!debugClipHeightLogs || _warnedClipHeightFallLand)
+            return;
+
+        string fallback = usingJumpFallback
+            ? "Clip height offset is using JumpUp fallback."
+            : "Keeping current clip height fallback.";
+        Debug.LogWarning(
+            $"[HamsterVisualFollower] Fall/Land animator state detected. {fallback} Remove Fall/Land transitions for this test step.",
+            this);
+        _warnedClipHeightFallLand = true;
+    }
+
+    private Animator ResolveStateHeightAnimator()
+    {
+        if (stateHeightAnimator == null && autoUseVisualAnimatorForHeight)
+            stateHeightAnimator = visualAnimator;
+
+        return stateHeightAnimator;
+    }
+
+    private static bool MatchesAnimatorState(AnimatorStateInfo stateInfo, string stateName)
+    {
+        if (string.IsNullOrEmpty(stateName))
+            return false;
+
+        return stateInfo.shortNameHash == Animator.StringToHash(stateName)
+            || stateInfo.IsName(stateName)
+            || stateInfo.IsName($"Base Layer.{stateName}");
+    }
+
+    private void UpdateClipHeightBoostTriggers(Vector3 planarVelocity, float planarSpeed, float verticalVelocity)
+    {
+        if (_previousPlanarVelocity.sqrMagnitude > 0.0001f && planarVelocity.sqrMagnitude > 0.0001f)
+        {
+            float previousSpeed = _previousPlanarVelocity.magnitude;
+            float directionDot = Vector3.Dot(_previousPlanarVelocity / previousSpeed, planarVelocity / Mathf.Max(0.0001f, planarSpeed));
+            if (previousSpeed >= 0.5f && planarSpeed >= 0.5f && directionDot <= -0.25f)
+                _clipHeightPivotBoostTimer = Mathf.Max(_clipHeightPivotBoostTimer, ClipHeightBoostDuration);
+        }
+
+        bool hasGroundedState = motorStateSource != null;
+        bool isGrounded = hasGroundedState && motorStateSource.IsGrounded;
+        bool landedByGroundedState = hasGroundedState
+            && _clipHeightGroundedInitialized
+            && !_wasClipHeightGrounded
+            && isGrounded
+            && _previousClipHeightVerticalVelocity < -0.5f;
+        bool landedByVelocityRecovery = !hasGroundedState
+            && _previousClipHeightVerticalVelocity < -0.5f
+            && Mathf.Abs(verticalVelocity) <= 0.08f;
+
+        if (landedByGroundedState || landedByVelocityRecovery)
+            _clipHeightLandingBoostTimer = Mathf.Max(_clipHeightLandingBoostTimer, ClipHeightBoostDuration);
+    }
+
+    private float ResolveClipHeightBoostYOffset()
+    {
+        float pivot01 = ClipHeightBoostDuration > 0f
+            ? Mathf.Clamp01(_clipHeightPivotBoostTimer / ClipHeightBoostDuration)
+            : 0f;
+        float landing01 = ClipHeightBoostDuration > 0f
+            ? Mathf.Clamp01(_clipHeightLandingBoostTimer / ClipHeightBoostDuration)
+            : 0f;
+
+        return sprintPivotYOffset * pivot01 + landingYOffset * landing01;
+    }
+
+    private void DecayClipHeightBoostTimers(float deltaTime)
+    {
+        if (_clipHeightPivotBoostTimer > 0f)
+            _clipHeightPivotBoostTimer = Mathf.Max(0f, _clipHeightPivotBoostTimer - deltaTime);
+
+        if (_clipHeightLandingBoostTimer > 0f)
+            _clipHeightLandingBoostTimer = Mathf.Max(0f, _clipHeightLandingBoostTimer - deltaTime);
+    }
+
+    private float SmoothClipHeightYOffset(float targetYOffset, float deltaTime)
+    {
+        float delta = targetYOffset - _currentClipHeightYOffset;
+        bool isMovingDown = delta < 0f;
+        bool isWalkEnter = !_wasClipHeightCurrentOrNextWalk && _clipHeightCurrentOrNextIsWalk;
+        if (snapDownOnWalkEnter && isWalkEnter && isMovingDown && Mathf.Abs(delta) <= walkEnterSnapMaxDelta)
+        {
+            _clipHeightYOffsetVelocity = 0f;
+            _clipHeightSmoothMode = "SnapWalk";
+            return targetYOffset;
+        }
+
+        float smoothTime = isMovingDown ? clipHeightDownSmoothTime : clipHeightUpSmoothTime;
+        _clipHeightSmoothMode = isMovingDown ? "DownFast" : "UpNormal";
+        if (Mathf.Approximately(delta, 0f))
+            _clipHeightSmoothMode = "Normal";
+
+        return Mathf.SmoothDamp(
+            _currentClipHeightYOffset,
+            targetYOffset,
+            ref _clipHeightYOffsetVelocity,
+            Mathf.Max(0f, smoothTime),
+            Mathf.Infinity,
+            deltaTime);
+    }
+
+    private void StoreClipHeightMotionState(float verticalVelocity)
+    {
+        _previousClipHeightVerticalVelocity = verticalVelocity;
+
+        if (motorStateSource == null)
+        {
+            _clipHeightGroundedInitialized = false;
+            _wasClipHeightGrounded = false;
+            return;
+        }
+
+        _wasClipHeightGrounded = motorStateSource.IsGrounded;
+        _clipHeightGroundedInitialized = true;
+    }
+
+    private float ClampClipHeightOffset(float value)
+    {
+        float maxOffset = Mathf.Max(0f, maxClipHeightYOffset);
+        return Mathf.Clamp(value, -maxOffset, maxOffset);
+    }
+
+    private void LogClipHeightState(float planarSpeed, float verticalVelocity, float stateYOffset, float boostYOffset)
+    {
+        bool forceTransitionLog = _usedNextStateForHeight && !_loggedClipHeightCurrentTransition;
+        if (!debugClipHeightLogs || (!forceTransitionLog && Time.time < _nextClipHeightLogTime))
+            return;
+
+        _nextClipHeightLogTime = Time.time + ClipHeightLogInterval;
+        if (_usedNextStateForHeight)
+            _loggedClipHeightCurrentTransition = true;
+
+        float baseVisualY = enableSpeedBasedVisualHeight ? _currentVisualYOffset : visualLocalOffset.y;
+        float targetVisualY = baseVisualY + _targetClipHeightYOffset;
+        float currentVisualY = baseVisualY + _currentClipHeightYOffset;
+        float localY = visualRoot != null ? visualRoot.localPosition.y : 0f;
+        Debug.Log(
+            $"[HamsterVisualFollower] clipHeight current={_clipHeightCurrentStateName} next={_clipHeightNextStateName} transition={_clipHeightIsInTransition} usedNext={_usedNextStateForHeight} smooth={_clipHeightSmoothMode} state={_currentClipHeightStateName} baseY={baseVisualY:F2} stateOffset={stateYOffset:F2} boost={boostYOffset:F2} target={_targetClipHeightYOffset:F3} currentOffset={_currentClipHeightYOffset:F3} targetY={targetVisualY:F3} currentY={currentVisualY:F3} localY={localY:F3} speed={planarSpeed:F2} vertical={verticalVelocity:F2}",
+            this);
+    }
+
+    public void AddJumpVisualReaction(float intensity = 1f)
+    {
+        if (!enableJumpVisualReaction)
+            return;
+
+        float normalizedIntensity = Mathf.Clamp01(intensity);
+        if (normalizedIntensity <= 0f)
+            return;
+
+        _jumpVisualTimer = Mathf.Max(_jumpVisualTimer, jumpVisualDuration);
+        _jumpVisualIntensity = Mathf.Max(_jumpVisualIntensity, normalizedIntensity);
+    }
+
+    public void AddLandingVisualReaction(float intensity = 1f)
+    {
+        if (!enableJumpVisualReaction)
+            return;
+
+        float normalizedIntensity = Mathf.Clamp01(intensity);
+        if (normalizedIntensity <= 0f)
+            return;
+
+        _landingVisualTimer = Mathf.Max(_landingVisualTimer, landingVisualDuration);
+        _landingVisualIntensity = Mathf.Max(_landingVisualIntensity, normalizedIntensity);
+    }
+
+    private void UpdateJumpVisualReaction(float deltaTime)
+    {
+        if (!enableJumpVisualReaction)
+        {
+            _jumpVisualTimer = 0f;
+            _landingVisualTimer = 0f;
+            _jumpVisualIntensity = 0f;
+            _landingVisualIntensity = 0f;
+        }
+
+        if (_jumpVisualTimer > 0f)
+            _jumpVisualTimer = Mathf.Max(0f, _jumpVisualTimer - deltaTime);
+
+        if (_landingVisualTimer > 0f)
+            _landingVisualTimer = Mathf.Max(0f, _landingVisualTimer - deltaTime);
+
+        if (_jumpVisualTimer <= 0f)
+            _jumpVisualIntensity = 0f;
+
+        if (_landingVisualTimer <= 0f)
+            _landingVisualIntensity = 0f;
+
+        float jumpTargetStretch = _jumpVisualTimer > 0f ? jumpStretchAmount * _jumpVisualIntensity : 0f;
+        float jumpTargetPitch = _jumpVisualTimer > 0f ? jumpPitchDegrees * _jumpVisualIntensity : 0f;
+        float landingTargetSquash = _landingVisualTimer > 0f ? landingSquashAmount * _landingVisualIntensity : 0f;
+        float landingTargetPitch = _landingVisualTimer > 0f ? landingPitchDegrees * _landingVisualIntensity : 0f;
+
+        if (invertJumpPitch)
+            jumpTargetPitch = -jumpTargetPitch;
+
+        if (invertLandingPitch)
+            landingTargetPitch = -landingTargetPitch;
+
+        float smoothTime = Mathf.Max(0f, jumpVisualReturnSmoothTime);
+        _jumpStretch = Mathf.SmoothDamp(_jumpStretch, jumpTargetStretch, ref _jumpStretchVelocity, smoothTime, Mathf.Infinity, deltaTime);
+        _jumpPitch = Mathf.SmoothDamp(_jumpPitch, jumpTargetPitch, ref _jumpPitchVelocity, smoothTime, Mathf.Infinity, deltaTime);
+        _landingSquash = Mathf.SmoothDamp(_landingSquash, landingTargetSquash, ref _landingSquashVelocity, smoothTime, Mathf.Infinity, deltaTime);
+        _landingPitch = Mathf.SmoothDamp(_landingPitch, landingTargetPitch, ref _landingPitchVelocity, smoothTime, Mathf.Infinity, deltaTime);
+    }
+
+    private void UpdateJumpVisualScale()
+    {
+        if (visualRoot == null)
+            return;
+
+        if (!_hasInitialVisualLocalScale)
+        {
+            _initialVisualLocalScale = visualRoot.localScale;
+            _hasInitialVisualLocalScale = true;
+        }
+
+        float xzMultiplier = Mathf.Clamp(1f - _jumpStretch * 0.5f + _landingSquash * 0.5f, 0.85f, 1.15f);
+        float yMultiplier = Mathf.Clamp(1f + _jumpStretch - _landingSquash, 0.85f, 1.18f);
+        visualRoot.localScale = new Vector3(
+            _initialVisualLocalScale.x * xzMultiplier,
+            _initialVisualLocalScale.y * yMultiplier,
+            _initialVisualLocalScale.z * xzMultiplier);
     }
 
     private void UpdateMotionWobble(Vector3 planarVelocity, float planarSpeed, float deltaTime)
@@ -615,12 +1124,13 @@ public sealed class HamsterVisualFollower : MonoBehaviour
         Quaternion stopOvershootRot = Quaternion.Euler(_stopOvershoot, 0f, 0f);
         Quaternion turnWobbleRot = Quaternion.Euler(0f, 0f, _turnWobble);
         Quaternion impactWobbleRot = Quaternion.Euler(_impactForwardWobble, 0f, _impactSideWobble);
+        Quaternion jumpVisualRot = Quaternion.Euler(_jumpPitch + _landingPitch, 0f, 0f);
         Quaternion offsetRot = Quaternion.Euler(visualLocalEulerOffset);
 
         if (visualRootIsChildOfTarget)
-            visualRoot.localRotation = _initialLocalRotation * yawRot * leanRot * accelerationWobbleRot * stopOvershootRot * turnWobbleRot * impactWobbleRot * offsetRot;
+            visualRoot.localRotation = _initialLocalRotation * yawRot * leanRot * accelerationWobbleRot * stopOvershootRot * turnWobbleRot * impactWobbleRot * jumpVisualRot * offsetRot;
         else
-            visualRoot.rotation = yawRot * leanRot * accelerationWobbleRot * stopOvershootRot * turnWobbleRot * impactWobbleRot * offsetRot;
+            visualRoot.rotation = yawRot * leanRot * accelerationWobbleRot * stopOvershootRot * turnWobbleRot * impactWobbleRot * jumpVisualRot * offsetRot;
     }
 
     private float CalculateTargetYaw(Vector3 moveDirection)
@@ -657,7 +1167,10 @@ public sealed class HamsterVisualFollower : MonoBehaviour
     {
         if (_cachedAnimator == visualAnimator &&
             _cachedSpeedParameter == speedParameter &&
-            _cachedMove01Parameter == move01Parameter)
+            _cachedMove01Parameter == move01Parameter &&
+            _cachedGroundedParameter == groundedParameter &&
+            _cachedVerticalVelocityParameter == verticalVelocityParameter &&
+            _cachedSprint01Parameter == sprint01Parameter)
         {
             return;
         }
@@ -665,8 +1178,14 @@ public sealed class HamsterVisualFollower : MonoBehaviour
         _cachedAnimator = visualAnimator;
         _cachedSpeedParameter = speedParameter;
         _cachedMove01Parameter = move01Parameter;
+        _cachedGroundedParameter = groundedParameter;
+        _cachedVerticalVelocityParameter = verticalVelocityParameter;
+        _cachedSprint01Parameter = sprint01Parameter;
         _hasSpeedParameter = HasFloatParameter(visualAnimator, speedParameter, out _speedParameterHash);
         _hasMove01Parameter = HasFloatParameter(visualAnimator, move01Parameter, out _move01ParameterHash);
+        _hasGroundedParameter = HasBoolParameter(visualAnimator, groundedParameter, out _groundedParameterHash);
+        _hasVerticalVelocityParameter = HasFloatParameter(visualAnimator, verticalVelocityParameter, out _verticalVelocityParameterHash);
+        _hasSprint01Parameter = HasFloatParameter(visualAnimator, sprint01Parameter, out _sprint01ParameterHash);
     }
 
     private void UpdateAnimator(float planarSpeed)
@@ -687,6 +1206,20 @@ public sealed class HamsterVisualFollower : MonoBehaviour
             float move01 = Mathf.Clamp01(planarSpeed / Mathf.Max(0.01f, speedForMove01));
             visualAnimator.SetFloat(_move01ParameterHash, move01, animatorDampTime, Time.deltaTime);
         }
+
+        if (updateGroundedParameter && _hasGroundedParameter && motorStateSource != null)
+            visualAnimator.SetBool(_groundedParameterHash, motorStateSource.IsGrounded);
+
+        if (updateVerticalVelocityParameter && _hasVerticalVelocityParameter)
+            visualAnimator.SetFloat(_verticalVelocityParameterHash, targetBody != null ? targetBody.linearVelocity.y : 0f, animatorDampTime, Time.deltaTime);
+
+        if (updateSprintParameter && _hasSprint01Parameter)
+        {
+            float sprint01 = motorStateSource != null
+                ? (motorStateSource.IsSprintHeld ? 1f : 0f)
+                : Mathf.Clamp01(planarSpeed / Mathf.Max(0.01f, speedForMove01));
+            visualAnimator.SetFloat(_sprint01ParameterHash, sprint01, sprint01DampTime, Time.deltaTime);
+        }
     }
 
     private static bool HasFloatParameter(Animator animator, string parameterName, out int parameterHash)
@@ -706,6 +1239,23 @@ public sealed class HamsterVisualFollower : MonoBehaviour
         return false;
     }
 
+    private static bool HasBoolParameter(Animator animator, string parameterName, out int parameterHash)
+    {
+        parameterHash = 0;
+        if (animator == null || string.IsNullOrEmpty(parameterName))
+            return false;
+
+        parameterHash = Animator.StringToHash(parameterName);
+        AnimatorControllerParameter[] parameters = animator.parameters;
+        for (int i = 0; i < parameters.Length; i++)
+        {
+            if (parameters[i].nameHash == parameterHash && parameters[i].type == AnimatorControllerParameterType.Bool)
+                return true;
+        }
+
+        return false;
+    }
+
     private void LogDebugState(Vector3 velocity, float planarSpeed, Vector3 localVelocity)
     {
         if (!debugLogs || Time.time < _lastLogTime + 1f)
@@ -713,7 +1263,7 @@ public sealed class HamsterVisualFollower : MonoBehaviour
 
         _lastLogTime = Time.time;
         Debug.Log(
-            $"[HamsterVisualFollower:{gameObject.name}] targetVelocity={FormatVector3(velocity)} planarSpeed={planarSpeed:F2} previousPlanarSpeed={_lastPlanarSpeed:F2} localVelocity={FormatVector3(localVelocity)} currentPlanarAcceleration={FormatVector3(_currentPlanarAcceleration)} currentYaw={_currentYaw:F1} forwardLean={_currentForwardLean:F1} sideLean={_currentSideLean:F1} enableAccelerationWobble={enableAccelerationWobble} accelForwardWobble={_accelForwardWobble:F1} accelSideWobble={_accelSideWobble:F1} stopOvershoot={_stopOvershoot:F1} turnWobble={_turnWobble:F1} impactForwardWobble={_impactForwardWobble:F1} impactSideWobble={_impactSideWobble:F1} targetImpactForwardWobble={_targetImpactForwardWobble:F1} targetImpactSideWobble={_targetImpactSideWobble:F1} enableSpeedBasedVisualHeight={enableSpeedBasedVisualHeight} idleVisualYOffset={idleVisualYOffset:F3} movingVisualYOffset={movingVisualYOffset:F3} currentVisualYOffset={_currentVisualYOffset:F3} speedForMovingVisualYOffset={speedForMovingVisualYOffset:F2} visualLocalPosition={FormatVector3(visualRoot.localPosition)} visualLocalEuler={FormatVector3(visualRoot.localRotation.eulerAngles)}",
+            $"[HamsterVisualFollower:{gameObject.name}] targetVelocity={FormatVector3(velocity)} planarSpeed={planarSpeed:F2} previousPlanarSpeed={_lastPlanarSpeed:F2} localVelocity={FormatVector3(localVelocity)} currentPlanarAcceleration={FormatVector3(_currentPlanarAcceleration)} currentYaw={_currentYaw:F1} forwardLean={_currentForwardLean:F1} sideLean={_currentSideLean:F1} enableAccelerationWobble={enableAccelerationWobble} accelForwardWobble={_accelForwardWobble:F1} accelSideWobble={_accelSideWobble:F1} stopOvershoot={_stopOvershoot:F1} turnWobble={_turnWobble:F1} impactForwardWobble={_impactForwardWobble:F1} impactSideWobble={_impactSideWobble:F1} targetImpactForwardWobble={_targetImpactForwardWobble:F1} targetImpactSideWobble={_targetImpactSideWobble:F1} jumpStretch={_jumpStretch:F2} landingSquash={_landingSquash:F2} enableSpeedBasedVisualHeight={enableSpeedBasedVisualHeight} idleVisualYOffset={idleVisualYOffset:F3} movingVisualYOffset={movingVisualYOffset:F3} currentVisualYOffset={_currentVisualYOffset:F3} speedForMovingVisualYOffset={speedForMovingVisualYOffset:F2} visualLocalPosition={FormatVector3(visualRoot.localPosition)} visualLocalEuler={FormatVector3(visualRoot.localRotation.eulerAngles)}",
             this);
     }
 
@@ -745,6 +1295,17 @@ public sealed class HamsterVisualFollower : MonoBehaviour
         lagSmoothTime = Mathf.Max(0f, lagSmoothTime);
         speedForMovingVisualYOffset = Mathf.Max(0.01f, speedForMovingVisualYOffset);
         visualHeightSmoothTime = Mathf.Max(0f, visualHeightSmoothTime);
+        clipHeightSmoothTime = Mathf.Max(0f, clipHeightSmoothTime);
+        clipHeightDownSmoothTime = Mathf.Max(0f, clipHeightDownSmoothTime);
+        clipHeightUpSmoothTime = Mathf.Max(0f, clipHeightUpSmoothTime);
+        walkEnterSnapMaxDelta = Mathf.Max(0f, walkEnterSnapMaxDelta);
+        maxClipHeightYOffset = Mathf.Max(0f, maxClipHeightYOffset);
+        idleStateYOffset = ClampClipHeightOffset(idleStateYOffset);
+        walkStateYOffset = ClampClipHeightOffset(walkStateYOffset);
+        runStateYOffset = ClampClipHeightOffset(runStateYOffset);
+        jumpStateYOffset = ClampClipHeightOffset(jumpStateYOffset);
+        sprintPivotYOffset = ClampClipHeightOffset(sprintPivotYOffset);
+        landingYOffset = ClampClipHeightOffset(landingYOffset);
         accelerationForMaxWobble = Mathf.Max(0.01f, accelerationForMaxWobble);
         maxAccelerationForwardWobbleDegrees = Mathf.Max(0f, maxAccelerationForwardWobbleDegrees);
         maxAccelerationSideWobbleDegrees = Mathf.Max(0f, maxAccelerationSideWobbleDegrees);
@@ -763,8 +1324,16 @@ public sealed class HamsterVisualFollower : MonoBehaviour
         maxImpactSideWobbleDegrees = Mathf.Max(0f, maxImpactSideWobbleDegrees);
         impactWobbleSmoothTime = Mathf.Max(0f, impactWobbleSmoothTime);
         impactWobbleReturnSmoothTime = Mathf.Max(0f, impactWobbleReturnSmoothTime);
+        jumpStretchAmount = Mathf.Max(0f, jumpStretchAmount);
+        jumpPitchDegrees = Mathf.Max(0f, jumpPitchDegrees);
+        jumpVisualDuration = Mathf.Max(0f, jumpVisualDuration);
+        landingSquashAmount = Mathf.Max(0f, landingSquashAmount);
+        landingPitchDegrees = Mathf.Max(0f, landingPitchDegrees);
+        landingVisualDuration = Mathf.Max(0f, landingVisualDuration);
+        jumpVisualReturnSmoothTime = Mathf.Max(0f, jumpVisualReturnSmoothTime);
         animatorDampTime = Mathf.Max(0f, animatorDampTime);
         speedForMove01 = Mathf.Max(0.01f, speedForMove01);
+        sprint01DampTime = Mathf.Max(0f, sprint01DampTime);
     }
 
     private void OnDrawGizmosSelected()
