@@ -119,6 +119,162 @@ NavMeshSettings:
     debug:
       m_Flags: 0
   m_NavMeshData: {fileID: 0}
+--- !u!1 &43915000
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 43915006}
+  - component: {fileID: 43915005}
+  - component: {fileID: 43915004}
+  - component: {fileID: 43915003}
+  - component: {fileID: 43915002}
+  - component: {fileID: 43915001}
+  m_Layer: 0
+  m_Name: Hamster_GrabThrow_TestCube
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!114 &43915001
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 43915000}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: db396802dac61c44092c58eb67412bbd, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  body: {fileID: 43915002}
+  colliders:
+  - {fileID: 43915004}
+  autoFindReferences: 1
+  maxSafeDistanceFromHoldPoint: 3
+  autoReleaseWhenTooFar: 1
+  debugLogs: 1
+--- !u!54 &43915002
+Rigidbody:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 43915000}
+  serializedVersion: 4
+  m_Mass: 1.5
+  m_Drag: 0
+  m_AngularDrag: 0.05
+  m_CenterOfMass: {x: 0, y: 0, z: 0}
+  m_InertiaTensor: {x: 1, y: 1, z: 1}
+  m_InertiaRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_IncludeLayers:
+    serializedVersion: 2
+    m_Bits: 0
+  m_ExcludeLayers:
+    serializedVersion: 2
+    m_Bits: 0
+  m_ImplicitCom: 1
+  m_ImplicitTensor: 1
+  m_UseGravity: 1
+  m_IsKinematic: 0
+  m_Interpolate: 1
+  m_Constraints: 0
+  m_CollisionDetection: 2
+--- !u!23 &43915003
+MeshRenderer:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 43915000}
+  m_Enabled: 1
+  m_CastShadows: 1
+  m_ReceiveShadows: 1
+  m_DynamicOccludee: 1
+  m_StaticShadowCaster: 0
+  m_MotionVectors: 1
+  m_LightProbeUsage: 1
+  m_ReflectionProbeUsage: 1
+  m_RayTracingMode: 2
+  m_RayTraceProcedural: 0
+  m_RayTracingAccelStructBuildFlagsOverride: 0
+  m_RayTracingAccelStructBuildFlags: 1
+  m_SmallMeshCulling: 1
+  m_RenderingLayerMask: 1
+  m_RendererPriority: 0
+  m_Materials:
+  - {fileID: 2100000, guid: 31321ba15b8f8eb4c954353edc038b1d, type: 2}
+  m_StaticBatchInfo:
+    firstSubMesh: 0
+    subMeshCount: 0
+  m_StaticBatchRoot: {fileID: 0}
+  m_ProbeAnchor: {fileID: 0}
+  m_LightProbeVolumeOverride: {fileID: 0}
+  m_ScaleInLightmap: 1
+  m_ReceiveGI: 1
+  m_PreserveUVs: 1
+  m_IgnoreNormalsForChartDetection: 0
+  m_ImportantGI: 0
+  m_StitchLightmapSeams: 1
+  m_SelectedEditorRenderState: 3
+  m_MinimumChartSize: 4
+  m_AutoUVMaxDistance: 0.5
+  m_AutoUVMaxAngle: 89
+  m_LightmapParameters: {fileID: 0}
+  m_SortingLayerID: 0
+  m_SortingLayer: 0
+  m_SortingOrder: 0
+  m_AdditionalVertexStreams: {fileID: 0}
+--- !u!65 &43915004
+BoxCollider:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 43915000}
+  m_Material: {fileID: 0}
+  m_IncludeLayers:
+    serializedVersion: 2
+    m_Bits: 0
+  m_ExcludeLayers:
+    serializedVersion: 2
+    m_Bits: 0
+  m_LayerOverridePriority: 0
+  m_IsTrigger: 0
+  m_ProvidesContacts: 0
+  m_Enabled: 1
+  serializedVersion: 3
+  m_Size: {x: 1, y: 1, z: 1}
+  m_Center: {x: 0, y: 0, z: 0}
+--- !u!33 &43915005
+MeshFilter:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 43915000}
+  m_Mesh: {fileID: 10202, guid: 0000000000000000e000000000000000, type: 0}
+--- !u!4 &43915006
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 43915000}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 0, y: 1.35, z: 1.2}
+  m_LocalScale: {x: 0.28, y: 0.28, z: 0.28}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 0}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
 --- !u!1 &45672008
 GameObject:
   m_ObjectHideFlags: 0
@@ -611,11 +767,19 @@ PrefabInstance:
     m_RemovedComponents: []
     m_RemovedGameObjects: []
     m_AddedGameObjects: []
-    m_AddedComponents: []
+    m_AddedComponents:
+    - targetCorrespondingSourceObject: {fileID: 919132149155446097, guid: 83fbe5706b3039349abb894620751b26, type: 3}
+      insertIndex: -1
+      addedObject: {fileID: 1234817670}
   m_SourcePrefab: {fileID: 100100000, guid: 83fbe5706b3039349abb894620751b26, type: 3}
 --- !u!4 &537541431 stripped
 Transform:
   m_CorrespondingSourceObject: {fileID: -8679921383154817045, guid: 83fbe5706b3039349abb894620751b26, type: 3}
+  m_PrefabInstance: {fileID: 537541430}
+  m_PrefabAsset: {fileID: 0}
+--- !u!1 &537541432 stripped
+GameObject:
+  m_CorrespondingSourceObject: {fileID: 919132149155446097, guid: 83fbe5706b3039349abb894620751b26, type: 3}
   m_PrefabInstance: {fileID: 537541430}
   m_PrefabAsset: {fileID: 0}
 --- !u!4 &784656560 stripped
@@ -901,6 +1065,7 @@ GameObject:
   - component: {fileID: 914155739}
   - component: {fileID: 914155740}
   - component: {fileID: 914155741}
+  - component: {fileID: 914155742}
   m_Layer: 0
   m_Name: MotorShellBody
   m_TagString: Untagged
@@ -1003,7 +1168,7 @@ MonoBehaviour:
   groundedPoseStrengthMultiplier: 1
   airbornePoseStrengthMultiplier: 0.35
   drawDebugGizmos: 1
-  debugLogs: 1
+  debugLogs: 0
 --- !u!65 &914155736
 BoxCollider:
   m_ObjectHideFlags: 0
@@ -1204,7 +1369,7 @@ MonoBehaviour:
   mediumIntensity: 0.65
   heavyIntensity: 0.9
   useCollisionRelativeVelocityDirection: 1
-  debugLogs: 1
+  debugLogs: 0
   drawDebugGizmos: 1
   logAllCollisionEnter: 0
   logIgnoredCollisions: 0
@@ -1275,6 +1440,33 @@ MonoBehaviour:
   airborneThreshold: 0.15
   groundedVelocityDeadZone: 0.05
   maxPoseDeltaTime: 0.05
+  enableInteractionPose: 0
+  grabStateSource: {fileID: 914155742}
+  autoFindGrabStateSource: 1
+  suppressArmSwingWhileHolding: 1
+  holdArmSwingSuppress: 0.85
+  holdBlendSmoothTime: 0.1
+  grabReachDuration: 0.14
+  throwPoseDuration: 0.2
+  throwRecoverSmoothTime: 0.12
+  carryChestPitchDegrees: 3
+  carryHeadPitchDegrees: -2
+  carryShoulderPitchDegrees: -18
+  carryUpperArmPitchDegrees: -32
+  carryUpperArmRollDegrees: 8
+  carryLowerArmBendDegrees: 24
+  carryHandPitchDegrees: -8
+  throwChestPitchDegrees: 8
+  throwHeadPitchDegrees: -3
+  throwShoulderPitchDegrees: -26
+  throwUpperArmPitchDegrees: -45
+  throwUpperArmRollDegrees: 10
+  throwLowerArmBendDegrees: 12
+  throwHandPitchDegrees: -12
+  invertCarryArmPitch: 0
+  invertCarryArmRoll: 0
+  invertThrowArmPitch: 0
+  invertThrowArmRoll: 0
   invertArmSwing: 0
   invertLegSwing: 0
   invertChestPitch: 0
@@ -1301,15 +1493,40 @@ MonoBehaviour:
   motorStateSource: {fileID: 914155735}
   targetBody: {fileID: 914155737}
   autoFindReferences: 1
+  grabStateSource: {fileID: 914155742}
+  autoFindGrabStateSource: 1
   idleStateName: Idle
   walkStateName: Walk
   runStateName: Run
   jumpStateName: JumpUp
+  grabStateName: Grab
+  carryStateName: Carry
+  throwStateName: Throw
+  carryIdleStateName: CarryIdle
+  carryWalkStateName: CarryWalk
+  carryRunStateName: CarryRun
+  carryJumpStateName: CarryJump
   enableClipStateDriver: 1
   driveGroundLocomotion: 1
   driveJump: 1
   disableFallAndLandForNow: 1
   requireAnimatorController: 1
+  driveInteractionStates: 1
+  useCarryStateWhileHolding: 1
+  playGrabOnGrabCount: 1
+  playThrowOnThrowCount: 1
+  grabCrossFadeDuration: 0.05
+  throwCrossFadeDuration: 0.04
+  minGrabStateTime: 0.95
+  maxGrabStateTime: 1.05
+  minThrowStateTime: 1.45
+  maxThrowStateTime: 1.55
+  returnToLocomotionAfterInteraction: 1
+  debugInteractionLogs: 0
+  useCarryJumpState: 1
+  carryCrossFadeDuration: 0.08
+  requireCarryStateMotion: 1
+  debugCarryLogs: 1
   minMoveSpeedForWalk: 0.12
   minSprint01ForRun: 0.5
   minSpeedForRun: 1.7
@@ -1329,8 +1546,51 @@ MonoBehaviour:
   returnFromJumpWhenGrounded: 1
   groundedReturnDelay: 0.03
   returnToLocomotionOnGrounded: 1
-  debugLogs: 1
+  debugLogs: 0
   debugLogInterval: 0.5
+--- !u!114 &914155742
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 914155733}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: c34dd733675ec1540a765d95682bb5b5, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  targetBody: {fileID: 914155737}
+  aimReference: {fileID: 1341772512}
+  holdReference: {fileID: 914155734}
+  autoFindReferences: 1
+  enableTestInput: 1
+  grabDropKey: 101
+  throwKey: 113
+  allowMouseInput: 1
+  grabDistance: 1.4
+  grabRadius: 0.35
+  grabbableMask:
+    serializedVersion: 2
+    m_Bits: 4294967295
+  holdLocalOffset: {x: 0, y: 0.45, z: 0.75}
+  followSpring: 40
+  followDamping: 10
+  maxFollowAcceleration: 80
+  throwForwardImpulse: 6
+  throwUpImpulse: 2
+  throwTorqueImpulse: 0.5
+  releaseCollisionRestoreDelay: 0.15
+  ignoreHolderCollisionWhileHeld: 1
+  useAnimationEventTiming: 1
+  useGrabAnimationEvent: 1
+  useThrowAnimationEvent: 1
+  useFallbackTimingIfEventMissing: 1
+  grabFallbackDelay: 0.55
+  throwFallbackDelay: 0.65
+  debugAnimationEventTimingLogs: 0
+  debugLogs: 0
+  drawDebugGizmos: 1
 --- !u!4 &1099670590 stripped
 Transform:
   m_CorrespondingSourceObject: {fileID: 3798589558202356577, guid: 83fbe5706b3039349abb894620751b26, type: 3}
@@ -1341,6 +1601,22 @@ Animator:
   m_CorrespondingSourceObject: {fileID: 5866666021909216657, guid: 83fbe5706b3039349abb894620751b26, type: 3}
   m_PrefabInstance: {fileID: 537541430}
   m_PrefabAsset: {fileID: 0}
+--- !u!114 &1234817670
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 537541432}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 2fac27289395ee243ad9994e877fedeb, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  grabber: {fileID: 914155742}
+  autoFindGrabber: 1
+  debugLogs: 0
+  ignoreFaceEvents: 1
 --- !u!1 &1341772509
 GameObject:
   m_ObjectHideFlags: 0
@@ -2032,3 +2308,4 @@ SceneRoots:
   - {fileID: 45672010}
   - {fileID: 2105853517}
   - {fileID: 1852715913}
+  - {fileID: 43915006}

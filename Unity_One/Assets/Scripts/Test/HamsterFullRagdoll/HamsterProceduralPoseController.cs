@@ -77,6 +77,41 @@ public sealed class HamsterProceduralPoseController : MonoBehaviour
     [SerializeField] private float groundedVelocityDeadZone = 0.05f;
     [SerializeField] private float maxPoseDeltaTime = 0.05f;
 
+    [Header("Interaction Pose")]
+    [SerializeField] private bool enableInteractionPose = true;
+    [SerializeField] private HamsterRagdollGrabber grabStateSource;
+    [SerializeField] private bool autoFindGrabStateSource = true;
+    [SerializeField] private bool suppressArmSwingWhileHolding = true;
+    [SerializeField] private float holdArmSwingSuppress = 0.85f;
+    [SerializeField] private float holdBlendSmoothTime = 0.10f;
+    [SerializeField] private float grabReachDuration = 0.14f;
+    [SerializeField] private float throwPoseDuration = 0.20f;
+    [SerializeField] private float throwRecoverSmoothTime = 0.12f;
+
+    [Header("Carry Pose")]
+    [SerializeField] private float carryChestPitchDegrees = 3f;
+    [SerializeField] private float carryHeadPitchDegrees = -2f;
+    [SerializeField] private float carryShoulderPitchDegrees = -18f;
+    [SerializeField] private float carryUpperArmPitchDegrees = -32f;
+    [SerializeField] private float carryUpperArmRollDegrees = 8f;
+    [SerializeField] private float carryLowerArmBendDegrees = 24f;
+    [SerializeField] private float carryHandPitchDegrees = -8f;
+
+    [Header("Throw Pose")]
+    [SerializeField] private float throwChestPitchDegrees = 8f;
+    [SerializeField] private float throwHeadPitchDegrees = -3f;
+    [SerializeField] private float throwShoulderPitchDegrees = -26f;
+    [SerializeField] private float throwUpperArmPitchDegrees = -45f;
+    [SerializeField] private float throwUpperArmRollDegrees = 10f;
+    [SerializeField] private float throwLowerArmBendDegrees = 12f;
+    [SerializeField] private float throwHandPitchDegrees = -12f;
+
+    [Header("Interaction Axis / Invert")]
+    [SerializeField] private bool invertCarryArmPitch = false;
+    [SerializeField] private bool invertCarryArmRoll = false;
+    [SerializeField] private bool invertThrowArmPitch = false;
+    [SerializeField] private bool invertThrowArmRoll = false;
+
     [Header("Axis / Invert")]
     [SerializeField] private bool invertArmSwing = false;
     [SerializeField] private bool invertLegSwing = false;
@@ -161,6 +196,14 @@ public sealed class HamsterProceduralPoseController : MonoBehaviour
     private float _landingWeight;
     private float _landingWeightVelocity;
     private float _landingTimer;
+    private float _holdPoseWeight;
+    private float _holdPoseWeightVelocity;
+    private float _throwPoseWeight;
+    private float _throwPoseWeightVelocity;
+    private float _grabReachTimer;
+    private int _lastObservedGrabCount;
+    private int _lastObservedThrowCount;
+    private float _throwPoseTimer;
     private float _nextDebugLogTime;
 
     private void Awake()
@@ -353,11 +396,50 @@ public sealed class HamsterProceduralPoseController : MonoBehaviour
         _jumpWeight = SmoothDamp(_jumpWeight, targetJump, ref _jumpWeightVelocity, jumpBlendSmoothTime, deltaTime);
         _fallWeight = SmoothDamp(_fallWeight, targetFall, ref _fallWeightVelocity, fallBlendSmoothTime, deltaTime);
         _landingWeight = SmoothDamp(_landingWeight, targetLanding, ref _landingWeightVelocity, landingBlendSmoothTime, deltaTime);
+        UpdateInteractionPoseWeights(deltaTime);
 
         float frequency = Mathf.Lerp(walkStepFrequency, runStepFrequency, _sprint01);
         _stepPhase += deltaTime * frequency * Mathf.Lerp(0.4f, 1f, _locomotion01);
         if (_stepPhase > TwoPi)
             _stepPhase -= TwoPi * Mathf.Floor(_stepPhase / TwoPi);
+    }
+
+    private void UpdateInteractionPoseWeights(float deltaTime)
+    {
+        if (autoFindGrabStateSource && grabStateSource == null)
+            ResolveInteractionReferences();
+
+        bool hasGrabSource = enableInteractionPose && grabStateSource != null;
+        bool isHolding = hasGrabSource && grabStateSource.IsHolding;
+
+        if (hasGrabSource)
+        {
+            if (grabStateSource.GrabCount != _lastObservedGrabCount)
+            {
+                _lastObservedGrabCount = grabStateSource.GrabCount;
+                _grabReachTimer = grabReachDuration;
+            }
+
+            if (grabStateSource.ThrowCount != _lastObservedThrowCount)
+            {
+                _lastObservedThrowCount = grabStateSource.ThrowCount;
+                _throwPoseTimer = throwPoseDuration;
+            }
+        }
+
+        if (_grabReachTimer > 0f)
+            _grabReachTimer = Mathf.Max(0f, _grabReachTimer - deltaTime);
+
+        if (_throwPoseTimer > 0f)
+            _throwPoseTimer = Mathf.Max(0f, _throwPoseTimer - deltaTime);
+
+        float targetHold = isHolding ? 1f : 0f;
+        float targetThrow = hasGrabSource && throwPoseDuration > 0f
+            ? Mathf.Clamp01(_throwPoseTimer / throwPoseDuration)
+            : 0f;
+
+        _holdPoseWeight = SmoothDamp(_holdPoseWeight, targetHold, ref _holdPoseWeightVelocity, holdBlendSmoothTime, deltaTime);
+        _throwPoseWeight = SmoothDamp(_throwPoseWeight, targetThrow, ref _throwPoseWeightVelocity, throwRecoverSmoothTime, deltaTime);
     }
 
     private void ApplyProceduralPose(MotionSample sample)
@@ -381,6 +463,9 @@ public sealed class HamsterProceduralPoseController : MonoBehaviour
         float chestPitch = Mathf.Lerp(walkChestPitchDegrees, runChestPitchDegrees, sprintPose01) * locomotionWeight * chestSign;
         float headCounterPitch = -Mathf.Lerp(walkHeadCounterPitchDegrees, runHeadCounterPitchDegrees, sprintPose01) * locomotionWeight * headSign;
         float chestRoll = cos * Mathf.Lerp(0.4f, 1.2f, sprintPose01) * locomotionWeight;
+
+        if (suppressArmSwingWhileHolding && _holdPoseWeight > 0f)
+            armSwing *= 1f - Mathf.Clamp01(_holdPoseWeight * holdArmSwingSuppress);
 
         float leftArmSwing = sin * armSwing * armSign;
         float rightArmSwing = -sin * armSwing * armSign;
@@ -547,6 +632,20 @@ public sealed class HamsterProceduralPoseController : MonoBehaviour
             rightToesRotation = BuildRotation(-rightLegSwing * 0.15f, 0f, 0f);
         }
 
+        ApplyInteractionPose(
+            ref spineRotation,
+            ref chestRotation,
+            ref neckRotation,
+            ref headRotation,
+            ref leftShoulderRotation,
+            ref rightShoulderRotation,
+            ref leftUpperArmRotation,
+            ref rightUpperArmRotation,
+            ref leftLowerArmRotation,
+            ref rightLowerArmRotation,
+            ref leftHandRotation,
+            ref rightHandRotation);
+
         ApplyTarget(ref _spine, spineRotation);
         ApplyTarget(ref _chest, chestRotation);
         ApplyTarget(ref _neck, neckRotation);
@@ -567,6 +666,88 @@ public sealed class HamsterProceduralPoseController : MonoBehaviour
         ApplyTarget(ref _rightFoot, rightFootRotation);
         ApplyTarget(ref _leftToes, leftToesRotation);
         ApplyTarget(ref _rightToes, rightToesRotation);
+    }
+
+    private void ApplyInteractionPose(
+        ref Quaternion spineRotation,
+        ref Quaternion chestRotation,
+        ref Quaternion neckRotation,
+        ref Quaternion headRotation,
+        ref Quaternion leftShoulderRotation,
+        ref Quaternion rightShoulderRotation,
+        ref Quaternion leftUpperArmRotation,
+        ref Quaternion rightUpperArmRotation,
+        ref Quaternion leftLowerArmRotation,
+        ref Quaternion rightLowerArmRotation,
+        ref Quaternion leftHandRotation,
+        ref Quaternion rightHandRotation)
+    {
+        if (!enableInteractionPose)
+            return;
+
+        float carryWeight = Mathf.Clamp01(_holdPoseWeight);
+        float throwWeight = Mathf.Clamp01(_throwPoseWeight);
+        float grabReachWeight = GetGrabReachWeight();
+        float carryCoreWeight = carryWeight;
+        float carryArmWeight = Mathf.Clamp01(carryWeight + grabReachWeight * 0.45f);
+
+        if (carryCoreWeight <= 0.0001f && carryArmWeight <= 0.0001f && throwWeight <= 0.0001f)
+            return;
+
+        if (animateChest)
+        {
+            float chestPitch = carryChestPitchDegrees * carryCoreWeight + throwChestPitchDegrees * throwWeight;
+            spineRotation *= BuildRotation(chestPitch * 0.35f, 0f, 0f);
+            chestRotation *= BuildRotation(chestPitch, 0f, 0f);
+        }
+
+        if (animateHead)
+        {
+            float headPitch = carryHeadPitchDegrees * carryCoreWeight + throwHeadPitchDegrees * throwWeight;
+            neckRotation *= BuildRotation(headPitch * 0.35f, 0f, 0f);
+            headRotation *= BuildRotation(headPitch, 0f, 0f);
+        }
+
+        if (!animateArms)
+            return;
+
+        float carryPitchSign = invertCarryArmPitch ? -1f : 1f;
+        float carryRollSign = invertCarryArmRoll ? -1f : 1f;
+        float throwPitchSign = invertThrowArmPitch ? -1f : 1f;
+        float throwRollSign = invertThrowArmRoll ? -1f : 1f;
+
+        float shoulderPitch =
+            carryShoulderPitchDegrees * carryArmWeight * carryPitchSign
+            + throwShoulderPitchDegrees * throwWeight * throwPitchSign;
+        float upperArmPitch =
+            carryUpperArmPitchDegrees * carryArmWeight * carryPitchSign
+            + throwUpperArmPitchDegrees * throwWeight * throwPitchSign;
+        float upperArmRoll =
+            carryUpperArmRollDegrees * carryArmWeight * carryRollSign
+            + throwUpperArmRollDegrees * throwWeight * throwRollSign;
+        float lowerArmPitch =
+            carryLowerArmBendDegrees * carryArmWeight
+            + throwLowerArmBendDegrees * throwWeight;
+        float handPitch =
+            carryHandPitchDegrees * carryArmWeight * carryPitchSign
+            + throwHandPitchDegrees * throwWeight * throwPitchSign;
+
+        leftShoulderRotation *= BuildRotation(shoulderPitch, 0f, -upperArmRoll * 0.35f);
+        rightShoulderRotation *= BuildRotation(shoulderPitch, 0f, upperArmRoll * 0.35f);
+        leftUpperArmRotation *= BuildRotation(upperArmPitch, 0f, -upperArmRoll);
+        rightUpperArmRotation *= BuildRotation(upperArmPitch, 0f, upperArmRoll);
+        leftLowerArmRotation *= BuildRotation(lowerArmPitch, 0f, -upperArmRoll * 0.25f);
+        rightLowerArmRotation *= BuildRotation(lowerArmPitch, 0f, upperArmRoll * 0.25f);
+        leftHandRotation *= BuildRotation(handPitch, 0f, -upperArmRoll * 0.15f);
+        rightHandRotation *= BuildRotation(handPitch, 0f, upperArmRoll * 0.15f);
+    }
+
+    private float GetGrabReachWeight()
+    {
+        if (grabReachDuration <= 0f)
+            return 0f;
+
+        return Mathf.Clamp01(_grabReachTimer / grabReachDuration);
     }
 
     private MotionSample ReadMotionSample()
@@ -630,6 +811,20 @@ public sealed class HamsterProceduralPoseController : MonoBehaviour
 
         if (visualAnimator == null && visualRoot != null)
             visualAnimator = visualRoot.GetComponentInChildren<Animator>(true);
+
+        if (autoFindGrabStateSource)
+            ResolveInteractionReferences();
+    }
+
+    private void ResolveInteractionReferences()
+    {
+        if (grabStateSource != null)
+            return;
+
+        grabStateSource = GetComponent<HamsterRagdollGrabber>();
+
+        if (grabStateSource == null)
+            grabStateSource = GetComponentInParent<HamsterRagdollGrabber>();
     }
 
     private Transform FindVisualRoot()
@@ -847,6 +1042,14 @@ public sealed class HamsterProceduralPoseController : MonoBehaviour
         _landingWeight = 0f;
         _landingWeightVelocity = 0f;
         _landingTimer = 0f;
+        _holdPoseWeight = 0f;
+        _holdPoseWeightVelocity = 0f;
+        _throwPoseWeight = 0f;
+        _throwPoseWeightVelocity = 0f;
+        _grabReachTimer = 0f;
+        _throwPoseTimer = 0f;
+        _lastObservedGrabCount = grabStateSource != null ? grabStateSource.GrabCount : 0;
+        _lastObservedThrowCount = grabStateSource != null ? grabStateSource.ThrowCount : 0;
     }
 
     private void ResetControlledBones()
@@ -942,7 +1145,7 @@ public sealed class HamsterProceduralPoseController : MonoBehaviour
 
         _nextDebugLogTime = Time.time + Mathf.Max(0.02f, debugLogInterval);
         Debug.Log(
-            $"[HamsterProceduralPoseController] speed={sample.planarSpeed:F2} sprint={_sprint01:F2} grounded={sample.isGrounded} groundedKnown={sample.hasGroundedState} vertical={sample.verticalVelocity:F2} locomotion={_locomotion01:F2} jump={_jumpWeight:F2} fall={_fallWeight:F2} land={_landingWeight:F2} source={sample.source} bones arms={animateArms} legs={animateLegs} chest={animateChest}",
+            $"[HamsterProceduralPoseController] speed={sample.planarSpeed:F2} sprint={_sprint01:F2} grounded={sample.isGrounded} groundedKnown={sample.hasGroundedState} vertical={sample.verticalVelocity:F2} locomotion={_locomotion01:F2} jump={_jumpWeight:F2} fall={_fallWeight:F2} land={_landingWeight:F2} hold={_holdPoseWeight:F2} throw={_throwPoseWeight:F2} source={sample.source} bones arms={animateArms} legs={animateLegs} chest={animateChest}",
             this);
     }
 
@@ -1052,6 +1255,29 @@ public sealed class HamsterProceduralPoseController : MonoBehaviour
         airborneThreshold = Mathf.Max(0f, airborneThreshold);
         groundedVelocityDeadZone = Mathf.Max(0f, groundedVelocityDeadZone);
         maxPoseDeltaTime = Mathf.Clamp(maxPoseDeltaTime, 0.005f, 0.1f);
+
+        holdArmSwingSuppress = Mathf.Clamp01(holdArmSwingSuppress);
+        holdBlendSmoothTime = Mathf.Max(0f, holdBlendSmoothTime);
+        grabReachDuration = Mathf.Max(0f, grabReachDuration);
+        throwPoseDuration = Mathf.Max(0f, throwPoseDuration);
+        throwRecoverSmoothTime = Mathf.Max(0f, throwRecoverSmoothTime);
+
+        carryChestPitchDegrees = Mathf.Clamp(carryChestPitchDegrees, -MaxProceduralDegrees, MaxProceduralDegrees);
+        carryHeadPitchDegrees = Mathf.Clamp(carryHeadPitchDegrees, -MaxProceduralDegrees, MaxProceduralDegrees);
+        carryShoulderPitchDegrees = Mathf.Clamp(carryShoulderPitchDegrees, -MaxProceduralDegrees, MaxProceduralDegrees);
+        carryUpperArmPitchDegrees = Mathf.Clamp(carryUpperArmPitchDegrees, -MaxProceduralDegrees, MaxProceduralDegrees);
+        carryUpperArmRollDegrees = Mathf.Clamp(carryUpperArmRollDegrees, -MaxProceduralDegrees, MaxProceduralDegrees);
+        carryLowerArmBendDegrees = Mathf.Clamp(carryLowerArmBendDegrees, -MaxProceduralDegrees, MaxProceduralDegrees);
+        carryHandPitchDegrees = Mathf.Clamp(carryHandPitchDegrees, -MaxProceduralDegrees, MaxProceduralDegrees);
+
+        throwChestPitchDegrees = Mathf.Clamp(throwChestPitchDegrees, -MaxProceduralDegrees, MaxProceduralDegrees);
+        throwHeadPitchDegrees = Mathf.Clamp(throwHeadPitchDegrees, -MaxProceduralDegrees, MaxProceduralDegrees);
+        throwShoulderPitchDegrees = Mathf.Clamp(throwShoulderPitchDegrees, -MaxProceduralDegrees, MaxProceduralDegrees);
+        throwUpperArmPitchDegrees = Mathf.Clamp(throwUpperArmPitchDegrees, -MaxProceduralDegrees, MaxProceduralDegrees);
+        throwUpperArmRollDegrees = Mathf.Clamp(throwUpperArmRollDegrees, -MaxProceduralDegrees, MaxProceduralDegrees);
+        throwLowerArmBendDegrees = Mathf.Clamp(throwLowerArmBendDegrees, -MaxProceduralDegrees, MaxProceduralDegrees);
+        throwHandPitchDegrees = Mathf.Clamp(throwHandPitchDegrees, -MaxProceduralDegrees, MaxProceduralDegrees);
+
         debugLogInterval = Mathf.Max(0.02f, debugLogInterval);
     }
 
