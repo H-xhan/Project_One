@@ -1063,7 +1063,6 @@ GameObject:
   - component: {fileID: 914155735}
   - component: {fileID: 914155738}
   - component: {fileID: 914155739}
-  - component: {fileID: 914155740}
   - component: {fileID: 914155741}
   - component: {fileID: 914155742}
   m_Layer: 0
@@ -1121,13 +1120,13 @@ MonoBehaviour:
   stopDragAssist: 1.5
   airControlMultiplier: 0.35
   controlStrength: 1
-  debugSprintLogs: 1
+  debugSprintLogs: 0
   sprintLogInterval: 0.5
   enableSprintPivotAssist: 1
   sprintPivotDotThreshold: -0.25
   sprintPivotAccelerationMultiplier: 1.6
   sprintPivotMinPlanarSpeed: 0.5
-  debugSprintPivotLogs: 1
+  debugSprintPivotLogs: 0
   enableJump: 1
   jumpKey: 32
   jumpVelocityChange: 4
@@ -1167,7 +1166,7 @@ MonoBehaviour:
   disableTurnTorqueWhilePoseHold: 1
   groundedPoseStrengthMultiplier: 1
   airbornePoseStrengthMultiplier: 0.35
-  drawDebugGizmos: 1
+  drawDebugGizmos: 0
   debugLogs: 0
 --- !u!65 &914155736
 BoxCollider:
@@ -1273,7 +1272,7 @@ MonoBehaviour:
   landingYOffset: 0.05
   clipHeightSmoothTime: 0.05
   maxClipHeightYOffset: 0.12
-  debugClipHeightLogs: 1
+  debugClipHeightLogs: 0
   useNextAnimatorStateForClipHeight: 1
   prioritizeWalkNextStateHeight: 1
   clipHeightDownSmoothTime: 0.015
@@ -1376,107 +1375,6 @@ MonoBehaviour:
   logBelowThresholdCollisions: 0
   logAcceptedImpacts: 1
   drawLastCollisionGizmo: 1
---- !u!114 &914155740
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 914155733}
-  m_Enabled: 0
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 573d174483fcae64da186624b7e42df6, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: 
-  visualRoot: {fileID: 481765816}
-  targetBody: {fileID: 914155737}
-  motorStateSource: {fileID: 914155735}
-  autoFindReferences: 1
-  autoFindBonesOnEnable: 1
-  enableProceduralPose: 1
-  applyInLateUpdate: 1
-  resetBonesOnDisable: 1
-  useMotorStateWhenAvailable: 1
-  animateChest: 1
-  animateHead: 1
-  animateArms: 1
-  animateLegs: 1
-  animateFeet: 1
-  excludeTailAndEars: 1
-  walkSpeedForFullPose: 1.5
-  walkStepFrequency: 5.5
-  walkArmSwingDegrees: 12
-  walkLegSwingDegrees: 10
-  walkKneeBendDegrees: 6
-  walkChestPitchDegrees: 2
-  walkHeadCounterPitchDegrees: 1.5
-  runSpeedForFullPose: 2.8
-  runStepFrequency: 8.5
-  runArmSwingDegrees: 24
-  runLegSwingDegrees: 18
-  runKneeBendDegrees: 10
-  runChestPitchDegrees: 7
-  runHeadCounterPitchDegrees: 3
-  runPoseSprintBoost: 1
-  jumpUpArmRaiseDegrees: 24
-  jumpUpLegTuckDegrees: 14
-  jumpUpKneeBendDegrees: 16
-  jumpUpChestPitchDegrees: -4
-  jumpUpHeadPitchDegrees: 3
-  jumpBlendSmoothTime: 0.08
-  fallArmSpreadDegrees: 18
-  fallLegExtendDegrees: 10
-  fallChestPitchDegrees: 5
-  fallHeadPitchDegrees: -2
-  fallBlendSmoothTime: 0.1
-  landingArmDownDegrees: 12
-  landingLegBendDegrees: 18
-  landingKneeBendDegrees: 20
-  landingChestPitchDegrees: 8
-  landingDuration: 0.16
-  landingBlendSmoothTime: 0.08
-  locomotionBlendSmoothTime: 0.08
-  sprintBlendSmoothTime: 0.1
-  airborneThreshold: 0.15
-  groundedVelocityDeadZone: 0.05
-  maxPoseDeltaTime: 0.05
-  enableInteractionPose: 0
-  grabStateSource: {fileID: 914155742}
-  autoFindGrabStateSource: 1
-  suppressArmSwingWhileHolding: 1
-  holdArmSwingSuppress: 0.85
-  holdBlendSmoothTime: 0.1
-  grabReachDuration: 0.14
-  throwPoseDuration: 0.2
-  throwRecoverSmoothTime: 0.12
-  carryChestPitchDegrees: 3
-  carryHeadPitchDegrees: -2
-  carryShoulderPitchDegrees: -18
-  carryUpperArmPitchDegrees: -32
-  carryUpperArmRollDegrees: 8
-  carryLowerArmBendDegrees: 24
-  carryHandPitchDegrees: -8
-  throwChestPitchDegrees: 8
-  throwHeadPitchDegrees: -3
-  throwShoulderPitchDegrees: -26
-  throwUpperArmPitchDegrees: -45
-  throwUpperArmRollDegrees: 10
-  throwLowerArmBendDegrees: 12
-  throwHandPitchDegrees: -12
-  invertCarryArmPitch: 0
-  invertCarryArmRoll: 0
-  invertThrowArmPitch: 0
-  invertThrowArmRoll: 0
-  invertArmSwing: 0
-  invertLegSwing: 0
-  invertChestPitch: 0
-  invertHeadPitch: 0
-  swapLeftRight: 0
-  visualAnimator: {fileID: 0}
-  warnIfAnimatorEnabled: 1
-  debugLogs: 0
-  debugLogInterval: 1
-  drawDebugGizmos: 0
 --- !u!114 &914155741
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -1526,7 +1424,7 @@ MonoBehaviour:
   useCarryJumpState: 1
   carryCrossFadeDuration: 0.08
   requireCarryStateMotion: 1
-  debugCarryLogs: 1
+  debugCarryLogs: 0
   minMoveSpeedForWalk: 0.12
   minSprint01ForRun: 0.5
   minSpeedForRun: 1.7
@@ -1580,6 +1478,18 @@ MonoBehaviour:
   throwForwardImpulse: 6
   throwUpImpulse: 2
   throwTorqueImpulse: 0.5
+  useCharacterForwardForThrow: 1
+  characterForwardReference: {fileID: 914155734}
+  autoUseTargetBodyAsCharacterForwardReference: 1
+  captureThrowDirectionOnRequest: 1
+  flattenThrowDirectionOnGroundPlane: 1
+  fallbackToAimReferenceForThrowDirection: 1
+  useCachedPlanarFacingForThrow: 1
+  preferCachedPlanarFacingOverReference: 1
+  facingMotionSource: {fileID: 914155734}
+  autoUseTargetBodyAsFacingMotionSource: 1
+  minFacingCacheSpeed: 0.05
+  debugThrowDirectionLogs: 0
   releaseCollisionRestoreDelay: 0.15
   ignoreHolderCollisionWhileHeld: 1
   useAnimationEventTiming: 1

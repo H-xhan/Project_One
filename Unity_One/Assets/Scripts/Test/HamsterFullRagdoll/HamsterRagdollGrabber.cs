@@ -35,6 +35,22 @@ public sealed class HamsterRagdollGrabber : MonoBehaviour
     [SerializeField] private float throwUpImpulse = 2f;
     [SerializeField] private float throwTorqueImpulse = 0.5f;
 
+    [Header("Throw Direction")]
+    [SerializeField] private bool useCharacterForwardForThrow = true;
+    [SerializeField] private Transform characterForwardReference;
+    [SerializeField] private bool autoUseTargetBodyAsCharacterForwardReference = true;
+    [SerializeField] private bool captureThrowDirectionOnRequest = true;
+    [SerializeField] private bool flattenThrowDirectionOnGroundPlane = true;
+    [SerializeField] private bool fallbackToAimReferenceForThrowDirection = true;
+
+    [Header("Throw Facing Cache")]
+    [SerializeField] private bool useCachedPlanarFacingForThrow = true;
+    [SerializeField] private bool preferCachedPlanarFacingOverReference = true;
+    [SerializeField] private Transform facingMotionSource;
+    [SerializeField] private bool autoUseTargetBodyAsFacingMotionSource = true;
+    [SerializeField] private float minFacingCacheSpeed = 0.05f;
+    [SerializeField] private bool debugThrowDirectionLogs = false;
+
     [Header("Collision")]
     [SerializeField] private float releaseCollisionRestoreDelay = 0.15f;
     [SerializeField] private bool ignoreHolderCollisionWhileHeld = true;
@@ -70,6 +86,13 @@ public sealed class HamsterRagdollGrabber : MonoBehaviour
     private HamsterRagdollGrabbable _pendingGrabTarget;
     private bool _hasPendingGrab;
     private bool _hasPendingThrow;
+    private Vector3 _pendingThrowForward;
+    private bool _hasPendingThrowForward;
+    private Vector3 _lastResolvedThrowForward = Vector3.forward;
+    private Vector3 _lastPlanarFacingForward = Vector3.forward;
+    private bool _hasLastPlanarFacingForward;
+    private Vector3 _previousFacingSourcePosition;
+    private bool _hasPreviousFacingSourcePosition;
     private float _lastGrabRequestTime = float.NegativeInfinity;
     private float _lastThrowRequestTime = float.NegativeInfinity;
     private int _grabRequestCount;
@@ -89,6 +112,7 @@ public sealed class HamsterRagdollGrabber : MonoBehaviour
     public int ThrowRequestCount => _throwRequestCount;
     public float LastGrabRequestTime => _lastGrabRequestTime;
     public float LastThrowRequestTime => _lastThrowRequestTime;
+    public Vector3 LastResolvedThrowForward => _lastResolvedThrowForward;
     public Vector3 CurrentHoldPoint => Application.isPlaying && _hasLastHoldPoint ? _lastHoldPoint : GetHoldPoint();
 
     private struct CollisionIgnorePair
@@ -142,6 +166,7 @@ public sealed class HamsterRagdollGrabber : MonoBehaviour
 
     private void Update()
     {
+        UpdatePlanarFacingCache();
         TickPendingInteractionFallbacks();
 
         if (!enableTestInput || _legacyInputUnavailable)
@@ -339,9 +364,20 @@ public sealed class HamsterRagdollGrabber : MonoBehaviour
         }
 
         _hasPendingThrow = true;
+        if (captureThrowDirectionOnRequest)
+        {
+            _pendingThrowForward = ResolveCharacterThrowForward("ThrowRequest");
+            _hasPendingThrowForward = true;
+        }
+        else
+        {
+            ClearPendingThrowForward();
+        }
+
         _lastThrowRequestTime = Time.time;
         _throwRequestCount++;
-        LogTiming($"Pending throw requested target={_heldTarget.name}");
+        string forwardLog = _hasPendingThrowForward ? FormatVector(_pendingThrowForward) : "deferred";
+        LogTiming($"Pending throw requested target={_heldTarget.name} forward={forwardLog}");
     }
 
     private void TickPendingInteractionFallbacks()
@@ -383,6 +419,7 @@ public sealed class HamsterRagdollGrabber : MonoBehaviour
         _hasPendingThrow = false;
         if (_heldTarget == null)
         {
+            ClearPendingThrowForward();
             Debug.LogWarning($"[HamsterRagdollGrabber:{name}] Pending throw canceled because there is no held target. reason={reason}", this);
             return;
         }
@@ -402,6 +439,8 @@ public sealed class HamsterRagdollGrabber : MonoBehaviour
 
     private void CancelPendingThrow(string reason)
     {
+        ClearPendingThrowForward();
+
         if (!_hasPendingThrow)
             return;
 
@@ -434,11 +473,12 @@ public sealed class HamsterRagdollGrabber : MonoBehaviour
         _lastThrowTime = Time.time;
         _throwCount++;
 
-        Vector3 forward = GetPlanarAimForward();
+        Vector3 forward = GetThrowForwardForRelease(reason);
         Vector3 impulse = forward * Mathf.Max(0f, throwForwardImpulse) + Vector3.up * Mathf.Max(0f, throwUpImpulse);
         Vector3 torque = Vector3.Cross(Vector3.up, forward) * Mathf.Max(0f, throwTorqueImpulse);
 
         target.ReleaseHold(impulse, torque);
+        ClearPendingThrowForward();
         ScheduleCollisionRestore();
         Log($"Threw {target.name} reason={reason} impulse={FormatVector(impulse)} torque={FormatVector(torque)}");
     }
@@ -702,6 +742,149 @@ public sealed class HamsterRagdollGrabber : MonoBehaviour
         return forward.normalized;
     }
 
+    private Vector3 GetThrowForwardForRelease(string reason)
+    {
+        if (_hasPendingThrowForward && IsFinite(_pendingThrowForward) && _pendingThrowForward.sqrMagnitude > 0.0001f)
+            return RememberResolvedThrowForward(_pendingThrowForward, "PendingThrowForward", reason);
+
+        return ResolveCharacterThrowForward(reason);
+    }
+
+    private Vector3 ResolveCharacterThrowForward(string reason)
+    {
+        if (!useCharacterForwardForThrow)
+            return RememberResolvedThrowForward(GetPlanarAimForward(), "PlanarAimForward", reason);
+
+        if (preferCachedPlanarFacingOverReference && TryGetCachedPlanarFacing(out Vector3 forward))
+            return RememberResolvedThrowForward(forward, "CachedPlanarFacing", reason);
+
+        if (TryResolveThrowForward(characterForwardReference, out forward))
+            return RememberResolvedThrowForward(forward, "CharacterForwardReference", reason);
+
+        if (autoUseTargetBodyAsCharacterForwardReference && targetBody != null && TryResolveThrowForward(targetBody.transform, out forward))
+            return RememberResolvedThrowForward(forward, "TargetBodyForward", reason);
+
+        if (TryResolveThrowForward(transform, out forward))
+            return RememberResolvedThrowForward(forward, "GrabberTransformForward", reason);
+
+        if (fallbackToAimReferenceForThrowDirection && TryResolveThrowForward(aimReference, out forward))
+            return RememberResolvedThrowForward(forward, "AimReferenceForward", reason);
+
+        if (TryGetCachedPlanarFacing(out forward))
+            return RememberResolvedThrowForward(forward, "CachedPlanarFacingFallback", reason);
+
+        return RememberResolvedThrowForward(Vector3.forward, "Vector3.forward", reason);
+    }
+
+    private void UpdatePlanarFacingCache()
+    {
+        if (!useCachedPlanarFacingForThrow)
+        {
+            _hasPreviousFacingSourcePosition = false;
+            return;
+        }
+
+        Transform source = ResolveFacingMotionSource();
+        if (source == null)
+        {
+            _hasPreviousFacingSourcePosition = false;
+            return;
+        }
+
+        Vector3 currentPosition = source.position;
+        if (!IsFinite(currentPosition))
+            return;
+
+        if (!_hasPreviousFacingSourcePosition)
+        {
+            _previousFacingSourcePosition = currentPosition;
+            _hasPreviousFacingSourcePosition = true;
+            return;
+        }
+
+        Vector3 planarDelta = Vector3.ProjectOnPlane(currentPosition - _previousFacingSourcePosition, Vector3.up);
+        _previousFacingSourcePosition = currentPosition;
+
+        float safeDeltaTime = Mathf.Max(Time.deltaTime, 0.0001f);
+        float planarSpeed = planarDelta.magnitude / safeDeltaTime;
+        if (!IsFinite(planarSpeed) || planarSpeed < minFacingCacheSpeed || planarDelta.sqrMagnitude <= 0.0001f)
+            return;
+
+        _lastPlanarFacingForward = planarDelta.normalized;
+        _hasLastPlanarFacingForward = true;
+    }
+
+    private Transform ResolveFacingMotionSource()
+    {
+        if (facingMotionSource != null)
+            return facingMotionSource;
+
+        if (autoUseTargetBodyAsFacingMotionSource && targetBody != null)
+            return targetBody.transform;
+
+        if (characterForwardReference != null)
+            return characterForwardReference;
+
+        return transform;
+    }
+
+    private bool TryGetCachedPlanarFacing(out Vector3 forward)
+    {
+        forward = Vector3.zero;
+        if (!useCachedPlanarFacingForThrow || !_hasLastPlanarFacingForward)
+            return false;
+
+        return TryResolveThrowForward(_lastPlanarFacingForward, out forward);
+    }
+
+    private bool TryResolveThrowForward(Transform reference, out Vector3 forward)
+    {
+        forward = Vector3.zero;
+        return reference != null && TryResolveThrowForward(reference.forward, out forward);
+    }
+
+    private bool TryResolveThrowForward(Vector3 rawForward, out Vector3 forward)
+    {
+        forward = flattenThrowDirectionOnGroundPlane
+            ? Vector3.ProjectOnPlane(rawForward, Vector3.up)
+            : rawForward;
+
+        if (!IsFinite(forward) || forward.sqrMagnitude <= 0.0001f)
+        {
+            forward = Vector3.zero;
+            return false;
+        }
+
+        forward.Normalize();
+        return true;
+    }
+
+    private Vector3 RememberResolvedThrowForward(Vector3 forward, string source, string reason)
+    {
+        if (!IsFinite(forward) || forward.sqrMagnitude <= 0.0001f)
+            forward = Vector3.forward;
+
+        _lastResolvedThrowForward = forward.normalized;
+        LogThrowDirection(source, reason, _lastResolvedThrowForward);
+        return _lastResolvedThrowForward;
+    }
+
+    private void LogThrowDirection(string source, string reason, Vector3 forward)
+    {
+        if (!debugThrowDirectionLogs)
+            return;
+
+        Debug.Log(
+            $"[HamsterRagdollGrabber:{name}] throwDirection source={source} reason={reason} forward={FormatVector(forward)} hasCachedFacing={_hasLastPlanarFacingForward}",
+            this);
+    }
+
+    private void ClearPendingThrowForward()
+    {
+        _pendingThrowForward = Vector3.zero;
+        _hasPendingThrowForward = false;
+    }
+
     private bool ReadGrabDropPressed()
     {
         bool keyPressed = ReadKeyDown(grabDropKey);
@@ -816,6 +999,7 @@ public sealed class HamsterRagdollGrabber : MonoBehaviour
         releaseCollisionRestoreDelay = Mathf.Max(0f, releaseCollisionRestoreDelay);
         grabFallbackDelay = Mathf.Max(0f, grabFallbackDelay);
         throwFallbackDelay = Mathf.Max(0f, throwFallbackDelay);
+        minFacingCacheSpeed = Mathf.Max(0f, minFacingCacheSpeed);
     }
 
     private void Log(string message)
