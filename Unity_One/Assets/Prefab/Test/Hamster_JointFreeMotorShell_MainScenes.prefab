@@ -13,6 +13,8 @@ GameObject:
   - component: {fileID: 6100000000000000002}
   - component: {fileID: 6100000000000000099}
   - component: {fileID: 6100000000000000100}
+  - component: {fileID: 6100000000000000101}
+  - component: {fileID: 6100000000000000102}
   m_Layer: 6
   m_Name: Hamster_JointFreeMotorShell_MainScenes
   m_TagString: Player
@@ -48,8 +50,8 @@ MonoBehaviour:
   m_Enabled: 1
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: d5a57f767e5e46a458fc5d3c628d0cbb, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: 
+  m_Name:
+  m_EditorClassIdentifier:
   GlobalObjectIdHash: 1151326904
   InScenePlacedSourceGlobalObjectIdHash: 0
   DeferredDespawnTick: 0
@@ -172,6 +174,87 @@ MonoBehaviour:
   clearVelocityOnInitialAlign: 1
   debugLogs: 0
   debugLogInterval: 0.5
+--- !u!114 &6100000000000000101
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 692270962315936511}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 8c4d33d9e5b14ac4aa1f8f8ab96c4f31, type: 3}
+  m_Name:
+  m_EditorClassIdentifier:
+  ownerCamera: {fileID: 6100000000000000009}
+  heldItemSocket: {fileID: 6100000000000000201}
+  itemDropAnchor: {fileID: 6100000000000000203}
+  carrierBody: {fileID: 5171592592584334513}
+  motorStateSource: {fileID: 984655929091462153}
+  enableRightMousePickup: 1
+  enableKeyboardPickupDropKey: 0
+  pickupDropKey: 19
+  dropKey: 21
+  throwKey: 31
+  pickupDistance: 6
+  pickupRayRadius: 0.2
+  pickupMask:
+    serializedVersion: 2
+    m_Bits: 640
+  fallbackToDefaultRaycastLayers: 1
+  useVisualHandSocket: 1
+  preferLocalHeldVisual: 1
+  heldItemLocalPositionOffset: {x: 0, y: 0, z: 0}
+  heldItemLocalEulerOffset: {x: 0, y: 0, z: 0}
+  heldItemLocalScaleMultiplier: {x: 1, y: 1, z: 1}
+  forceHeldRenderersVisible: 1
+  syncHeldPoseOnPickup: 1
+  enableSprintHeldPose: 1
+  sprintHeldPoseWeaponItemId: 1
+  sprintHeldPoseWeaponNameContains: Toy_Hammer
+  sprintHeldPoseBlendSpeed: 12
+  sprintHeldLocalPositionOffset: {x: 0, y: 0, z: 0}
+  sprintHeldLocalEulerOffset: {x: 0, y: 0, z: 90}
+  sprintHeldLocalScaleMultiplier: {x: 1, y: 1, z: 1}
+  sprintHeldPoseMinPlanarSpeed: 0.5
+  throwForwardForce: 5
+  throwUpForce: 2
+  useCameraForwardForThrow: 1
+  throwForceMultiplier: 1.5
+  throwUpwardBonus: 0.4
+  throwTorqueMultiplier: 1.1
+  debugLogs: 0
+  debugHeldPoseLogs: 0
+--- !u!114 &6100000000000000102
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 692270962315936511}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: a1c9f2d6b7e94a14a6d5c2b3107f4e82, type: 3}
+  m_Name:
+  m_EditorClassIdentifier:
+  ownerCamera: {fileID: 6100000000000000009}
+  itemAdapter: {fileID: 6100000000000000101}
+  carrierBody: {fileID: 5171592592584334513}
+  enableCombatAdapter: 1
+  enableLeftMouseAttack: 1
+  attackCooldown: 0.35
+  attackWindup: 0.03
+  attackActiveDuration: 0.12
+  defaultHitDistance: 1
+  defaultHitRadius: 0.35
+  defaultDamage: 1
+  defaultImpulse: 4
+  weaponImpulseMultiplier: 1.25
+  upwardImpulse: 0.5
+  hitMask:
+    serializedVersion: 2
+    m_Bits: -1
+  debugCombatLogs: 0
 --- !u!1 &1594514674284813732
 GameObject:
   m_ObjectHideFlags: 0
@@ -209,7 +292,71 @@ Transform:
   m_ConstrainProportionsScale: 0
   m_Children:
   - {fileID: 4015340420288901693}
+  - {fileID: 6100000000000000201}
+  - {fileID: 6100000000000000203}
   m_Father: {fileID: 2153839895803566005}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!1 &6100000000000000200
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 6100000000000000201}
+  m_Layer: 6
+  m_Name: HeldItemSocket
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!4 &6100000000000000201
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 6100000000000000200}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 0.35, y: 0.45, z: 0.55}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 8055494772537699747}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!1 &6100000000000000202
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 6100000000000000203}
+  m_Layer: 6
+  m_Name: ItemDropAnchor
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!4 &6100000000000000203
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 6100000000000000202}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 0, y: 0.2, z: 0.85}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 8055494772537699747}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
 --- !u!54 &5171592592584334513
 Rigidbody:
