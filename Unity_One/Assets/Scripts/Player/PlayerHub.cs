@@ -5,6 +5,9 @@ using UnityEngine.SceneManagement;
 
 public class PlayerHub : NetworkBehaviour
 {
+    private const string InputRouteTargetName = "Hamster_JointFreeMotorShell_MainScenes";
+    private const float InputRouteLogInterval = 0.5f;
+
     [Header("Refs")]
     [Tooltip("로컬 소유자만 활성화할 카메라 루트")]
     [SerializeField] private GameObject cameraRoot;
@@ -222,6 +225,8 @@ public class PlayerHub : NetworkBehaviour
     private float _pitchDelta;
     private bool _jumpPressed;
     private bool _sprintHeld;
+    private float _nextInputRouteOwnerLogTime;
+    private float _nextInputRouteServerLogTime;
 
     private bool _attackLockedServer;
     private bool _attackBufferedServer;
@@ -452,7 +457,11 @@ public class PlayerHub : NetworkBehaviour
 
     private void TickOwner()
     {
-        if (inputModule == null) return;
+        if (inputModule == null)
+        {
+            LogInputRouteOwner(Vector2.zero, Vector2.zero, false, false, false, false, "inputModule null");
+            return;
+        }
 
         inputModule.ReadInputs(
             out Vector2 move,
@@ -465,6 +474,8 @@ public class PlayerHub : NetworkBehaviour
             out bool dropPressed
         );
 
+        Vector2 rawMove = move;
+        bool rawSprintHeld = sprintHeld;
         bool allowLook = AllowOwnerLookInput();
 
         if (!allowLook)
@@ -489,7 +500,8 @@ public class PlayerHub : NetworkBehaviour
             HandleCameraRotation(0f);
         }
 
-        if (!CanMoveNow())
+        bool canMoveNow = CanMoveNow();
+        if (!canMoveNow)
         {
             _moveInput = Vector2.zero;
             _yawDelta = 0f;
@@ -497,6 +509,7 @@ public class PlayerHub : NetworkBehaviour
         }
 
         SubmitInputServerRpc(_moveInput, _yawDelta, _sprintHeld);
+        LogInputRouteOwner(rawMove, _moveInput, jumpPressed, rawSprintHeld, _sprintHeld, allowLook, canMoveNow ? "submitted" : "CanMoveNow false");
 
         if (jumpPressed)
         {
@@ -1285,7 +1298,12 @@ public class PlayerHub : NetworkBehaviour
 
     private void TickServer()
     {
-        if (CharacterController == null || !CharacterController.enabled) return;
+        CharacterController characterController = CharacterController;
+        if (characterController == null || !characterController.enabled)
+        {
+            LogInputRouteServer(false, 0f, characterController == null ? "CharacterController null" : "CharacterController disabled");
+            return;
+        }
 
         bool jumped = false;
         float serverYawDelta = AllowServerLookInput() ? _yawDelta : 0f;
@@ -1298,6 +1316,8 @@ public class PlayerHub : NetworkBehaviour
         if (animModule != null && locomotionModule != null)
             animModule.TickServer(locomotionModule);
 
+        LogInputRouteServer(jumped, serverYawDelta, locomotionModule != null ? "locomotion tick" : "locomotionModule null");
+
         _jumpPressed = false;
         _yawDelta = 0f;
     }
@@ -1308,6 +1328,72 @@ public class PlayerHub : NetworkBehaviour
         _moveInput = move;
         _yawDelta = yawDelta;
         _sprintHeld = sprintHeld;
+    }
+
+    private void LogInputRouteOwner(
+        Vector2 rawMove,
+        Vector2 routedMove,
+        bool jumpPressed,
+        bool rawSprintHeld,
+        bool routedSprintHeld,
+        bool allowLook,
+        string routeResult)
+    {
+        if (!ShouldLogInputRoute(ref _nextInputRouteOwnerLogTime))
+            return;
+
+        Debug.Log(
+            $"[InputRoute/Hub:{GetInputRouteObjectName()}] phase=Owner enabled={enabled} active={gameObject.activeInHierarchy} isSpawned={IsSpawned} isOwner={IsOwner} ownerClientId={OwnerClientId} networkManagerIsServer={(NetworkManager.Singleton != null && NetworkManager.Singleton.IsServer)} scene={SceneManager.GetActiveScene().name} gameState={GetInputRouteGameState()} inputModule={FormatBehaviour(inputModule)} locomotionModule={FormatBehaviour(locomotionModule)} animModule={FormatBehaviour(animModule)} statusModule={FormatBehaviour(statusModule)} externalMotorShellFlag=<none> rawMove={FormatVector2(rawMove)} routedMove={FormatVector2(routedMove)} jumpPressed={jumpPressed} rawSprintHeld={rawSprintHeld} routedSprintHeld={routedSprintHeld} allowLook={allowLook} routeResult={routeResult}",
+            this);
+    }
+
+    private void LogInputRouteServer(bool jumped, float serverYawDelta, string routeResult)
+    {
+        if (!ShouldLogInputRoute(ref _nextInputRouteServerLogTime))
+            return;
+
+        Debug.Log(
+            $"[InputRoute/Hub:{GetInputRouteObjectName()}] phase=Server enabled={enabled} active={gameObject.activeInHierarchy} isSpawned={IsSpawned} isOwner={IsOwner} ownerClientId={OwnerClientId} networkManagerIsServer={(NetworkManager.Singleton != null && NetworkManager.Singleton.IsServer)} scene={SceneManager.GetActiveScene().name} gameState={GetInputRouteGameState()} inputModule={FormatBehaviour(inputModule)} locomotionModule={FormatBehaviour(locomotionModule)} animModule={FormatBehaviour(animModule)} statusModule={FormatBehaviour(statusModule)} externalMotorShellFlag=<none> moveInput={FormatVector2(_moveInput)} sprintHeld={_sprintHeld} jumpQueued={_jumpPressed} jumped={jumped} serverYawDelta={serverYawDelta:F2} routeResult={routeResult}",
+            this);
+    }
+
+    private bool ShouldLogInputRoute(ref float nextLogTime)
+    {
+        if (!IsInputRouteTarget())
+            return false;
+
+        if (Time.unscaledTime < nextLogTime)
+            return false;
+
+        nextLogTime = Time.unscaledTime + InputRouteLogInterval;
+        return true;
+    }
+
+    private bool IsInputRouteTarget()
+    {
+        Transform root = transform.root;
+        return root != null && root.name.Contains(InputRouteTargetName);
+    }
+
+    private string GetInputRouteObjectName()
+    {
+        Transform root = transform.root;
+        return root != null ? root.name : gameObject.name;
+    }
+
+    private string GetInputRouteGameState()
+    {
+        return TryGetGameState(out GameStateManager.GameState state) ? state.ToString() : "<missing>";
+    }
+
+    private static string FormatBehaviour(Behaviour behaviour)
+    {
+        return behaviour != null ? $"exists=True enabled={behaviour.enabled}" : "exists=False";
+    }
+
+    private static string FormatVector2(Vector2 value)
+    {
+        return $"({value.x:F2},{value.y:F2})";
     }
 
     [ServerRpc(Delivery = RpcDelivery.Reliable)]

@@ -1,7 +1,11 @@
 using UnityEngine;
+using UnityEngine.SceneManagement;
 
 public class HamsterFullRagdollMotor : MonoBehaviour
 {
+    private const string InputRouteTargetName = "Hamster_JointFreeMotorShell_MainScenes";
+    private const float InputRouteLogInterval = 0.5f;
+
     [Header("References")]
     [SerializeField] private Rigidbody hipsBody;
     [SerializeField] private Rigidbody chestBody;
@@ -132,6 +136,24 @@ public class HamsterFullRagdollMotor : MonoBehaviour
     private float _sprintLogTimer;
     private bool _lastSprintHeld;
     private float _lastSelectedMaxSpeed;
+    private float _nextInputRouteMotorLogTime;
+    private Vector3 _lastGroundProbeOrigin;
+    private float _lastGroundProbeRadius;
+    private float _lastGroundProbeDistance;
+    private float _lastGroundColliderBottomY = float.NaN;
+    private float _lastGroundRbCenterOfMassY = float.NaN;
+    private bool _lastGroundHit;
+    private string _lastGroundHitName = "<none>";
+    private int _lastGroundHitLayer = -1;
+    private float _lastGroundHitDistance = float.NaN;
+    private bool _lastGroundIgnoreLayerCollision;
+    private Vector3 _lastMoveVelocityBefore;
+    private Vector3 _lastMoveVelocityAfter;
+    private float _lastMovePlanarSpeedBefore;
+    private float _lastMovePlanarSpeedAfter;
+    private Vector3 _lastInputRoutePositionDelta;
+    private Vector3 _previousInputRouteBodyPosition;
+    private bool _hasPreviousInputRouteBodyPosition;
 
     public bool IsGrounded => _isGrounded;
     public bool IsSprintHeld => _lastSprintHeld;
@@ -183,6 +205,7 @@ public class HamsterFullRagdollMotor : MonoBehaviour
 
         float fixedDeltaTime = Time.fixedDeltaTime;
         TickJumpCooldown(fixedDeltaTime);
+        CaptureInputRoutePositionDelta();
 
         Vector2 rawMoveInput = ReadMoveInput();
         _lastRawMoveInput = rawMoveInput;
@@ -227,6 +250,7 @@ public class HamsterFullRagdollMotor : MonoBehaviour
             ApplyTurnTorque(_smoothedMoveWorldDirection, effectiveControl);
 
         LogDebugState(hasMoveInput, poseHoldActive);
+        LogInputRouteMotor(hasMoveInput);
     }
 
     private bool HasRequiredReferences()
@@ -541,6 +565,13 @@ public class HamsterFullRagdollMotor : MonoBehaviour
     private void DisableLegacyInput(string reason)
     {
         _legacyInputUnavailable = true;
+        if (IsInputRouteTarget())
+        {
+            Debug.LogWarning(
+                $"[InputRoute/Motor:{GetInputRouteObjectName()}] legacyInputDisabled reason={reason}",
+                this);
+        }
+
         Log($"Legacy Input Manager unavailable. Movement input disabled. Reason={reason}");
     }
 
@@ -577,6 +608,10 @@ public class HamsterFullRagdollMotor : MonoBehaviour
         _lastAccelerationScale = 0f;
         _lastMoveForceApplied = false;
         _lastMoveForceSkipReason = "none";
+        _lastMoveVelocityBefore = hipsBody != null ? hipsBody.linearVelocity : Vector3.zero;
+        _lastMoveVelocityAfter = _lastMoveVelocityBefore;
+        _lastMovePlanarSpeedBefore = hipsBody != null ? GetPlanarVelocity(hipsBody).magnitude : 0f;
+        _lastMovePlanarSpeedAfter = _lastMovePlanarSpeedBefore;
 
         if (hipsBody == null)
         {
@@ -621,6 +656,8 @@ public class HamsterFullRagdollMotor : MonoBehaviour
 
         hipsBody.AddForce(force, ForceMode.Acceleration);
         _lastMoveForceApplied = true;
+        _lastMoveVelocityAfter = hipsBody.linearVelocity;
+        _lastMovePlanarSpeedAfter = GetPlanarVelocity(hipsBody).magnitude;
 
         if (chestBody != null && chestForceMultiplier > 0f)
             chestBody.AddForce(force * chestForceMultiplier, ForceMode.Acceleration);
@@ -791,14 +828,45 @@ public class HamsterFullRagdollMotor : MonoBehaviour
     {
         Vector3 origin = hipsBody.worldCenterOfMass + Vector3.up * groundCheckRadius;
         float distance = Mathf.Max(0.01f, groundCheckDistance + groundCheckRadius);
-        return Physics.SphereCast(
+        _lastGroundProbeOrigin = origin;
+        _lastGroundProbeRadius = groundCheckRadius;
+        _lastGroundProbeDistance = distance;
+        _lastGroundRbCenterOfMassY = hipsBody.worldCenterOfMass.y;
+        Collider bodyCollider = hipsBody.GetComponent<Collider>();
+        _lastGroundColliderBottomY = bodyCollider != null ? bodyCollider.bounds.min.y : float.NaN;
+
+        bool hit = Physics.SphereCast(
             origin,
             groundCheckRadius,
             Vector3.down,
-            out _,
+            out RaycastHit hitInfo,
             distance,
             groundMask,
             QueryTriggerInteraction.Ignore);
+        _lastGroundHit = hit;
+        _lastGroundHitName = hit && hitInfo.collider != null ? hitInfo.collider.name : "<none>";
+        _lastGroundHitLayer = hit && hitInfo.collider != null ? hitInfo.collider.gameObject.layer : -1;
+        _lastGroundHitDistance = hit ? hitInfo.distance : float.NaN;
+        _lastGroundIgnoreLayerCollision = hit && hitInfo.collider != null
+            && Physics.GetIgnoreLayerCollision(hipsBody.gameObject.layer, hitInfo.collider.gameObject.layer);
+        return hit;
+    }
+
+    private void CaptureInputRoutePositionDelta()
+    {
+        if (hipsBody == null)
+        {
+            _lastInputRoutePositionDelta = Vector3.zero;
+            _hasPreviousInputRouteBodyPosition = false;
+            return;
+        }
+
+        Vector3 currentPosition = hipsBody.position;
+        _lastInputRoutePositionDelta = _hasPreviousInputRouteBodyPosition
+            ? currentPosition - _previousInputRouteBodyPosition
+            : Vector3.zero;
+        _previousInputRouteBodyPosition = currentPosition;
+        _hasPreviousInputRouteBodyPosition = true;
     }
 
     private static Vector3 GetPlanarVelocity(Rigidbody targetBody)
@@ -834,6 +902,65 @@ public class HamsterFullRagdollMotor : MonoBehaviour
             this);
     }
 
+    private void LogInputRouteMotor(bool hasMoveInput)
+    {
+        if (!ShouldLogInputRouteMotor())
+            return;
+
+        string hipsState = hipsBody != null
+            ? $"rbExists=True rbIsKinematic={hipsBody.isKinematic} rbUseGravity={hipsBody.useGravity} rbSleeping={hipsBody.IsSleeping()} rbConstraints={hipsBody.constraints} rbVelocity={FormatVector3(hipsBody.linearVelocity)}"
+            : "rbExists=False";
+        bool canApplyMoveForce =
+            hipsBody != null &&
+            !hipsBody.isKinematic &&
+            _lastEffectiveControl > 0f &&
+            _smoothedMoveWorldDirection.sqrMagnitude > 0.0001f;
+
+        Debug.Log(
+            $"[InputRoute/Motor:{GetInputRouteObjectName()}] enabled={enabled} active={gameObject.activeInHierarchy} scene={SceneManager.GetActiveScene().name} legacyInputUnavailable={_legacyInputUnavailable} rawInput={FormatVector2(_lastRawMoveInput)} smoothedInput={FormatVector2(_smoothedMoveInput)} hasMoveInput={hasMoveInput} moveWorldDirection={FormatVector3(_smoothedMoveWorldDirection)} grounded={_isGrounded} sprintHeld={_lastSprintHeld} canApplyMoveForce={canApplyMoveForce} controlStrength={controlStrength:F2} effectiveControl={_lastEffectiveControl:F2} planarSpeed={CurrentPlanarSpeed:F2} selectedMaxSpeed={_lastSelectedMaxSpeed:F2} addForceApplied={_lastMoveForceApplied} force={FormatVector3(_lastAppliedMoveForce)} skipReason='{_lastMoveForceSkipReason}' jumpBuffer={_jumpBufferTimer:F2} jumpConsumed={_jumpConsumedThisFixedStep} {hipsState}",
+            this);
+        LogInputRouteGround();
+        LogInputRouteForce();
+    }
+
+    private void LogInputRouteGround()
+    {
+        Debug.Log(
+            $"[InputRoute/Ground:{GetInputRouteObjectName()}] grounded={_isGrounded} probeOrigin={FormatVector3(_lastGroundProbeOrigin)} probeRadius={_lastGroundProbeRadius:F2} probeDistance={_lastGroundProbeDistance:F2} colliderBottomY={FormatFloat(_lastGroundColliderBottomY)} rbCenterOfMassY={FormatFloat(_lastGroundRbCenterOfMassY)} hit={_lastGroundHit} hitName={_lastGroundHitName} hitLayer={_lastGroundHitLayer} hitDistance={FormatFloat(_lastGroundHitDistance)} groundMask={groundMask.value} ignoreLayerCollision={_lastGroundIgnoreLayerCollision}",
+            this);
+    }
+
+    private void LogInputRouteForce()
+    {
+        Debug.Log(
+            $"[InputRoute/Force:{GetInputRouteObjectName()}] rawInput={FormatVector2(_lastRawMoveInput)} smoothedInput={FormatVector2(_smoothedMoveInput)} moveDir={FormatVector3(_smoothedMoveWorldDirection)} grounded={_isGrounded} effectiveControl={_lastEffectiveControl:F2} selectedAcceleration={_lastSelectedAcceleration:F2} force={FormatVector3(_lastAppliedMoveForce)} forceMode=Acceleration addForceApplied={_lastMoveForceApplied} rbLinearBefore={FormatVector3(_lastMoveVelocityBefore)} rbLinearAfter={FormatVector3(_lastMoveVelocityAfter)} planarSpeedBefore={_lastMovePlanarSpeedBefore:F2} planarSpeedAfter={_lastMovePlanarSpeedAfter:F2} positionDelta={FormatVector3(_lastInputRoutePositionDelta)} skipReason='{_lastMoveForceSkipReason}'",
+            this);
+    }
+
+    private bool ShouldLogInputRouteMotor()
+    {
+        if (!IsInputRouteTarget())
+            return false;
+
+        if (Time.unscaledTime < _nextInputRouteMotorLogTime)
+            return false;
+
+        _nextInputRouteMotorLogTime = Time.unscaledTime + InputRouteLogInterval;
+        return true;
+    }
+
+    private bool IsInputRouteTarget()
+    {
+        Transform root = transform.root;
+        return root != null && root.name.Contains(InputRouteTargetName);
+    }
+
+    private string GetInputRouteObjectName()
+    {
+        Transform root = transform.root;
+        return root != null ? root.name : gameObject.name;
+    }
+
     private void LogMotorEnabledState()
     {
         if (!debugLogs)
@@ -852,6 +979,11 @@ public class HamsterFullRagdollMotor : MonoBehaviour
     private static string FormatVector3(Vector3 value)
     {
         return $"({value.x:F2},{value.y:F2},{value.z:F2})";
+    }
+
+    private static string FormatFloat(float value)
+    {
+        return float.IsNaN(value) ? "<none>" : value.ToString("F2");
     }
 
     private static string GetBodyName(Rigidbody body)

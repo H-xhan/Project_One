@@ -1,9 +1,14 @@
 using Unity.Netcode;
 using UnityEngine;
+using UnityEngine.EventSystems;
 using UnityEngine.InputSystem;
+using UnityEngine.SceneManagement;
 
 public class PlayerInputModule : MonoBehaviour
 {
+    private const string InputRouteTargetName = "Hamster_JointFreeMotorShell_MainScenes";
+    private const float InputRouteLogInterval = 0.5f;
+
     [Header("Mouse")]
     [Tooltip("마우스 X 감도")]
     [SerializeField] private float mouseSensitivityX = 2.0f;
@@ -34,6 +39,7 @@ public class PlayerInputModule : MonoBehaviour
     [SerializeField] private Key dropKey = Key.G;
 
     private NetworkObject _netObj;
+    private float _nextInputRouteLogTime;
 
     public bool IsCursorLocked => Cursor.lockState == CursorLockMode.Locked;
 
@@ -75,6 +81,7 @@ public class PlayerInputModule : MonoBehaviour
             attackPressed = false;
             interactPressed = false;
             dropPressed = false;
+            LogInputRoute(move, yawDelta, pitchDelta, jumpPressed, sprintHeld, attackPressed, interactPressed, dropPressed, null, "not-local-owner");
             return;
         }
 
@@ -124,6 +131,7 @@ public class PlayerInputModule : MonoBehaviour
         interactPressed = (mouse != null) && ReadMouseButton(mouse, interactMouseButton);
 
         dropPressed = (kb != null) && kb[dropKey].wasPressedThisFrame;
+        LogInputRoute(move, yawDelta, pitchDelta, jumpPressed, sprintHeld, attackPressed, interactPressed, dropPressed, kb, "read");
     }
 
     private bool ReadMouseButton(Mouse mouse, int button)
@@ -135,5 +143,76 @@ public class PlayerInputModule : MonoBehaviour
             case 2: return mouse.middleButton.wasPressedThisFrame;
             default: return false;
         }
+    }
+
+    private void LogInputRoute(
+        Vector2 move,
+        float yawDelta,
+        float pitchDelta,
+        bool jumpPressed,
+        bool sprintHeld,
+        bool attackPressed,
+        bool interactPressed,
+        bool dropPressed,
+        Keyboard keyboard,
+        string phase)
+    {
+        if (!ShouldLogInputRoute())
+            return;
+
+        bool wPressed = keyboard != null && keyboard.wKey.isPressed;
+        bool aPressed = keyboard != null && keyboard.aKey.isPressed;
+        bool sPressed = keyboard != null && keyboard.sKey.isPressed;
+        bool dPressed = keyboard != null && keyboard.dKey.isPressed;
+        string actionMap = GetCurrentActionMapName();
+        string selectedUi = GetSelectedUiName();
+        var networkManager = NetworkManager.Singleton;
+
+        Debug.Log(
+            $"[InputRoute/Input:{GetInputRouteObjectName()}] phase={phase} enabled={enabled} active={gameObject.activeInHierarchy} scene={SceneManager.GetActiveScene().name} networkObjectExists={_netObj != null} isOwner={(_netObj != null ? _netObj.IsOwner.ToString() : "<none>")} networkListening={(networkManager != null && networkManager.IsListening)} move={FormatVector2(move)} wasd=W:{wPressed} A:{aPressed} S:{sPressed} D:{dPressed} sprintHeld={sprintHeld} jumpPressed={jumpPressed} attackPressed={attackPressed} interactPressed={interactPressed} dropPressed={dropPressed} yawDelta={yawDelta:F2} pitchDelta={pitchDelta:F2} actionMap={actionMap} selectedUI={selectedUi} cursorLock={Cursor.lockState}",
+            this);
+    }
+
+    private bool ShouldLogInputRoute()
+    {
+        if (!IsInputRouteTarget())
+            return false;
+
+        if (Time.unscaledTime < _nextInputRouteLogTime)
+            return false;
+
+        _nextInputRouteLogTime = Time.unscaledTime + InputRouteLogInterval;
+        return true;
+    }
+
+    private bool IsInputRouteTarget()
+    {
+        Transform root = transform.root;
+        return root != null && root.name.Contains(InputRouteTargetName);
+    }
+
+    private string GetInputRouteObjectName()
+    {
+        Transform root = transform.root;
+        return root != null ? root.name : gameObject.name;
+    }
+
+    private string GetCurrentActionMapName()
+    {
+        PlayerInput playerInput = GetComponentInParent<PlayerInput>();
+        return playerInput != null && playerInput.currentActionMap != null
+            ? playerInput.currentActionMap.name
+            : "<none>";
+    }
+
+    private static string GetSelectedUiName()
+    {
+        GameObject selected = EventSystem.current != null ? EventSystem.current.currentSelectedGameObject : null;
+        return selected != null ? selected.name : "<none>";
+    }
+
+    private static string FormatVector2(Vector2 value)
+    {
+        return $"({value.x:F2},{value.y:F2})";
     }
 }

@@ -12546,7 +12546,7 @@ MonoBehaviour:
   countdownSeconds: 3
   playSeconds: 60
   resultsSeconds: 6
-  autoReturnToLobby: 1
+  autoReturnToLobby: 0
   teleportPlayersOnEnterLobby: 1
   teleportPlayersOnEnterPlaying: 1
   autoLockCursorOnPlaying: 1
@@ -12558,12 +12558,12 @@ MonoBehaviour:
   playingCursorLockRetryInterval: 0.1
   clearSelectedUiOnPlaying: 1
   cursorDebugLogs: 0
-  enableLastSurvivorWinCheck: 1
+  enableLastSurvivorWinCheck: 0
   survivorCheckInterval: 0.25
   minimumParticipantsForLastSurvivorWin: 2
   invalidWinnerClientId: 18446744073709551615
-  useMissionResultWinnerWhenAvailable: 1
-  enableDebugLogs: 0
+  useMissionResultWinnerWhenAvailable: 0
+  enableDebugLogs: 1
   StateValue:
     UpdateTraits:
       MinSecondsBetweenUpdates: 0
