@@ -38,6 +38,9 @@ public class PlayerInputModule : MonoBehaviour
     [Tooltip("드랍 키")]
     [SerializeField] private Key dropKey = Key.G;
 
+    [Header("Diagnostics")]
+    [SerializeField] private bool debugMovementRoutingLogs = false;
+
     private NetworkObject _netObj;
     private float _nextInputRouteLogTime;
 
@@ -175,6 +178,9 @@ public class PlayerInputModule : MonoBehaviour
 
     private bool ShouldLogInputRoute()
     {
+        if (!debugMovementRoutingLogs)
+            return false;
+
         if (!IsInputRouteTarget())
             return false;
 

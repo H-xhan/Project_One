@@ -1,3 +1,4 @@
+using System.Reflection;
 using UnityEngine;
 using UnityEngine.SceneManagement;
 
@@ -5,6 +6,9 @@ public class HamsterFullRagdollMotor : MonoBehaviour
 {
     private const string InputRouteTargetName = "Hamster_JointFreeMotorShell_MainScenes";
     private const float InputRouteLogInterval = 0.5f;
+    private const string CameraPivotName = "CameraPivot";
+    private const string PlayerCameraName = "PlayerCamera";
+    private const string VisualPreviewRootName = "VisualPreviewRoot";
 
     [Header("References")]
     [SerializeField] private Rigidbody hipsBody;
@@ -89,8 +93,9 @@ public class HamsterFullRagdollMotor : MonoBehaviour
     [SerializeField] private float airbornePoseStrengthMultiplier = 0.35f;
 
     [Header("Debug")]
-    [SerializeField] private bool drawDebugGizmos = true;
+    [SerializeField] private bool drawDebugGizmos = false;
     [SerializeField] private bool debugLogs = false;
+    [SerializeField] private bool debugInputRouteLogs = false;
 
     private const float InputDeadzone = 0.01f;
     private const float MaxUprightTorque = 250f;
@@ -154,13 +159,49 @@ public class HamsterFullRagdollMotor : MonoBehaviour
     private Vector3 _lastInputRoutePositionDelta;
     private Vector3 _previousInputRouteBodyPosition;
     private bool _hasPreviousInputRouteBodyPosition;
+    private string _lastCameraBasisSource = "None";
+    private Vector3 _lastCameraBasisForward;
+    private Vector3 _lastCameraBasisRight;
+    private Vector3 _lastPlanarBasisForward = Vector3.forward;
+    private Vector3 _lastPlanarBasisRight = Vector3.right;
+    private Vector3 _lastMoveWorldDirectionBefore;
+    private Vector3 _lastMoveWorldDirectionAfter;
+    private Vector3 _lastPlanarFacingForward = Vector3.forward;
+    private Vector3 _lastDesiredFacingDirection = Vector3.forward;
+    private string _lastAppliedYawSource = "Initial";
+
+    private struct MoveBasis
+    {
+        public readonly string Source;
+        public readonly Vector3 CameraForward;
+        public readonly Vector3 CameraRight;
+        public readonly Vector3 PlanarForward;
+        public readonly Vector3 PlanarRight;
+
+        public MoveBasis(string source, Vector3 cameraForward, Vector3 cameraRight, Vector3 planarForward, Vector3 planarRight)
+        {
+            Source = source;
+            CameraForward = cameraForward;
+            CameraRight = cameraRight;
+            PlanarForward = planarForward;
+            PlanarRight = planarRight;
+        }
+    }
 
     public bool IsGrounded => _isGrounded;
     public bool IsSprintHeld => _lastSprintHeld;
+    public bool HasMoveInput => _smoothedMoveInput.sqrMagnitude > InputDeadzone * InputDeadzone;
+    public bool IsMainScenesInputRouteTarget => IsInputRouteTarget();
     public Vector3 SmoothedMoveWorldDirection => _smoothedMoveWorldDirection;
+    public Vector3 DesiredFacingDirection => _lastDesiredFacingDirection;
+    public Vector3 CameraPlanarForward => _lastPlanarBasisForward;
     public Vector3 CurrentPlanarVelocity => GetPlanarVelocity(hipsBody);
     public float CurrentPlanarSpeed => CurrentPlanarVelocity.magnitude;
     public float CurrentVerticalVelocity => GetVerticalVelocity(hipsBody);
+    public float LastPoseTargetYaw => _lastPoseTargetYaw;
+    public float CurrentPoseYaw => _currentPoseYaw;
+    public string LastCameraBasisSource => _lastCameraBasisSource;
+    public string LastAppliedYawSource => _lastAppliedYawSource;
 
     public void SetControlStrength(float value)
     {
@@ -239,10 +280,16 @@ public class HamsterFullRagdollMotor : MonoBehaviour
         ApplyMovementForce(_smoothedMoveWorldDirection, maxSpeed, acceleration, effectiveControl);
         ApplyStopDragAssist(_smoothedMoveInput, effectiveControl);
         LogSprintState(hasMoveInput);
-        ApplyUprightTorque(hipsBody, uprightStrength, uprightDamping);
-        ApplyUprightTorque(chestBody, uprightStrength * chestUprightMultiplier, uprightDamping * chestUprightMultiplier);
+        Rigidbody uprightBody0 = null;
+        Rigidbody uprightBody1 = null;
+        Rigidbody uprightBody2 = null;
+        Rigidbody uprightBody3 = null;
+        Rigidbody uprightBody4 = null;
+        ApplyUprightTorqueOnce(hipsBody, uprightStrength, uprightDamping, ref uprightBody0, ref uprightBody1, ref uprightBody2, ref uprightBody3, ref uprightBody4);
+        ApplyUprightTorqueOnce(chestBody, uprightStrength * chestUprightMultiplier, uprightDamping * chestUprightMultiplier, ref uprightBody0, ref uprightBody1, ref uprightBody2, ref uprightBody3, ref uprightBody4);
 
-        bool poseHoldActive = enableStandingPoseHold && _hasInitialPose;
+        bool inputRouteTarget = IsInputRouteTarget();
+        bool poseHoldActive = (enableStandingPoseHold || inputRouteTarget) && _hasInitialPose;
         if (poseHoldActive)
             ApplyStandingPoseHold(hasMoveInput, fixedDeltaTime);
 
@@ -288,6 +335,8 @@ public class HamsterFullRagdollMotor : MonoBehaviour
         _currentPoseYaw = 0f;
         _poseYawVelocity = 0f;
         _lastPoseTargetYaw = 0f;
+        _lastPlanarFacingForward = _initialForwardOnPlane;
+        _lastDesiredFacingDirection = _initialForwardOnPlane;
         _hasInitialPose = true;
     }
 
@@ -577,10 +626,38 @@ public class HamsterFullRagdollMotor : MonoBehaviour
 
     private Vector3 BuildMoveDirection(Vector2 moveInput)
     {
-        if (moveInput.sqrMagnitude <= InputDeadzone * InputDeadzone)
-            return Vector3.zero;
-
         Transform referenceTransform = cameraTransform != null ? cameraTransform : transform;
+        Vector3 legacyDirection = BuildMoveDirectionFromTransform(moveInput, referenceTransform);
+        _lastMoveWorldDirectionBefore = legacyDirection;
+
+        if (!IsInputRouteTarget())
+            return legacyDirection;
+
+        if (!TryResolveCameraRelativeMoveBasis(out MoveBasis moveBasis))
+        {
+            _lastCameraBasisSource = "None";
+            _lastMoveWorldDirectionAfter = legacyDirection;
+            UpdateLastPlanarFacingForward(legacyDirection);
+            return legacyDirection;
+        }
+
+        _lastCameraBasisSource = moveBasis.Source;
+        _lastCameraBasisForward = moveBasis.CameraForward;
+        _lastCameraBasisRight = moveBasis.CameraRight;
+        _lastPlanarBasisForward = moveBasis.PlanarForward;
+        _lastPlanarBasisRight = moveBasis.PlanarRight;
+
+        Vector3 direction = BuildMoveDirectionFromBasis(moveInput, moveBasis.PlanarForward, moveBasis.PlanarRight);
+        _lastMoveWorldDirectionAfter = direction;
+        UpdateLastPlanarFacingForward(direction);
+        return direction;
+    }
+
+    private Vector3 BuildMoveDirectionFromTransform(Vector2 moveInput, Transform referenceTransform)
+    {
+        if (referenceTransform == null)
+            return BuildMoveDirectionFromBasis(moveInput, Vector3.forward, Vector3.right);
+
         Vector3 forward = Vector3.ProjectOnPlane(referenceTransform.forward, Vector3.up);
         Vector3 right = Vector3.ProjectOnPlane(referenceTransform.right, Vector3.up);
 
@@ -594,11 +671,171 @@ public class HamsterFullRagdollMotor : MonoBehaviour
         else
             right.Normalize();
 
+        return BuildMoveDirectionFromBasis(moveInput, forward, right);
+    }
+
+    private Vector3 BuildMoveDirectionFromBasis(Vector2 moveInput, Vector3 forward, Vector3 right)
+    {
+        if (moveInput.sqrMagnitude <= InputDeadzone * InputDeadzone)
+            return Vector3.zero;
+
         Vector3 direction = right * moveInput.x + forward * moveInput.y;
         if (direction.sqrMagnitude > 1f)
             direction.Normalize();
 
         return direction;
+    }
+
+    private bool TryResolveCameraRelativeMoveBasis(out MoveBasis moveBasis)
+    {
+        moveBasis = default;
+
+        if (TryCreateMoveBasis(cameraTransform, "cameraTransform", out moveBasis))
+            return true;
+
+        Transform playerCamera = FindChildByName(PlayerCameraName);
+        if (TryCreateMoveBasis(playerCamera, "PlayerCamera", out moveBasis))
+            return true;
+
+        Transform cameraPivot = FindChildByName(CameraPivotName);
+        if (TryCreateMoveBasis(cameraPivot, "CameraPivot", out moveBasis))
+            return true;
+
+        Transform playerHubCameraRoot = ResolvePlayerHubCameraRoot();
+        if (TryCreateMoveBasis(playerHubCameraRoot, "PlayerHub.cameraRoot", out moveBasis))
+            return true;
+
+        Camera mainCamera = Camera.main;
+        if (mainCamera != null &&
+            IsUnderInputRouteRoot(mainCamera.transform) &&
+            TryCreateMoveBasis(mainCamera.transform, "Camera.main", out moveBasis))
+        {
+            return true;
+        }
+
+        Transform root = transform.root != null ? transform.root : transform;
+        if (TryCreateMoveBasis(root, "RootTransform", out moveBasis))
+            return true;
+
+        moveBasis = new MoveBasis("WorldFallback", Vector3.forward, Vector3.right, Vector3.forward, Vector3.right);
+        return true;
+    }
+
+    private bool TryCreateMoveBasis(Transform source, string sourceName, out MoveBasis moveBasis)
+    {
+        moveBasis = default;
+        if (source == null)
+            return false;
+
+        Vector3 cameraForward = source.forward;
+        Vector3 cameraRight = source.right;
+        Vector3 planarForward = Vector3.ProjectOnPlane(cameraForward, Vector3.up);
+        Vector3 planarRight = Vector3.ProjectOnPlane(cameraRight, Vector3.up);
+        if (!NormalizePlanarBasis(ref planarForward, ref planarRight))
+            return false;
+
+        moveBasis = new MoveBasis(sourceName, cameraForward, cameraRight, planarForward, planarRight);
+        return true;
+    }
+
+    private bool NormalizePlanarBasis(ref Vector3 forward, ref Vector3 right)
+    {
+        bool hasForward = IsFinite(forward) && forward.sqrMagnitude > 0.0001f;
+        if (!hasForward)
+            return false;
+
+        forward.Normalize();
+
+        bool hasRight = IsFinite(right) && right.sqrMagnitude > 0.0001f;
+        if (hasRight)
+            right.Normalize();
+        else
+            right = Vector3.Cross(Vector3.up, forward).normalized;
+
+        return IsFinite(forward) && IsFinite(right) &&
+               forward.sqrMagnitude > 0.0001f &&
+               right.sqrMagnitude > 0.0001f;
+    }
+
+    private static bool TryNormalizePlanarDirection(Vector3 direction, out Vector3 planarDirection)
+    {
+        planarDirection = Vector3.ProjectOnPlane(direction, Vector3.up);
+        if (!IsFinite(planarDirection) || planarDirection.sqrMagnitude <= 0.0001f)
+        {
+            planarDirection = Vector3.zero;
+            return false;
+        }
+
+        planarDirection.Normalize();
+        return true;
+    }
+
+    private Transform ResolvePlayerHubCameraRoot()
+    {
+        PlayerHub hub = GetComponentInParent<PlayerHub>();
+        if (hub == null && transform.root != null)
+            hub = transform.root.GetComponentInChildren<PlayerHub>(true);
+
+        if (hub == null)
+            return null;
+
+        const BindingFlags flags = BindingFlags.Instance | BindingFlags.NonPublic;
+        FieldInfo cameraRootField = typeof(PlayerHub).GetField("cameraRoot", flags);
+        if (cameraRootField == null)
+            return null;
+
+        object rawValue = cameraRootField.GetValue(hub);
+        if (rawValue is GameObject cameraRootObject)
+            return cameraRootObject.transform;
+
+        return rawValue as Transform;
+    }
+
+    private bool IsUnderInputRouteRoot(Transform source)
+    {
+        Transform root = transform.root != null ? transform.root : transform;
+        return source != null && source.root == root;
+    }
+
+    private Transform FindChildByName(string childName)
+    {
+        if (string.IsNullOrEmpty(childName))
+            return null;
+
+        Transform root = transform.root != null ? transform.root : transform;
+        return FindChildRecursive(root, childName);
+    }
+
+    private static Transform FindChildRecursive(Transform current, string childName)
+    {
+        if (current == null)
+            return null;
+
+        if (current.name == childName)
+            return current;
+
+        for (int i = 0; i < current.childCount; i++)
+        {
+            Transform match = FindChildRecursive(current.GetChild(i), childName);
+            if (match != null)
+                return match;
+        }
+
+        return null;
+    }
+
+    private void UpdateLastPlanarFacingForward(Vector3 moveDirection)
+    {
+        if (moveDirection.sqrMagnitude > 0.0001f && IsFinite(moveDirection))
+        {
+            _lastPlanarFacingForward = moveDirection.normalized;
+            return;
+        }
+
+        if (!IsFinite(_lastPlanarFacingForward) || _lastPlanarFacingForward.sqrMagnitude <= 0.0001f)
+            _lastPlanarFacingForward = _lastPlanarBasisForward.sqrMagnitude > 0.0001f
+                ? _lastPlanarBasisForward.normalized
+                : Vector3.forward;
     }
 
     private void ApplyMovementForce(Vector3 moveDirection, float maxSpeed, float acceleration, float effectiveControl)
@@ -723,6 +960,25 @@ public class HamsterFullRagdollMotor : MonoBehaviour
         targetBody.AddTorque(torque, ForceMode.Acceleration);
     }
 
+    private void ApplyUprightTorqueOnce(
+        Rigidbody targetBody,
+        float strength,
+        float damping,
+        ref Rigidbody body0,
+        ref Rigidbody body1,
+        ref Rigidbody body2,
+        ref Rigidbody body3,
+        ref Rigidbody body4)
+    {
+        if (targetBody == null || strength <= 0f)
+            return;
+
+        if (!TryRegisterBodyForTorquePass(targetBody, ref body0, ref body1, ref body2, ref body3, ref body4))
+            return;
+
+        ApplyUprightTorque(targetBody, strength, damping);
+    }
+
     private void ApplyTurnTorque(Vector3 moveDirection, float effectiveControl)
     {
         if (effectiveControl <= 0f || moveDirection.sqrMagnitude <= 0.0001f)
@@ -745,58 +1001,154 @@ public class HamsterFullRagdollMotor : MonoBehaviour
     private void ApplyStandingPoseHold(bool hasMoveInput, float fixedDeltaTime)
     {
         float targetYaw = 0f;
-        if (yawPoseTowardsMoveDirection && hasMoveInput && _smoothedMoveWorldDirection.sqrMagnitude > 0.0001f)
-            targetYaw = Vector3.SignedAngle(_initialForwardOnPlane, _smoothedMoveWorldDirection.normalized, Vector3.up);
+        string appliedYawSource = "InitialForward";
+        Vector3 desiredFacingDirection = _initialForwardOnPlane;
+
+        if (IsInputRouteTarget())
+        {
+            if (TryResolveTargetDesiredFacingDirection(out desiredFacingDirection, out appliedYawSource))
+                targetYaw = Vector3.SignedAngle(_initialForwardOnPlane, desiredFacingDirection, Vector3.up);
+        }
+        else if (yawPoseTowardsMoveDirection &&
+                 hasMoveInput &&
+                 TryNormalizePlanarDirection(_smoothedMoveWorldDirection, out desiredFacingDirection))
+        {
+            targetYaw = Vector3.SignedAngle(_initialForwardOnPlane, desiredFacingDirection, Vector3.up);
+            appliedYawSource = "MoveDirection";
+        }
 
         _lastPoseTargetYaw = targetYaw;
+        _lastDesiredFacingDirection = desiredFacingDirection;
+        _lastAppliedYawSource = appliedYawSource;
         if (poseYawSmoothTime <= 0f)
             _currentPoseYaw = targetYaw;
         else
             _currentPoseYaw = Mathf.SmoothDampAngle(_currentPoseYaw, targetYaw, ref _poseYawVelocity, poseYawSmoothTime, Mathf.Infinity, fixedDeltaTime);
 
         Quaternion yawRotation = Quaternion.AngleAxis(_currentPoseYaw, Vector3.up);
-        float strengthMultiplier = _isGrounded ? groundedPoseStrengthMultiplier : airbornePoseStrengthMultiplier;
-        strengthMultiplier = Mathf.Max(0f, strengthMultiplier);
+        float strengthMultiplier = ResolvePoseStrengthMultiplier();
 
-        ApplyRotationSpring(
+        Rigidbody poseBody0 = null;
+        Rigidbody poseBody1 = null;
+        Rigidbody poseBody2 = null;
+        Rigidbody poseBody3 = null;
+        Rigidbody poseBody4 = null;
+
+        ApplyRotationSpringOnce(
             hipsBody,
             yawRotation * _initialHipsRotation,
             hipsPoseSpring,
             hipsPoseDamping,
             hipsMaxPoseTorque,
-            strengthMultiplier);
+            strengthMultiplier,
+            ref poseBody0,
+            ref poseBody1,
+            ref poseBody2,
+            ref poseBody3,
+            ref poseBody4);
 
-        ApplyRotationSpring(
+        ApplyRotationSpringOnce(
             chestBody,
             yawRotation * _initialChestRotation,
             chestPoseSpring,
             chestPoseDamping,
             chestMaxPoseTorque,
-            strengthMultiplier);
+            strengthMultiplier,
+            ref poseBody0,
+            ref poseBody1,
+            ref poseBody2,
+            ref poseBody3,
+            ref poseBody4);
 
-        ApplyRotationSpring(
+        ApplyRotationSpringOnce(
             headBody,
             yawRotation * _initialHeadRotation,
             headPoseSpring,
             headPoseDamping,
             headMaxPoseTorque,
-            strengthMultiplier);
+            strengthMultiplier,
+            ref poseBody0,
+            ref poseBody1,
+            ref poseBody2,
+            ref poseBody3,
+            ref poseBody4);
 
-        ApplyRotationSpring(
+        ApplyRotationSpringOnce(
             leftArmBody,
             yawRotation * _initialLeftArmRotation,
             armPoseSpring,
             armPoseDamping,
             armMaxPoseTorque,
-            strengthMultiplier);
+            strengthMultiplier,
+            ref poseBody0,
+            ref poseBody1,
+            ref poseBody2,
+            ref poseBody3,
+            ref poseBody4);
 
-        ApplyRotationSpring(
+        ApplyRotationSpringOnce(
             rightArmBody,
             yawRotation * _initialRightArmRotation,
             armPoseSpring,
             armPoseDamping,
             armMaxPoseTorque,
-            strengthMultiplier);
+            strengthMultiplier,
+            ref poseBody0,
+            ref poseBody1,
+            ref poseBody2,
+            ref poseBody3,
+            ref poseBody4);
+    }
+
+    private float ResolvePoseStrengthMultiplier()
+    {
+        if (IsInputRouteTarget() && !_isGrounded)
+            return 0f;
+
+        float strengthMultiplier = _isGrounded ? groundedPoseStrengthMultiplier : airbornePoseStrengthMultiplier;
+        return Mathf.Max(0f, strengthMultiplier);
+    }
+
+    private bool TryResolveTargetDesiredFacingDirection(out Vector3 desiredFacingDirection, out string appliedYawSource)
+    {
+        if (TryNormalizePlanarDirection(_lastPlanarBasisForward, out desiredFacingDirection) &&
+            IsCameraFacingBasisSource(_lastCameraBasisSource))
+        {
+            appliedYawSource = "Camera:" + _lastCameraBasisSource;
+            return true;
+        }
+
+        if (TryNormalizePlanarDirection(_smoothedMoveWorldDirection, out desiredFacingDirection))
+        {
+            appliedYawSource = "MoveDirection";
+            return true;
+        }
+
+        if (TryNormalizePlanarDirection(_lastPlanarFacingForward, out desiredFacingDirection))
+        {
+            appliedYawSource = "LastPlanarFacingForward";
+            return true;
+        }
+
+        Transform root = transform.root != null ? transform.root : transform;
+        if (TryNormalizePlanarDirection(root.forward, out desiredFacingDirection))
+        {
+            appliedYawSource = "RootForward";
+            return true;
+        }
+
+        desiredFacingDirection = _initialForwardOnPlane;
+        appliedYawSource = "InitialForward";
+        return TryNormalizePlanarDirection(desiredFacingDirection, out desiredFacingDirection);
+    }
+
+    private static bool IsCameraFacingBasisSource(string source)
+    {
+        return source == "cameraTransform" ||
+               source == "PlayerCamera" ||
+               source == "CameraPivot" ||
+               source == "PlayerHub.cameraRoot" ||
+               source == "Camera.main";
     }
 
     private void ApplyRotationSpring(
@@ -822,6 +1174,81 @@ public class HamsterFullRagdollMotor : MonoBehaviour
         Vector3 torque = axis.normalized * (angle * Mathf.Deg2Rad) * spring - body.angularVelocity * damping;
         torque = Vector3.ClampMagnitude(torque, maxTorque);
         body.AddTorque(torque * strengthMultiplier, ForceMode.Acceleration);
+    }
+
+    private void ApplyRotationSpringOnce(
+        Rigidbody body,
+        Quaternion targetRotation,
+        float spring,
+        float damping,
+        float maxTorque,
+        float strengthMultiplier,
+        ref Rigidbody body0,
+        ref Rigidbody body1,
+        ref Rigidbody body2,
+        ref Rigidbody body3,
+        ref Rigidbody body4)
+    {
+        if (body == null || spring <= 0f || maxTorque <= 0f || strengthMultiplier <= 0f)
+            return;
+
+        if (!TryRegisterBodyForTorquePass(body, ref body0, ref body1, ref body2, ref body3, ref body4))
+            return;
+
+        ApplyRotationSpring(body, targetRotation, spring, damping, maxTorque, strengthMultiplier);
+    }
+
+    private static bool TryRegisterBodyForTorquePass(
+        Rigidbody body,
+        ref Rigidbody body0,
+        ref Rigidbody body1,
+        ref Rigidbody body2,
+        ref Rigidbody body3,
+        ref Rigidbody body4)
+    {
+        if (body == null)
+            return false;
+
+        if (ReferenceEquals(body, body0) ||
+            ReferenceEquals(body, body1) ||
+            ReferenceEquals(body, body2) ||
+            ReferenceEquals(body, body3) ||
+            ReferenceEquals(body, body4))
+        {
+            return false;
+        }
+
+        if (body0 == null)
+        {
+            body0 = body;
+            return true;
+        }
+
+        if (body1 == null)
+        {
+            body1 = body;
+            return true;
+        }
+
+        if (body2 == null)
+        {
+            body2 = body;
+            return true;
+        }
+
+        if (body3 == null)
+        {
+            body3 = body;
+            return true;
+        }
+
+        if (body4 == null)
+        {
+            body4 = body;
+            return true;
+        }
+
+        return false;
     }
 
     private bool CheckGrounded()
@@ -921,6 +1348,8 @@ public class HamsterFullRagdollMotor : MonoBehaviour
             this);
         LogInputRouteGround();
         LogInputRouteForce();
+        LogMoveBasis();
+        LogFacingTilt(hasMoveInput);
     }
 
     private void LogInputRouteGround()
@@ -937,8 +1366,55 @@ public class HamsterFullRagdollMotor : MonoBehaviour
             this);
     }
 
+    private void LogMoveBasis()
+    {
+        Transform root = transform.root != null ? transform.root : transform;
+        Transform cameraPivot = FindChildByName(CameraPivotName);
+        Transform playerCamera = FindChildByName(PlayerCameraName);
+        string objectName = GetInputRouteObjectName();
+        string cameraPivotYaw = cameraPivot != null
+            ? FormatFloat(Mathf.DeltaAngle(0f, cameraPivot.eulerAngles.y))
+            : "<none>";
+        string playerCameraRotation = playerCamera != null
+            ? FormatQuaternion(playerCamera.rotation)
+            : "<null>";
+
+        Debug.Log(
+            $"[MSMoveBasis:{objectName}] rawInput={FormatVector2(_lastRawMoveInput)} smoothedInput={FormatVector2(_smoothedMoveInput)} cameraBasisSource={_lastCameraBasisSource} cameraForward={FormatVector3(_lastCameraBasisForward)} cameraRight={FormatVector3(_lastCameraBasisRight)} planarForward={FormatVector3(_lastPlanarBasisForward)} planarRight={FormatVector3(_lastPlanarBasisRight)}",
+            this);
+        Debug.Log(
+            $"[MSMoveBasis:{objectName}] moveWorldDirectionBefore={FormatVector3(_lastMoveWorldDirectionBefore)} moveWorldDirectionAfter={FormatVector3(_lastMoveWorldDirectionAfter)} lastPlanarFacingForward={FormatVector3(_lastPlanarFacingForward)} force={FormatVector3(_lastAppliedMoveForce)}",
+            this);
+        Debug.Log(
+            $"[MSMoveBasis:{objectName}] rootRotation={FormatQuaternion(root.rotation)} rootYaw={FormatFloat(Mathf.DeltaAngle(0f, root.eulerAngles.y))} CameraPivotYaw={cameraPivotYaw} PlayerCameraWorldRotation={playerCameraRotation}",
+            this);
+    }
+
+    private void LogFacingTilt(bool hasMoveInput)
+    {
+        Transform root = transform.root != null ? transform.root : transform;
+        Transform visualRoot = FindChildByName(VisualPreviewRootName);
+        string objectName = GetInputRouteObjectName();
+        string hipsForward = hipsBody != null ? FormatVector3(hipsBody.transform.forward) : "<null>";
+        string hipsUpDot = hipsBody != null ? FormatFloat(Vector3.Dot(hipsBody.transform.up, Vector3.up)) : "<null>";
+        string chestUpDot = chestBody != null ? FormatFloat(Vector3.Dot(chestBody.transform.up, Vector3.up)) : "<null>";
+        string visualForward = visualRoot != null ? FormatVector3(visualRoot.forward) : "<null>";
+        string visualUpDot = visualRoot != null ? FormatFloat(Vector3.Dot(visualRoot.up, Vector3.up)) : "<null>";
+        string hipsRotation = hipsBody != null ? FormatQuaternion(hipsBody.rotation) : "<null>";
+
+        Debug.Log(
+            $"[MSFacing:{objectName}] cameraBasisSource={_lastCameraBasisSource} cameraPlanarForward={FormatVector3(_lastPlanarBasisForward)} desiredFacingDirection={FormatVector3(_lastDesiredFacingDirection)} moveWorldDirection={FormatVector3(_smoothedMoveWorldDirection)} targetYaw={_lastPoseTargetYaw:F1} currentPoseYaw={_currentPoseYaw:F1} appliedYawSource={_lastAppliedYawSource} hasMoveInput={hasMoveInput} planarSpeed={CurrentPlanarSpeed:F2} grounded={_isGrounded}",
+            this);
+        Debug.Log(
+            $"[MSTilt:{objectName}] hipsForward={hipsForward} hipsUpDot={hipsUpDot} chestUpDot={chestUpDot} visualForward={visualForward} visualUpDot={visualUpDot} rootRotation={FormatQuaternion(root.rotation)} hipsBody.rotation={hipsRotation}",
+            this);
+    }
+
     private bool ShouldLogInputRouteMotor()
     {
+        if (!debugInputRouteLogs)
+            return false;
+
         if (!IsInputRouteTarget())
             return false;
 
@@ -952,7 +1428,8 @@ public class HamsterFullRagdollMotor : MonoBehaviour
     private bool IsInputRouteTarget()
     {
         Transform root = transform.root;
-        return root != null && root.name.Contains(InputRouteTargetName);
+        return root != null &&
+               (root.name == InputRouteTargetName || root.name == InputRouteTargetName + "(Clone)");
     }
 
     private string GetInputRouteObjectName()
@@ -984,6 +1461,11 @@ public class HamsterFullRagdollMotor : MonoBehaviour
     private static string FormatFloat(float value)
     {
         return float.IsNaN(value) ? "<none>" : value.ToString("F2");
+    }
+
+    private static string FormatQuaternion(Quaternion value)
+    {
+        return $"({value.x:F2},{value.y:F2},{value.z:F2},{value.w:F2})";
     }
 
     private static string GetBodyName(Rigidbody body)

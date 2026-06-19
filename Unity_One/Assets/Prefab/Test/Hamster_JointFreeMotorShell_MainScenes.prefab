@@ -147,7 +147,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 4c21f3f4d3a64d148f6d6fb05fc4cd88, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  debugLogs: 1
+  debugLogs: 0
   logInterval: 0.5
 --- !u!114 &6100000000000000100
 MonoBehaviour:
@@ -170,7 +170,7 @@ MonoBehaviour:
   initialAlignDistanceThreshold: 0.5
   initialAlignFrameCount: 5
   clearVelocityOnInitialAlign: 1
-  debugLogs: 1
+  debugLogs: 0
   debugLogInterval: 0.5
 --- !u!1 &1594514674284813732
 GameObject:
@@ -456,7 +456,7 @@ MonoBehaviour:
   updateVerticalVelocityParameter: 1
   updateSprintParameter: 1
   debugLogs: 0
-  drawGizmos: 1
+  drawGizmos: 0
 --- !u!114 &7958398752601989787
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -492,7 +492,7 @@ MonoBehaviour:
   heavyIntensity: 0.9
   useCollisionRelativeVelocityDirection: 1
   debugLogs: 0
-  drawDebugGizmos: 1
+  drawDebugGizmos: 0
   logAllCollisionEnter: 0
   logIgnoredCollisions: 0
   logBelowThresholdCollisions: 0
@@ -623,7 +623,7 @@ MonoBehaviour:
   throwFallbackDelay: 0.65
   debugAnimationEventTimingLogs: 0
   debugLogs: 0
-  drawDebugGizmos: 1
+  drawDebugGizmos: 0
 --- !u!1 &2214941813688879353
 GameObject:
   m_ObjectHideFlags: 0

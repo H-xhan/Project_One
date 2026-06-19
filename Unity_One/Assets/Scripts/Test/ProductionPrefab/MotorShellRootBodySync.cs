@@ -12,7 +12,7 @@ public sealed class MotorShellRootBodySync : MonoBehaviour
     [SerializeField] private float initialAlignDistanceThreshold = 0.5f;
     [SerializeField] private int initialAlignFrameCount = 5;
     [SerializeField] private bool clearVelocityOnInitialAlign = true;
-    [SerializeField] private bool debugLogs = true;
+    [SerializeField] private bool debugLogs = false;
     [SerializeField] private float debugLogInterval = 0.5f;
 
     private const string BodyName = "MotorShellBody";

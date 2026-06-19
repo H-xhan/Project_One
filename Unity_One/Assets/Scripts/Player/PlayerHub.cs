@@ -1,12 +1,15 @@
 using System.Collections;
 using Unity.Netcode;
 using UnityEngine;
+using UnityEngine.EventSystems;
 using UnityEngine.SceneManagement;
 
 public class PlayerHub : NetworkBehaviour
 {
     private const string InputRouteTargetName = "Hamster_JointFreeMotorShell_MainScenes";
     private const float InputRouteLogInterval = 0.5f;
+    private const string RuntimeMainCameraTag = "MainCamera";
+    private const string SceneMainCameraName = "Main Camera";
 
     [Header("Refs")]
     [Tooltip("로컬 소유자만 활성화할 카메라 루트")]
@@ -62,6 +65,10 @@ public class PlayerHub : NetworkBehaviour
 
     [Tooltip("카메라 smoothing 디버그 로그를 출력합니다.")]
     [SerializeField] private bool cameraSmoothingDebugLogs = false;
+
+    [Header("MotorShell Diagnostics")]
+    [SerializeField] private bool debugMovementRoutingLogs = false;
+    [SerializeField] private bool debugCameraLogs = false;
 
     [Header("Ragdoll Camera Focus")]
     [SerializeField, Tooltip("Ragdoll 활성 중 카메라가 Ragdoll 중심 위치를 따라가게 할지 여부입니다.")]
@@ -227,6 +234,7 @@ public class PlayerHub : NetworkBehaviour
     private bool _sprintHeld;
     private float _nextInputRouteOwnerLogTime;
     private float _nextInputRouteServerLogTime;
+    private float _nextMotorShellCameraLogTime;
 
     private bool _attackLockedServer;
     private bool _attackBufferedServer;
@@ -372,6 +380,8 @@ public class PlayerHub : NetworkBehaviour
         if (cameraRoot != null) cameraRoot.SetActive(active);
         if (audioListener != null) audioListener.enabled = active;
         if (interactModule != null) interactModule.SetOwnerMode(active);
+
+        ApplyInputRouteOwnerCameraHandoff();
     }
 
     private bool CanMoveNow()
@@ -476,6 +486,11 @@ public class PlayerHub : NetworkBehaviour
 
         Vector2 rawMove = move;
         bool rawSprintHeld = sprintHeld;
+        float rawYawDelta = yawDelta;
+        float rawPitchDelta = pitchDelta;
+        float cameraPivotYawBefore = GetTransformYawForLog(cameraRoot != null ? cameraRoot.transform : null);
+        Camera playerCameraBefore = PlayerCamera;
+        float playerCameraPitchBefore = GetTransformPitchForLog(playerCameraBefore != null ? playerCameraBefore.transform : null);
         bool allowLook = AllowOwnerLookInput();
 
         if (!allowLook)
@@ -485,11 +500,14 @@ public class PlayerHub : NetworkBehaviour
         }
 
         yawDelta = GetProcessedYawDelta(yawDelta, move, allowLook);
+        ApplyInputRouteCameraYawOffset(yawDelta);
 
         _moveInput = move;
         _yawDelta = yawDelta;
         _pitchDelta = pitchDelta;
         _sprintHeld = sprintHeld;
+
+        ApplyInputRouteOwnerCameraHandoff();
 
         if (allowLook)
         {
@@ -510,6 +528,16 @@ public class PlayerHub : NetworkBehaviour
 
         SubmitInputServerRpc(_moveInput, _yawDelta, _sprintHeld);
         LogInputRouteOwner(rawMove, _moveInput, jumpPressed, rawSprintHeld, _sprintHeld, allowLook, canMoveNow ? "submitted" : "CanMoveNow false");
+        Camera playerCameraAfter = PlayerCamera;
+        LogMotorShellCameraInput(
+            rawYawDelta,
+            rawPitchDelta,
+            allowLook,
+            cameraPivotYawBefore,
+            GetTransformYawForLog(cameraRoot != null ? cameraRoot.transform : null),
+            playerCameraPitchBefore,
+            GetTransformPitchForLog(playerCameraAfter != null ? playerCameraAfter.transform : null),
+            canMoveNow ? "submitted" : "CanMoveNow false");
 
         if (jumpPressed)
         {
@@ -1296,6 +1324,204 @@ public class PlayerHub : NetworkBehaviour
         return 0f;
     }
 
+    private void ApplyInputRouteCameraYawOffset(float scaledYawDelta)
+    {
+        if (!ShouldUseInputRouteCameraYawOffset())
+            return;
+
+        if (Mathf.Abs(scaledYawDelta) <= 0.0001f)
+            return;
+
+        CacheCameraDefaults();
+        _cameraRootYawOffset = Mathf.Repeat(_cameraRootYawOffset + scaledYawDelta, 360f);
+        _cameraRootYawOffsetCaptured = true;
+    }
+
+    private bool ShouldUseInputRouteCameraYawOffset()
+    {
+        if (!IsInputRouteTarget())
+            return false;
+
+        if (locomotionModule == null)
+            return true;
+
+        CharacterController characterController = CharacterController;
+        return characterController == null || !characterController.enabled;
+    }
+
+    private void ApplyInputRouteOwnerCameraHandoff()
+    {
+        if (!IsInputRouteTarget())
+            return;
+
+        Camera playerCamera = PlayerCamera;
+        if (playerCamera == null)
+            return;
+
+        if (!IsOwner)
+        {
+            playerCamera.enabled = false;
+            AudioListener nonOwnerListener = playerCamera.GetComponent<AudioListener>();
+            if (nonOwnerListener != null)
+                nonOwnerListener.enabled = false;
+
+            return;
+        }
+
+        if (cameraRoot != null && !cameraRoot.activeSelf)
+            cameraRoot.SetActive(true);
+
+        if (!playerCamera.gameObject.activeSelf)
+            playerCamera.gameObject.SetActive(true);
+
+        if (!playerCamera.enabled)
+            playerCamera.enabled = true;
+
+        EnsureMainCameraTag(playerCamera);
+        EnsureOwnerAudioListener(playerCamera);
+        DisableCompetingMainCameras(playerCamera);
+        DisableCompetingAudioListeners(audioListener);
+    }
+
+    private void EnsureMainCameraTag(Camera playerCamera)
+    {
+        if (playerCamera == null)
+            return;
+
+        if (playerCamera.CompareTag(RuntimeMainCameraTag))
+            return;
+
+        playerCamera.gameObject.tag = RuntimeMainCameraTag;
+    }
+
+    private void EnsureOwnerAudioListener(Camera playerCamera)
+    {
+        if (playerCamera == null)
+            return;
+
+        if (audioListener == null)
+            audioListener = playerCamera.GetComponent<AudioListener>();
+
+        if (audioListener == null)
+            audioListener = playerCamera.gameObject.AddComponent<AudioListener>();
+
+        audioListener.enabled = true;
+    }
+
+    private void DisableCompetingMainCameras(Camera ownerCamera)
+    {
+        if (ownerCamera == null)
+            return;
+
+        Camera[] cameras = FindObjectsByType<Camera>(FindObjectsSortMode.None);
+        for (int i = 0; i < cameras.Length; i++)
+        {
+            Camera candidate = cameras[i];
+            if (candidate == null || candidate == ownerCamera || !candidate.enabled)
+                continue;
+
+            bool isSceneMainCamera = candidate.name == SceneMainCameraName;
+            bool hasMainCameraTag = candidate.CompareTag(RuntimeMainCameraTag);
+            if (!isSceneMainCamera && !hasMainCameraTag)
+                continue;
+
+            candidate.enabled = false;
+            AudioListener listener = candidate.GetComponent<AudioListener>();
+            if (listener != null)
+                listener.enabled = false;
+        }
+    }
+
+    private void DisableCompetingAudioListeners(AudioListener ownerListener)
+    {
+        if (ownerListener == null)
+            return;
+
+        AudioListener[] listeners = FindObjectsByType<AudioListener>(FindObjectsSortMode.None);
+        for (int i = 0; i < listeners.Length; i++)
+        {
+            AudioListener candidate = listeners[i];
+            if (candidate == null || candidate == ownerListener || !candidate.enabled)
+                continue;
+
+            candidate.enabled = false;
+        }
+    }
+
+    private void LogMotorShellCameraInput(
+        float rawYawDelta,
+        float rawPitchDelta,
+        bool allowLook,
+        float cameraPivotYawBefore,
+        float cameraPivotYawAfter,
+        float playerCameraPitchBefore,
+        float playerCameraPitchAfter,
+        string routeResult)
+    {
+        if (!ShouldLogMotorShellCamera())
+            return;
+
+        Camera playerCamera = PlayerCamera;
+        Camera mainCamera = Camera.main;
+        string baseState = $"isOwner={IsOwner} isServer={IsServer} scene={SceneManager.GetActiveScene().name} gameState={GetInputRouteGameState()}";
+        string selectedUi = GetCurrentSelectedGameObjectName();
+        AudioListener playerListener = playerCamera != null ? playerCamera.GetComponent<AudioListener>() : null;
+
+        Debug.Log(
+            $"[MSCamera/Input:{GetInputRouteObjectName()}] {baseState} Cursor.lockState={Cursor.lockState} Cursor.visible={Cursor.visible} EventSystem.currentSelectedGameObject={selectedUi} mouseDelta=({rawYawDelta:F2},{rawPitchDelta:F2}) allowLook={allowLook} routeResult={routeResult}",
+            this);
+        Debug.Log(
+            $"[MSCamera/Owner:{GetInputRouteObjectName()}] {baseState} PlayerCamera.exists={playerCamera != null} PlayerCamera.enabled={(playerCamera != null && playerCamera.enabled)} PlayerCamera.tag={(playerCamera != null ? playerCamera.tag : "<null>")} AudioListener.exists={playerListener != null} AudioListener.enabled={(playerListener != null && playerListener.enabled)} cameraRoot.activeSelf={(cameraRoot != null && cameraRoot.activeSelf)}",
+            this);
+        Debug.Log(
+            $"[MSCamera/Pivot:{GetInputRouteObjectName()}] {baseState} CameraPivot.yaw.before={FormatCameraFloat(cameraPivotYawBefore)} CameraPivot.yaw.after={FormatCameraFloat(cameraPivotYawAfter)} PlayerCamera.pitch.before={FormatCameraFloat(playerCameraPitchBefore)} PlayerCamera.pitch.after={FormatCameraFloat(playerCameraPitchAfter)} mouseDelta=({rawYawDelta:F2},{rawPitchDelta:F2})",
+            this);
+        Debug.Log(
+            $"[MSCamera/Main:{GetInputRouteObjectName()}] {baseState} PlayerCamera.enabled={(playerCamera != null && playerCamera.enabled)} PlayerCamera.tag={(playerCamera != null ? playerCamera.tag : "<null>")} Camera.main.name={(mainCamera != null ? mainCamera.name : "<null>")} Camera.main.isPlayerCamera={mainCamera == playerCamera}",
+            this);
+    }
+
+    private bool ShouldLogMotorShellCamera()
+    {
+        if (!debugCameraLogs)
+            return false;
+
+        if (!IsInputRouteTarget())
+            return false;
+
+        if (Time.unscaledTime < _nextMotorShellCameraLogTime)
+            return false;
+
+        _nextMotorShellCameraLogTime = Time.unscaledTime + InputRouteLogInterval;
+        return true;
+    }
+
+    private static float GetTransformYawForLog(Transform target)
+    {
+        return target != null ? NormalizeSignedAngle(target.eulerAngles.y) : float.NaN;
+    }
+
+    private static float GetTransformPitchForLog(Transform target)
+    {
+        return target != null ? NormalizeSignedAngle(target.eulerAngles.x) : float.NaN;
+    }
+
+    private static float NormalizeSignedAngle(float angle)
+    {
+        return Mathf.DeltaAngle(0f, angle);
+    }
+
+    private static string FormatCameraFloat(float value)
+    {
+        return IsFiniteFloat(value) ? value.ToString("F2") : "<null>";
+    }
+
+    private static string GetCurrentSelectedGameObjectName()
+    {
+        GameObject selected = EventSystem.current != null ? EventSystem.current.currentSelectedGameObject : null;
+        return selected != null ? selected.name : "<none>";
+    }
+
     private void TickServer()
     {
         CharacterController characterController = CharacterController;
@@ -1359,6 +1585,9 @@ public class PlayerHub : NetworkBehaviour
 
     private bool ShouldLogInputRoute(ref float nextLogTime)
     {
+        if (!debugMovementRoutingLogs)
+            return false;
+
         if (!IsInputRouteTarget())
             return false;
 
