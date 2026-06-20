@@ -137,6 +137,12 @@ public sealed class HamsterVisualClipStateDriver : MonoBehaviour
     private float _interactionStateTimer;
     private float _interactionStateMinTime;
     private float _interactionStateMaxTime;
+    private bool _externalOneShotActive;
+    private int _externalOneShotStateHash;
+    private string _externalOneShotStateName = string.Empty;
+    private float _externalOneShotTimer;
+    private float _externalOneShotMinTime;
+    private float _externalOneShotMaxTime;
     private bool _warnedMissingAnimator;
     private bool _warnedAnimatorDisabled;
     private bool _warnedMissingController;
@@ -149,6 +155,8 @@ public sealed class HamsterVisualClipStateDriver : MonoBehaviour
         Run,
         JumpUp
     }
+
+    public bool IsExternalOneShotActive => _externalOneShotActive;
 
     private struct MotionSample
     {
@@ -214,6 +222,9 @@ public sealed class HamsterVisualClipStateDriver : MonoBehaviour
             ResolveReferences();
 
         if (!CanDriveAnimator())
+            return;
+
+        if (TickExternalOneShot(deltaTime))
             return;
 
         MotionSample sample = ReadMotionSample();
@@ -367,6 +378,150 @@ public sealed class HamsterVisualClipStateDriver : MonoBehaviour
         return false;
     }
 
+    public bool TryPlayOneShotState(
+        string stateName,
+        float crossFadeDuration,
+        bool requireStateMotion,
+        out int stateHash,
+        out string failureReason)
+    {
+        return TryPlayOneShotState(
+            stateName,
+            crossFadeDuration,
+            0f,
+            0f,
+            requireStateMotion,
+            out stateHash,
+            out failureReason);
+    }
+
+    public bool TryPlayOneShotState(
+        string stateName,
+        float crossFadeDuration,
+        float minTime,
+        float maxTime,
+        bool requireStateMotion,
+        out int stateHash,
+        out string failureReason)
+    {
+        stateHash = 0;
+        failureReason = "none";
+
+        if (string.IsNullOrWhiteSpace(stateName))
+        {
+            failureReason = "state name empty";
+            return false;
+        }
+
+        if (!isActiveAndEnabled || !enableClipStateDriver)
+        {
+            failureReason = "driver disabled";
+            return false;
+        }
+
+        if (!CanDriveAnimator())
+        {
+            failureReason = "animator unavailable";
+            return false;
+        }
+
+        if (!TryCacheState(stateName, out stateHash))
+        {
+            failureReason = "state missing";
+            return false;
+        }
+
+        if (!HasStateMotion(stateName, requireStateMotion, false))
+        {
+            failureReason = "state motion missing";
+            return false;
+        }
+
+        visualAnimator.CrossFade(stateHash, Mathf.Max(0f, crossFadeDuration), BaseLayerIndex, 0f);
+        _currentStateHash = stateHash;
+        _currentStateName = stateName;
+        _stateTimer = 0f;
+        _externalOneShotActive = true;
+        _externalOneShotStateHash = stateHash;
+        _externalOneShotStateName = stateName;
+        _externalOneShotTimer = 0f;
+        _externalOneShotMinTime = Mathf.Max(0f, minTime);
+        _externalOneShotMaxTime = Mathf.Max(_externalOneShotMinTime, maxTime);
+        ClearInteractionState();
+        return true;
+    }
+
+    public bool IsPlayingExternalOneShot(string stateName)
+    {
+        if (!_externalOneShotActive || string.IsNullOrWhiteSpace(stateName))
+            return false;
+
+        int hash = Animator.StringToHash(stateName);
+        int baseLayerHash = Animator.StringToHash($"Base Layer.{stateName}");
+        return _externalOneShotStateHash == hash ||
+               _externalOneShotStateHash == baseLayerHash ||
+               _externalOneShotStateName == stateName;
+    }
+
+    public void CancelExternalOneShot(string reason)
+    {
+        ClearExternalOneShot();
+    }
+
+    public bool TryGetAnimatorStateNormalizedTime(int stateHash, out float normalizedTime)
+    {
+        normalizedTime = 0f;
+        if (visualAnimator == null || stateHash == 0)
+            return false;
+
+        AnimatorStateInfo currentState = visualAnimator.GetCurrentAnimatorStateInfo(BaseLayerIndex);
+        if (currentState.shortNameHash == stateHash || currentState.fullPathHash == stateHash)
+        {
+            normalizedTime = currentState.normalizedTime;
+            return true;
+        }
+
+        if (!visualAnimator.IsInTransition(BaseLayerIndex))
+            return false;
+
+        AnimatorStateInfo nextState = visualAnimator.GetNextAnimatorStateInfo(BaseLayerIndex);
+        if (nextState.shortNameHash == stateHash || nextState.fullPathHash == stateHash)
+        {
+            normalizedTime = nextState.normalizedTime;
+            return true;
+        }
+
+        return false;
+    }
+
+    private bool TickExternalOneShot(float deltaTime)
+    {
+        if (!_externalOneShotActive)
+            return false;
+
+        _externalOneShotTimer += Mathf.Max(0f, deltaTime);
+        if (_externalOneShotTimer < _externalOneShotMinTime)
+            return true;
+
+        bool maxTimeReached = _externalOneShotMaxTime > 0f && _externalOneShotTimer >= _externalOneShotMaxTime;
+        bool animatorStillInState = IsAnimatorInState(_externalOneShotStateHash);
+        if (!maxTimeReached && animatorStillInState)
+            return true;
+
+        ClearExternalOneShot();
+        return false;
+    }
+
+    private void ClearExternalOneShot()
+    {
+        _externalOneShotActive = false;
+        _externalOneShotStateHash = 0;
+        _externalOneShotStateName = string.Empty;
+        _externalOneShotTimer = 0f;
+        _externalOneShotMinTime = 0f;
+        _externalOneShotMaxTime = 0f;
+    }
+
     private void ResetRuntimeState()
     {
         _currentStateHash = 0;
@@ -380,6 +535,7 @@ public sealed class HamsterVisualClipStateDriver : MonoBehaviour
         _interactionObservationInitialized = false;
         _suppressNextGrabCountInteractionTrigger = false;
         _suppressNextThrowCountInteractionTrigger = false;
+        ClearExternalOneShot();
         ClearInteractionState();
 
         MotionSample sample = ReadMotionSample();
@@ -744,7 +900,12 @@ public sealed class HamsterVisualClipStateDriver : MonoBehaviour
 
     private bool HasStateMotion(string stateName)
     {
-        if (!requireCarryStateMotion)
+        return HasStateMotion(stateName, requireCarryStateMotion, true);
+    }
+
+    private bool HasStateMotion(string stateName, bool requireMotion, bool allowWhenEditorStateUnavailable)
+    {
+        if (!requireMotion)
             return true;
 
 #if UNITY_EDITOR
@@ -752,13 +913,13 @@ public sealed class HamsterVisualClipStateDriver : MonoBehaviour
             ? visualAnimator.runtimeAnimatorController as UnityEditor.Animations.AnimatorController
             : null;
         if (controller == null || controller.layers == null || controller.layers.Length <= BaseLayerIndex)
-            return true;
+            return allowWhenEditorStateUnavailable;
 
         UnityEditor.Animations.AnimatorStateMachine stateMachine = controller.layers[BaseLayerIndex].stateMachine;
         UnityEditor.Animations.AnimatorState state = FindEditorStateByName(stateMachine, stateName);
-        return state == null || state.motion != null;
+        return state == null ? allowWhenEditorStateUnavailable : state.motion != null;
 #else
-        return true;
+        return allowWhenEditorStateUnavailable;
 #endif
     }
 

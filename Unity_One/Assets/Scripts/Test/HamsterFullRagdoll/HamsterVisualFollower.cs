@@ -146,6 +146,7 @@ public sealed class HamsterVisualFollower : MonoBehaviour
     [SerializeField] private bool autoFindRecoveryStateSource = true;
     [SerializeField] private bool followBodyRotationDuringRecovery = true;
     [SerializeField] private float recoveryVisualRotationSmoothTime = 0.08f;
+    [SerializeField] private bool debugRecoveryVisualLogs = false;
 
     [Header("Debug")]
     [SerializeField] private bool debugLogs = false;
@@ -244,6 +245,12 @@ public sealed class HamsterVisualFollower : MonoBehaviour
     private string _lastVisualFacingSource = "Velocity";
     private Quaternion _initialBodyToVisualRotation = Quaternion.identity;
     private bool _hasInitialBodyToVisualRotation;
+    private bool _recoveryVisualSuppressed;
+    private string _recoveryVisualSuppressionReason = "none";
+    private bool _getUpVisualLocked;
+    private string _getUpVisualLockReason = "none";
+
+    public bool IsGetUpVisualLocked => _getUpVisualLocked;
 
     private void Awake()
     {
@@ -282,6 +289,18 @@ public sealed class HamsterVisualFollower : MonoBehaviour
         float planarSpeed = planarVelocity.magnitude;
         Vector3 localVelocity = targetBody.transform.InverseTransformDirection(planarVelocity);
 
+        if (IsGetUpVisualLocked)
+        {
+            ResetGetUpVisualLockDynamics();
+            UpdateAnimator(planarSpeed);
+            LogDebugState(velocity, planarSpeed, localVelocity);
+            StorePreviousMotionState(planarVelocity, planarSpeed);
+            return;
+        }
+
+        if (IsRecoveryVisualSuppressed())
+            ResetRecoveryVisualDynamics();
+
         if (ShouldStabilizeMainScenesAirborneVisuals())
             ResetMainScenesAirborneVisualState();
 
@@ -294,6 +313,92 @@ public sealed class HamsterVisualFollower : MonoBehaviour
         UpdateAnimator(planarSpeed);
         LogDebugState(velocity, planarSpeed, localVelocity);
         StorePreviousMotionState(planarVelocity, planarSpeed);
+    }
+
+    public void SetRecoveryVisualSuppression(bool suppress, string reason)
+    {
+        if (_recoveryVisualSuppressed == suppress)
+            return;
+
+        _recoveryVisualSuppressed = suppress;
+        _recoveryVisualSuppressionReason = string.IsNullOrEmpty(reason) ? "none" : reason;
+        if (suppress)
+            ResetRecoveryVisualDynamics();
+
+        LogRecoveryVisualSuppression(suppress, _recoveryVisualSuppressionReason);
+    }
+
+    public void ResetRecoveryVisualDynamics()
+    {
+        ResetJumpVisualReactionState();
+        ResetMainScenesAirborneWobbleState();
+        _currentPlanarAcceleration = Vector3.zero;
+        _currentLagOffset = Vector3.zero;
+        _lagSmoothVelocity = Vector3.zero;
+        _positionSmoothVelocity = Vector3.zero;
+        _currentClipHeightYOffset = 0f;
+        _targetClipHeightYOffset = 0f;
+        _clipHeightYOffsetVelocity = 0f;
+        _clipHeightPivotBoostTimer = 0f;
+        _clipHeightLandingBoostTimer = 0f;
+    }
+
+    public void SetGetUpVisualLock(bool locked, string reason)
+    {
+        if (_getUpVisualLocked == locked)
+            return;
+
+        _getUpVisualLocked = locked;
+        _getUpVisualLockReason = string.IsNullOrEmpty(reason) ? "none" : reason;
+        if (locked)
+        {
+            StabilizeGetUpVisualRootOnce();
+            ResetGetUpVisualLockDynamics();
+        }
+        else
+        {
+            ResetGetUpVisualLockDynamics();
+            ResetSmoothingState();
+        }
+
+        LogGetUpVisualLock(locked, _getUpVisualLockReason);
+    }
+
+    public void ResetGetUpVisualLockDynamics()
+    {
+        ResetRecoveryVisualDynamics();
+        _yawVelocity = 0f;
+        _currentYaw = 0f;
+        _currentForwardLean = 0f;
+        _currentSideLean = 0f;
+        _forwardLeanVelocity = 0f;
+        _sideLeanVelocity = 0f;
+        _accelForwardWobble = 0f;
+        _accelForwardWobbleVelocity = 0f;
+        _accelSideWobble = 0f;
+        _accelSideWobbleVelocity = 0f;
+        _stopOvershoot = 0f;
+        _stopOvershootVelocity = 0f;
+        _stopOvershootTimer = 0f;
+        _stopOvershootCooldownTimer = 0f;
+        _turnWobble = 0f;
+        _turnWobbleVelocity = 0f;
+        _impactForwardWobble = 0f;
+        _impactForwardWobbleVelocity = 0f;
+        _impactSideWobble = 0f;
+        _impactSideWobbleVelocity = 0f;
+        _targetImpactForwardWobble = 0f;
+        _targetImpactSideWobble = 0f;
+    }
+
+    private void StabilizeGetUpVisualRootOnce()
+    {
+        if (visualRoot == null)
+            return;
+
+        visualRoot.localPosition = _initialLocalPosition;
+        visualRoot.localRotation = _initialLocalRotation;
+        visualRoot.localScale = _initialLocalScale;
     }
 
     private void ResolveReferences()
@@ -439,15 +544,17 @@ public sealed class HamsterVisualFollower : MonoBehaviour
     private void UpdateVisualPosition(Vector3 localVelocity, float planarSpeed)
     {
         bool stabilizeAirborne = ShouldStabilizeMainScenesAirborneVisuals();
+        bool suppressRecovery = IsRecoveryVisualSuppressed();
+        bool stabilizeVisual = stabilizeAirborne || suppressRecovery;
         Vector3 targetLagOffset = Vector3.zero;
-        if (enableLocalLag && !stabilizeAirborne)
+        if (enableLocalLag && !stabilizeVisual)
         {
             float speedScale = Mathf.Max(0.01f, speedForMaxLean);
             float backLag = -Mathf.Clamp(localVelocity.z / speedScale, -1f, 1f) * maxBackLag;
             float sideLag = -Mathf.Clamp(localVelocity.x / speedScale, -1f, 1f) * maxSideLag;
             targetLagOffset = new Vector3(sideLag, 0f, backLag);
         }
-        else if (stabilizeAirborne)
+        else if (stabilizeVisual)
         {
             _currentLagOffset = Vector3.zero;
             _lagSmoothVelocity = Vector3.zero;
@@ -467,8 +574,8 @@ public sealed class HamsterVisualFollower : MonoBehaviour
             deltaTime);
 
         Vector3 targetOffset = visualLocalOffset;
-        targetOffset.y = stabilizeAirborne ? visualLocalOffset.y : ResolveVisualYOffset(planarSpeed);
-        if (!stabilizeAirborne)
+        targetOffset.y = stabilizeVisual ? visualLocalOffset.y : ResolveVisualYOffset(planarSpeed);
+        if (!stabilizeVisual)
             targetOffset.y += _currentClipHeightYOffset;
         targetOffset += _currentLagOffset;
         if (visualRootIsChildOfTarget)
@@ -518,6 +625,24 @@ public sealed class HamsterVisualFollower : MonoBehaviour
         {
             _currentClipHeightStateName = "Disabled";
             _clipHeightCurrentStateName = "Disabled";
+            _clipHeightNextStateName = "None";
+            _clipHeightIsInTransition = false;
+            _usedNextStateForHeight = false;
+            _clipHeightCurrentOrNextIsWalk = false;
+            _loggedClipHeightCurrentTransition = false;
+            _targetClipHeightYOffset = 0f;
+            _clipHeightPivotBoostTimer = 0f;
+            _clipHeightLandingBoostTimer = 0f;
+            _currentClipHeightYOffset = SmoothClipHeightYOffset(_targetClipHeightYOffset, deltaTime);
+            _wasClipHeightCurrentOrNextWalk = false;
+            StoreClipHeightMotionState(verticalVelocity);
+            return;
+        }
+
+        if (IsRecoveryVisualSuppressed())
+        {
+            _currentClipHeightStateName = "RecoverySuppressed";
+            _clipHeightCurrentStateName = "RecoverySuppressed";
             _clipHeightNextStateName = "None";
             _clipHeightIsInTransition = false;
             _usedNextStateForHeight = false;
@@ -856,7 +981,7 @@ public sealed class HamsterVisualFollower : MonoBehaviour
 
     private void UpdateJumpVisualReaction(float deltaTime)
     {
-        if (!enableJumpVisualReaction || ShouldSuppressMainScenesJumpVisualReaction())
+        if (!enableJumpVisualReaction || ShouldSuppressMainScenesJumpVisualReaction() || IsRecoveryVisualSuppressed())
         {
             ResetJumpVisualReactionState();
             return;
@@ -903,7 +1028,7 @@ public sealed class HamsterVisualFollower : MonoBehaviour
             _hasInitialVisualLocalScale = true;
         }
 
-        if (ShouldSuppressMainScenesJumpVisualReaction())
+        if (ShouldSuppressMainScenesJumpVisualReaction() || IsRecoveryVisualSuppressed())
         {
             visualRoot.localScale = _initialVisualLocalScale;
             return;
@@ -919,7 +1044,7 @@ public sealed class HamsterVisualFollower : MonoBehaviour
 
     private void UpdateMotionWobble(Vector3 planarVelocity, float planarSpeed, float deltaTime)
     {
-        if (ShouldStabilizeMainScenesAirborneVisuals())
+        if (ShouldStabilizeMainScenesAirborneVisuals() || IsRecoveryVisualSuppressed())
         {
             _currentPlanarAcceleration = Vector3.zero;
             ResetMainScenesAirborneWobbleState();
@@ -938,7 +1063,7 @@ public sealed class HamsterVisualFollower : MonoBehaviour
 
     public void AddImpactVisualReaction(Vector3 worldDirection, float intensity)
     {
-        if (!enableImpactVisualReaction || ShouldStabilizeMainScenesAirborneVisuals() || !IsFiniteVector(worldDirection))
+        if (!enableImpactVisualReaction || ShouldStabilizeMainScenesAirborneVisuals() || IsRecoveryVisualSuppressed() || !IsFiniteVector(worldDirection))
             return;
 
         if (worldDirection.sqrMagnitude <= 0.0001f)
@@ -1153,6 +1278,8 @@ public sealed class HamsterVisualFollower : MonoBehaviour
             return;
 
         bool stabilizeAirborne = ShouldStabilizeMainScenesAirborneVisuals();
+        bool suppressRecovery = IsRecoveryVisualSuppressed();
+        bool suppressAdditiveVisuals = stabilizeAirborne || suppressRecovery;
         float targetYaw = 0f;
         bool usedMotorDesiredFacing = TryResolveTargetMotorDesiredFacing(out Vector3 motorDesiredFacing, out string visualFacingSource);
         if (usedMotorDesiredFacing)
@@ -1184,7 +1311,7 @@ public sealed class HamsterVisualFollower : MonoBehaviour
             yawSmoothTime,
             Mathf.Infinity,
             Time.deltaTime);
-        if (stabilizeAirborne)
+        if (suppressAdditiveVisuals)
         {
             _turnWobble = 0f;
             _turnWobbleVelocity = 0f;
@@ -1196,7 +1323,7 @@ public sealed class HamsterVisualFollower : MonoBehaviour
 
         float targetForwardLean = 0f;
         float targetSideLean = 0f;
-        if (enableBodyLean && !stabilizeAirborne)
+        if (enableBodyLean && !suppressAdditiveVisuals)
         {
             float speedScale = Mathf.Max(0.01f, speedForMaxLean);
             targetForwardLean = Mathf.Clamp(localVelocity.z / speedScale, -1f, 1f) * maxForwardLeanDegrees;
@@ -1225,15 +1352,15 @@ public sealed class HamsterVisualFollower : MonoBehaviour
             Time.deltaTime);
 
         Quaternion yawRot = Quaternion.Euler(0f, _currentYaw + visualYawOffsetDegrees, 0f);
-        Quaternion leanRot = stabilizeAirborne ? Quaternion.identity : Quaternion.Euler(_currentForwardLean, 0f, _currentSideLean);
-        Quaternion accelerationWobbleRot = stabilizeAirborne ? Quaternion.identity : Quaternion.Euler(_accelForwardWobble, 0f, _accelSideWobble);
-        Quaternion stopOvershootRot = stabilizeAirborne ? Quaternion.identity : Quaternion.Euler(_stopOvershoot, 0f, 0f);
-        Quaternion turnWobbleRot = stabilizeAirborne ? Quaternion.identity : Quaternion.Euler(0f, 0f, _turnWobble);
-        Quaternion impactWobbleRot = stabilizeAirborne ? Quaternion.identity : Quaternion.Euler(_impactForwardWobble, 0f, _impactSideWobble);
-        Quaternion jumpVisualRot = stabilizeAirborne || ShouldSuppressMainScenesJumpVisualReaction()
+        Quaternion leanRot = suppressAdditiveVisuals ? Quaternion.identity : Quaternion.Euler(_currentForwardLean, 0f, _currentSideLean);
+        Quaternion accelerationWobbleRot = suppressAdditiveVisuals ? Quaternion.identity : Quaternion.Euler(_accelForwardWobble, 0f, _accelSideWobble);
+        Quaternion stopOvershootRot = suppressAdditiveVisuals ? Quaternion.identity : Quaternion.Euler(_stopOvershoot, 0f, 0f);
+        Quaternion turnWobbleRot = suppressAdditiveVisuals ? Quaternion.identity : Quaternion.Euler(0f, 0f, _turnWobble);
+        Quaternion impactWobbleRot = suppressAdditiveVisuals ? Quaternion.identity : Quaternion.Euler(_impactForwardWobble, 0f, _impactSideWobble);
+        Quaternion jumpVisualRot = suppressAdditiveVisuals || ShouldSuppressMainScenesJumpVisualReaction()
             ? Quaternion.identity
             : Quaternion.Euler(_jumpPitch + _landingPitch, 0f, 0f);
-        Quaternion offsetRot = stabilizeAirborne
+        Quaternion offsetRot = suppressAdditiveVisuals
             ? Quaternion.Euler(0f, visualLocalEulerOffset.y, 0f)
             : Quaternion.Euler(visualLocalEulerOffset);
 
@@ -1333,6 +1460,12 @@ public sealed class HamsterVisualFollower : MonoBehaviour
         return motorStateSource != null && motorStateSource.IsMainScenesInputRouteTarget;
     }
 
+    private bool IsRecoveryVisualSuppressed()
+    {
+        return _recoveryVisualSuppressed &&
+               (IsMainScenesTarget() || (recoveryStateSource != null && recoveryStateSource.CanReceiveRecoveryState));
+    }
+
     private bool ShouldSuppressMainScenesJumpVisualReaction()
     {
         return IsMainScenesTarget();
@@ -1400,6 +1533,22 @@ public sealed class HamsterVisualFollower : MonoBehaviour
         return visualRoot.GetComponent<Rigidbody>() == null &&
                visualRoot.GetComponent("NetworkObject") == null &&
                visualRoot.GetComponent("PlayerHub") == null;
+    }
+
+    private void LogRecoveryVisualSuppression(bool suppress, string reason)
+    {
+        if (!debugRecoveryVisualLogs)
+            return;
+
+        Debug.Log($"[MSVisualRecovery:{GetInputRouteObjectName()}] suppress={suppress} reason={reason}", this);
+    }
+
+    private void LogGetUpVisualLock(bool locked, string reason)
+    {
+        if (!debugRecoveryVisualLogs)
+            return;
+
+        Debug.Log($"[MSVisualRecovery:{GetInputRouteObjectName()}] getUpLock={locked} reason={reason}", this);
     }
 
     private void LogTargetVisualFacing(bool usedMotorDesiredFacing, Vector3 desiredFacing, float targetYaw, float planarSpeed)

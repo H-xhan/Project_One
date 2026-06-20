@@ -275,34 +275,76 @@ MonoBehaviour:
   visualFollower: {fileID: 6892046878001411185}
   rootBodySync: {fileID: 6100000000000000100}
   combatAdapter: {fileID: 6100000000000000102}
+  visualClipStateDriver: {fileID: 8165324872318489426}
   enableRecoveryAdapter: 1
   impactImpulseMultiplier: 1
   impactUpwardBonus: 0.5
-  impactTorqueMultiplier: 1
+  impactTorqueMultiplier: 1.2
   minKnockdownImpulse: 3
+  impactedDuration: 0.22
+  minimumKnockdownDuration: 0.9
   useProductionLikeLaunch: 1
   useVelocityChangeForImpact: 1
   productionHorizontalLaunchScale: 0.65
   productionMinimumUpwardLaunch: 2.8
   productionUpwardLaunchBonus: 1.1
-  productionTumbleTorque: 10
-  productionRandomYawTorque: 2.5
-  knockdownDuration: 1
-  recoveryDuration: 0.8
-  maxKnockdownDuration: 2
+  productionTumbleTorque: 14
+  productionRandomYawTorque: 4
+  knockdownDuration: 1.2
+  recoveryDuration: 1.2
+  maxKnockdownDuration: 2.4
   disableMotorControlWhileKnocked: 1
   releaseRotationConstraintsWhileKnocked: 1
   restoreOriginalConstraintsOnRecover: 1
   recoveryUprightTorque: 30
   recoveryDamping: 5
+  recoveryMovementStartScale: 0.04
+  recoveryUprightStartScale: 0.08
+  recoveryPoseStartScale: 0.03
+  recoveryUprightTorqueStartScale: 0.1
   groundedRequiredToFinishRecovery: 1
   maxRecoverPlanarSpeed: 2
   minRecoverUpDot: 0.85
-  liquidSweepControlMultiplier: 0.25
+  dampAngularVelocityDuringRecovery: 1
+  recoveryAngularDamping: 14
+  recoveryYawAngularDamping: 20
+  maxRecoverAngularSpeed: 1
+  maxRecoverYawAngularSpeed: 0.35
+  maxExitYawAngularVelocity: 0.05
+  zeroAngularVelocityOnRecoveryFinish: 1
+  liquidSweepControlMultiplier: 0.15
   liquidSweepDuration: 1.2
-  liquidSweepForceMultiplier: 1
-  liquidSweepInitialImpulseMultiplier: 0.35
+  liquidSweepForceMultiplier: 1.55
+  liquidSweepInitialImpulseMultiplier: 0.55
   liquidSweepAllowJump: 0
+  useGetUpAnimation: 1
+  useGetUpRecoveryPhase: 1
+  useHardGetUpPhysicsIsolation: 1
+  getUpKinematicBody: 1
+  getUpDisableGravity: 1
+  getUpDisableBodyCollisions: 0
+  getUpFreezeAllRotation: 1
+  alignBodyUprightOnGetUpStart: 1
+  alignBodyUprightOnGetUpFinish: 1
+  resetBodyLocalPositionOnGetUp: 1
+  getUpStateName: GetUp
+  driveGetUpStateOnlyWhenMotionAssigned: 1
+  getUpCrossFadeDuration: 0.08
+  minGetUpStateTime: 0.4
+  maxGetUpStateTime: 1.2
+  prepareGetUpDuration: 0.1
+  getUpBlendOutDuration: 0.25
+  suppressVisualDuringGetUp: 1
+  freezeRotationDuringGetUp: 1
+  zeroAngularVelocityOnGetUpStart: 1
+  zeroAngularVelocityOnGetUpFinish: 1
+  disableUprightTorqueDuringGetUp: 1
+  getUpMovementScale: 0
+  getUpUprightScale: 0
+  getUpPoseScale: 0
+  blendOutJumpUnlockAtEnd: 1
+  returnToLocomotionAfterGetUp: 1
+  debugGetUpLogs: 0
   debugRecoveryLogs: 0
   debugLogInterval: 0.5
 --- !u!114 &6100000000000000104
@@ -731,6 +773,7 @@ MonoBehaviour:
   autoFindRecoveryStateSource: 1
   followBodyRotationDuringRecovery: 1
   recoveryVisualRotationSmoothTime: 0.08
+  debugRecoveryVisualLogs: 0
   debugLogs: 0
   drawGizmos: 0
 --- !u!114 &7958398752601989787
