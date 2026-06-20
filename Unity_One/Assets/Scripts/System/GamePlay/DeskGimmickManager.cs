@@ -434,7 +434,8 @@ public class DeskGimmickManager : NetworkBehaviour
         }
 
         List<PlayerStatusModule> players = CollectActivePlayers();
-        if (players.Count == 0)
+        int hamsterRecoveryPlayerCount = CountValidHamsterRecoveryAdapters();
+        if (players.Count == 0 && hamsterRecoveryPlayerCount == 0)
         {
             LogWarning($"{LogPrefix} Developer Intrusion start skipped. No valid players found.");
             return false;
@@ -457,7 +458,7 @@ public class DeskGimmickManager : NetworkBehaviour
             CancelAutoTrigger("already triggered this round");
         }
 
-        Log($"{LogPrefix} Developer Intrusion started. players:{players.Count}");
+        Log($"{LogPrefix} Developer Intrusion started. players:{players.Count} hamsterRecoveryPlayers:{hamsterRecoveryPlayerCount}");
         return true;
     }
 
@@ -1114,7 +1115,7 @@ public class DeskGimmickManager : NetworkBehaviour
     {
         PlayerStatusModule[] found = FindPlayerStatusModules();
         if (found == null)
-            return 0;
+            return CountValidHamsterRecoveryAdapters();
 
         int count = 0;
         for (int i = 0; i < found.Length; i++)
@@ -1130,6 +1131,27 @@ public class DeskGimmickManager : NetworkBehaviour
                 continue;
 
             count++;
+        }
+
+        return count + CountValidHamsterRecoveryAdapters();
+    }
+
+    private int CountValidHamsterRecoveryAdapters()
+    {
+#if UNITY_6000_0_OR_NEWER
+        HamsterMotorShellRagdollRecoveryAdapter[] found = FindObjectsByType<HamsterMotorShellRagdollRecoveryAdapter>(FindObjectsInactive.Exclude, FindObjectsSortMode.None);
+#else
+        HamsterMotorShellRagdollRecoveryAdapter[] found = FindObjectsOfType<HamsterMotorShellRagdollRecoveryAdapter>();
+#endif
+        if (found == null)
+            return 0;
+
+        int count = 0;
+        for (int i = 0; i < found.Length; i++)
+        {
+            HamsterMotorShellRagdollRecoveryAdapter recovery = found[i];
+            if (recovery != null && recovery.CanReceiveRecoveryState)
+                count++;
         }
 
         return count;

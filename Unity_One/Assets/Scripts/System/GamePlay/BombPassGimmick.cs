@@ -132,13 +132,17 @@ public class BombPassGimmick : NetworkBehaviour
 
     private PlayerStatusModule _currentHolder;
     private PlayerStatusModule _previousHolder;
+    private HamsterMotorShellImpactTarget _currentHamsterHolder;
+    private HamsterMotorShellImpactTarget _previousHamsterHolder;
     private float _remainingTime;
     private float _nextPassAllowedTime;
     private float _nextPassCheckTime;
     private bool _finalWarningTriggered;
     private Coroutine _routine;
     private readonly HashSet<PlayerStatusModule> _explosionHitPlayers = new HashSet<PlayerStatusModule>();
+    private readonly HashSet<HamsterMotorShellRagdollRecoveryAdapter> _explosionHitRecoveryAdapters = new HashSet<HamsterMotorShellRagdollRecoveryAdapter>();
     private readonly HashSet<PlayerStatusModule> _candidatePlayers = new HashSet<PlayerStatusModule>();
+    private readonly HashSet<HamsterMotorShellImpactTarget> _candidateHamsterTargets = new HashSet<HamsterMotorShellImpactTarget>();
     private BombPhase _phase = BombPhase.Idle;
     private float _lastPassTime;
     private bool _loggedEmptyPlayerMaskWarning;
@@ -229,21 +233,26 @@ public class BombPassGimmick : NetworkBehaviour
         _loggedEmptyPlayerMaskWarning = false;
 
         PlayerStatusModule initialHolder = null;
+        HamsterMotorShellImpactTarget initialHamsterHolder = null;
         if (assignRandomPlayerOnStart)
         {
             initialHolder = FindRandomPlayer();
+            if (!IsValidPlayerStatus(initialHolder))
+                initialHamsterHolder = FindRandomHamsterTarget();
         }
         else if (assignNearestPlayerOnStart)
         {
             Log($"{LogPrefix} Using nearest target fallback.");
             initialHolder = FindNearestPlayer();
+            if (!IsValidPlayerStatus(initialHolder))
+                initialHamsterHolder = FindNearestHamsterTarget(GetTargetSearchPosition(), GetTargetSearchRadius(), GetPlayerMask());
         }
         else
         {
             Log($"{LogPrefix} No start target selection enabled.");
         }
 
-        if (!IsValidPlayerStatus(initialHolder))
+        if (!IsValidPlayerStatus(initialHolder) && !IsValidHamsterTarget(initialHamsterHolder))
         {
             Log($"{LogPrefix} No valid target.");
             ResetVisuals();
@@ -253,8 +262,16 @@ public class BombPassGimmick : NetworkBehaviour
         SetPhase(BombPhase.Spawn);
         ResetVisuals();
         SendCleanupBombPassVisual("start-reset");
-        SetHolder(initialHolder, true);
-        Log($"{LogPrefix} Target assigned: {initialHolder.name}");
+        if (IsValidPlayerStatus(initialHolder))
+        {
+            SetHolder(initialHolder, true);
+            Log($"{LogPrefix} Target assigned: {initialHolder.name}");
+        }
+        else
+        {
+            SetHamsterHolder(initialHamsterHolder, true);
+            Log($"[MSBomb/Target] assigned target={initialHamsterHolder.TargetRoot.name} type=Hamster");
+        }
         PlayAudio(startAudio);
 
         _remainingTime = GetBombDuration();
@@ -306,6 +323,40 @@ public class BombPassGimmick : NetworkBehaviour
         return null;
     }
 
+    private HamsterMotorShellImpactTarget FindRandomHamsterTarget()
+    {
+#if UNITY_2022_2_OR_NEWER
+        HamsterMotorShellImpactTarget[] targets = FindObjectsByType<HamsterMotorShellImpactTarget>(FindObjectsInactive.Exclude, FindObjectsSortMode.None);
+#else
+        HamsterMotorShellImpactTarget[] targets = FindObjectsOfType<HamsterMotorShellImpactTarget>();
+#endif
+
+        _candidateHamsterTargets.Clear();
+        for (int i = 0; i < targets.Length; i++)
+        {
+            HamsterMotorShellImpactTarget target = targets[i];
+            if (IsValidHamsterTarget(target))
+                _candidateHamsterTargets.Add(target);
+        }
+
+        int candidateCount = _candidateHamsterTargets.Count;
+        Log($"[MSBomb/Target] randomHamster candidates={candidateCount}");
+        if (candidateCount <= 0)
+            return null;
+
+        int selectedIndex = Random.Range(0, candidateCount);
+        int currentIndex = 0;
+        foreach (HamsterMotorShellImpactTarget candidate in _candidateHamsterTargets)
+        {
+            if (currentIndex == selectedIndex)
+                return candidate;
+
+            currentIndex++;
+        }
+
+        return null;
+    }
+
     private IEnumerator RunBombPassRoutine()
     {
         SetPhase(BombPhase.Armed);
@@ -313,7 +364,7 @@ public class BombPassGimmick : NetworkBehaviour
 
         while (_remainingTime > 0f)
         {
-            if (_currentHolder == null)
+            if (!HasCurrentHolder())
             {
                 Log($"{LogPrefix} Stopped. Current holder is missing.");
                 FinishBombPass();
@@ -372,6 +423,44 @@ public class BombPassGimmick : NetworkBehaviour
         return nearest;
     }
 
+    private HamsterMotorShellImpactTarget FindNearestHamsterTarget(Vector3 center, float radius, int mask)
+    {
+        Collider[] colliders = Physics.OverlapSphere(
+            center,
+            Mathf.Max(MinPositiveValue, radius),
+            mask,
+            QueryTriggerInteraction.Collide);
+
+        _candidateHamsterTargets.Clear();
+        HamsterMotorShellImpactTarget nearest = null;
+        float nearestSqrDistance = float.MaxValue;
+
+        for (int i = 0; i < colliders.Length; i++)
+        {
+            if (!HamsterMotorShellImpactTarget.TryFindOnCollider(colliders[i], out HamsterMotorShellImpactTarget candidate))
+                continue;
+
+            if (!IsValidHamsterTarget(candidate))
+                continue;
+
+            if (!_candidateHamsterTargets.Add(candidate))
+                continue;
+
+            float sqrDistance = (candidate.CenterPosition - center).sqrMagnitude;
+            if (sqrDistance >= nearestSqrDistance)
+                continue;
+
+            nearest = candidate;
+            nearestSqrDistance = sqrDistance;
+        }
+
+        if (nearest == null && mask != ~0)
+            return FindNearestHamsterTarget(center, radius, ~0);
+
+        Log($"[MSBomb/Target] nearestHamster candidates={_candidateHamsterTargets.Count} selected={(nearest != null ? nearest.TargetRoot.name : "<null>")}");
+        return nearest;
+    }
+
     private PlayerStatusModule FindPlayerStatusFromCollider(Collider hit)
     {
         if (hit == null)
@@ -411,6 +500,16 @@ public class BombPassGimmick : NetworkBehaviour
         return !status.IsEliminated && !status.IsKnocked && !status.IsStandingUp;
     }
 
+    private static bool IsValidHamsterTarget(HamsterMotorShellImpactTarget target)
+    {
+        return target != null && target.CanReceiveImpact;
+    }
+
+    private bool HasCurrentHolder()
+    {
+        return _currentHolder != null || _currentHamsterHolder != null;
+    }
+
     private void SetHolder(PlayerStatusModule newHolder, bool playStartAudioForRemote = false)
     {
         if (!IsValidPlayerStatus(newHolder))
@@ -419,7 +518,9 @@ public class BombPassGimmick : NetworkBehaviour
         ClearHolderSpeedBoost();
 
         _previousHolder = _currentHolder;
+        _previousHamsterHolder = _currentHamsterHolder;
         _currentHolder = newHolder;
+        _currentHamsterHolder = null;
         _lastPassTime = Time.time;
         _nextPassAllowedTime = Time.time + GetPassCooldown();
         _nextPassCheckTime = Time.time;
@@ -456,12 +557,58 @@ public class BombPassGimmick : NetworkBehaviour
         Log($"{LogPrefix} Holder changed: {newHolder.name}");
     }
 
+    private void SetHamsterHolder(HamsterMotorShellImpactTarget newHolder, bool playStartAudioForRemote = false)
+    {
+        if (!IsValidHamsterTarget(newHolder))
+            return;
+
+        ClearHolderSpeedBoost();
+
+        _previousHolder = _currentHolder;
+        _previousHamsterHolder = _currentHamsterHolder;
+        _currentHolder = null;
+        _currentHamsterHolder = newHolder;
+        _lastPassTime = Time.time;
+        _nextPassAllowedTime = Time.time + GetPassCooldown();
+        _nextPassCheckTime = Time.time;
+
+        Vector3 markerPosition = GetCurrentHolderFollowPosition();
+
+        if (targetMarkerVisual != null)
+        {
+            targetMarkerVisual.transform.position = markerPosition;
+            targetMarkerVisual.SetActive(true);
+        }
+
+        if (bombVisual != null)
+        {
+            if (TryGetBombVisualTargetPose(out Vector3 bombPosition, out Quaternion bombRotation))
+            {
+                if (!bombVisual.activeSelf)
+                {
+                    bombVisual.transform.position = bombPosition;
+                    bombVisual.transform.rotation = bombRotation;
+                }
+            }
+            else if (!bombVisual.activeSelf)
+            {
+                bombVisual.transform.position = markerPosition;
+            }
+
+            bombVisual.SetActive(true);
+        }
+
+        PlayAudio(passAudio);
+        SendClearBombPassHolderVisual();
+        Log($"[MSBomb/Target] holderChanged target={newHolder.TargetRoot.name} type=Hamster");
+    }
+
     private void TryPassBomb()
     {
         if (_phase != BombPhase.Passing)
             return;
 
-        if (_currentHolder == null)
+        if (!HasCurrentHolder())
             return;
 
         if (Time.time < _nextPassAllowedTime || Time.time < _nextPassCheckTime)
@@ -469,7 +616,7 @@ public class BombPassGimmick : NetworkBehaviour
 
         _nextPassCheckTime = Time.time + GetPassCheckInterval();
 
-        Vector3 holderPosition = _currentHolder.transform.position;
+        Vector3 holderPosition = GetCurrentHolderBasePosition();
         Collider[] colliders = Physics.OverlapSphere(
             holderPosition,
             GetPassRadius(),
@@ -477,7 +624,9 @@ public class BombPassGimmick : NetworkBehaviour
             QueryTriggerInteraction.Ignore);
 
         _candidatePlayers.Clear();
+        _candidateHamsterTargets.Clear();
         PlayerStatusModule passTarget = null;
+        HamsterMotorShellImpactTarget hamsterPassTarget = null;
         float nearestSqrDistance = float.MaxValue;
 
         for (int i = 0; i < colliders.Length; i++)
@@ -503,12 +652,43 @@ public class BombPassGimmick : NetworkBehaviour
             nearestSqrDistance = sqrDistance;
         }
 
-        if (passTarget == null)
+        for (int i = 0; i < colliders.Length; i++)
+        {
+            if (!HamsterMotorShellImpactTarget.TryFindOnCollider(colliders[i], out HamsterMotorShellImpactTarget candidate))
+                continue;
+
+            if (!IsValidHamsterTarget(candidate) || candidate == _currentHamsterHolder)
+                continue;
+
+            if (!_candidateHamsterTargets.Add(candidate))
+                continue;
+
+            if (candidate == _previousHamsterHolder && Time.time < _lastPassTime + GetSamePairPassBlockTime())
+                continue;
+
+            float sqrDistance = (candidate.CenterPosition - holderPosition).sqrMagnitude;
+            if (sqrDistance >= nearestSqrDistance)
+                continue;
+
+            hamsterPassTarget = candidate;
+            passTarget = null;
+            nearestSqrDistance = sqrDistance;
+        }
+
+        if (passTarget == null && hamsterPassTarget == null)
             return;
 
-        PlayerStatusModule oldHolder = _currentHolder;
-        SetHolder(passTarget);
-        Log($"{LogPrefix} Pass success: {oldHolder.name} -> {passTarget.name}");
+        string oldHolderName = GetCurrentHolderName();
+        if (passTarget != null)
+        {
+            SetHolder(passTarget);
+            Log($"{LogPrefix} Pass success: {oldHolderName} -> {passTarget.name}");
+        }
+        else
+        {
+            SetHamsterHolder(hamsterPassTarget);
+            Log($"[MSBomb/Target] passSuccess from={oldHolderName} to={hamsterPassTarget.TargetRoot.name} type=Hamster");
+        }
     }
 
     private void TryTriggerFinalWarning()
@@ -536,13 +716,13 @@ public class BombPassGimmick : NetworkBehaviour
     {
         ClearHolderSpeedBoost();
 
-        if (_currentHolder == null)
+        if (!HasCurrentHolder())
         {
             Log($"{LogPrefix} Explosion skipped. Current holder is missing.");
             return;
         }
 
-        Vector3 explosionCenter = _currentHolder.transform.position;
+        Vector3 explosionCenter = GetCurrentHolderBasePosition();
         Collider[] colliders = Physics.OverlapSphere(
             explosionCenter,
             GetExplosionRadius(),
@@ -550,12 +730,16 @@ public class BombPassGimmick : NetworkBehaviour
             QueryTriggerInteraction.Ignore);
 
         _explosionHitPlayers.Clear();
+        _explosionHitRecoveryAdapters.Clear();
 
         for (int i = 0; i < colliders.Length; i++)
         {
             PlayerStatusModule status = FindPlayerStatusFromCollider(colliders[i]);
             if (!IsValidPlayerStatus(status))
+            {
+                ApplyRecoveryAdapterExplosion(colliders[i], explosionCenter);
                 continue;
+            }
 
             if (!_explosionHitPlayers.Add(status))
                 continue;
@@ -569,6 +753,9 @@ public class BombPassGimmick : NetworkBehaviour
             status.ServerTryApplyGimmickKnockback(impulse);
             Log($"{LogPrefix} Gimmick explosion knockback requested target={status.name}, impulse={impulse}");
         }
+
+        if (IsValidHamsterTarget(_currentHamsterHolder) && !_explosionHitRecoveryAdapters.Contains(_currentHamsterHolder.GetComponentInChildren<HamsterMotorShellRagdollRecoveryAdapter>(true)))
+            ApplyRecoveryAdapterExplosion(_currentHamsterHolder, explosionCenter, true);
 
         if (explosionVisual != null)
         {
@@ -592,12 +779,12 @@ public class BombPassGimmick : NetworkBehaviour
             finalWarningVisual.SetActive(false);
 
         SendClearBombPassHolderVisual();
-        Log($"{LogPrefix} Explosion. center={explosionCenter}, hits={_explosionHitPlayers.Count}");
+        Log($"{LogPrefix} Explosion. center={explosionCenter}, hits={_explosionHitPlayers.Count}, hamsterHits={_explosionHitRecoveryAdapters.Count}");
     }
 
     private void UpdateFollowerVisuals()
     {
-        if (_currentHolder == null)
+        if (!HasCurrentHolder())
         {
             if (bombVisual != null)
             {
@@ -652,9 +839,9 @@ public class BombPassGimmick : NetworkBehaviour
         if (direction.sqrMagnitude >= MinDirectionSqrMagnitude)
             return direction.normalized;
 
-        if (_currentHolder != null)
+        if (HasCurrentHolder())
         {
-            direction = _currentHolder.transform.forward;
+            direction = GetCurrentHolderForward();
             direction.y = 0f;
 
             if (direction.sqrMagnitude >= MinDirectionSqrMagnitude)
@@ -664,6 +851,47 @@ public class BombPassGimmick : NetworkBehaviour
         return Vector3.forward;
     }
 
+    private void ApplyRecoveryAdapterExplosion(Collider hit, Vector3 explosionCenter)
+    {
+        if (!HamsterMotorShellImpactTarget.TryFindOnCollider(hit, out HamsterMotorShellImpactTarget target))
+            return;
+
+        ApplyRecoveryAdapterExplosion(target, explosionCenter, false);
+    }
+
+    private void ApplyRecoveryAdapterExplosion(HamsterMotorShellImpactTarget target, Vector3 explosionCenter, bool isHolder)
+    {
+        if (!IsValidHamsterTarget(target))
+            return;
+
+        HamsterMotorShellRagdollRecoveryAdapter recovery = target.GetComponentInChildren<HamsterMotorShellRagdollRecoveryAdapter>(true);
+        if (recovery == null)
+            return;
+
+        if (!_explosionHitRecoveryAdapters.Add(recovery))
+            return;
+
+        Vector3 direction = GetExplosionDirection(target, explosionCenter);
+        Vector3 impulse = direction * GetExplosionForce() + Vector3.up * GetUpwardForce();
+        if (isHolder)
+            impulse *= GetHolderExplosionMultiplier();
+
+        bool applied = target.ApplyGimmickKnockbackLikeSugar(impulse, explosionCenter, "BombPass");
+        Log($"[MSBomb/Recovery] target={target.TargetRoot.name} holder={isHolder} impulse={impulse} result={applied}");
+    }
+
+    private static Vector3 GetExplosionDirection(HamsterMotorShellImpactTarget target, Vector3 explosionCenter)
+    {
+        Vector3 targetPosition = target != null ? target.CenterPosition : explosionCenter + Vector3.forward;
+        Vector3 direction = targetPosition - explosionCenter;
+        direction.y = 0f;
+
+        if (direction.sqrMagnitude <= MinDirectionSqrMagnitude)
+            direction = Vector3.forward;
+
+        return direction.normalized;
+    }
+
     private void FinishBombPass()
     {
         ClearHolderSpeedBoost();
@@ -671,6 +899,8 @@ public class BombPassGimmick : NetworkBehaviour
         _routine = null;
         _currentHolder = null;
         _previousHolder = null;
+        _currentHamsterHolder = null;
+        _previousHamsterHolder = null;
         _remainingTime = 0f;
         _nextPassAllowedTime = 0f;
         _nextPassCheckTime = 0f;
@@ -698,7 +928,9 @@ public class BombPassGimmick : NetworkBehaviour
     private void ClearRuntimeCaches()
     {
         _candidatePlayers.Clear();
+        _candidateHamsterTargets.Clear();
         _explosionHitPlayers.Clear();
+        _explosionHitRecoveryAdapters.Clear();
     }
 
     private void ResetVisuals()
@@ -981,7 +1213,13 @@ public class BombPassGimmick : NetworkBehaviour
 
     private Vector3 GetCurrentHolderFollowPosition()
     {
-        return _currentHolder != null ? GetHolderFollowPosition(_currentHolder) : GetBombSpawnPosition();
+        if (_currentHolder != null)
+            return GetHolderFollowPosition(_currentHolder);
+
+        if (_currentHamsterHolder != null)
+            return GetHolderFollowPosition(_currentHamsterHolder);
+
+        return GetBombSpawnPosition();
     }
 
     private Vector3 GetRemoteHolderFollowPosition()
@@ -991,7 +1229,15 @@ public class BombPassGimmick : NetworkBehaviour
 
     private bool TryGetBombVisualTargetPose(out Vector3 position, out Quaternion rotation)
     {
-        return TryGetBombVisualTargetPose(_currentHolder, out position, out rotation);
+        if (_currentHolder != null)
+            return TryGetBombVisualTargetPose(_currentHolder, out position, out rotation);
+
+        if (_currentHamsterHolder != null)
+            return TryGetBombVisualTargetPose(_currentHamsterHolder, out position, out rotation);
+
+        position = GetBombSpawnPosition();
+        rotation = bombVisual != null ? bombVisual.transform.rotation : Quaternion.identity;
+        return false;
     }
 
     private bool TryGetBombVisualTargetPose(PlayerStatusModule holder, out Vector3 position, out Quaternion rotation)
@@ -1033,9 +1279,70 @@ public class BombPassGimmick : NetworkBehaviour
         return status.transform;
     }
 
+    private bool TryGetBombVisualTargetPose(HamsterMotorShellImpactTarget holder, out Vector3 position, out Quaternion rotation)
+    {
+        position = GetBombSpawnPosition();
+        rotation = bombVisual != null ? bombVisual.transform.rotation : Quaternion.identity;
+
+        if (!IsValidHamsterTarget(holder))
+            return false;
+
+        if (!useHolderLocalOffset)
+        {
+            position = GetHolderFollowPosition(holder);
+            return true;
+        }
+
+        Transform root = holder.TargetRoot;
+        if (root == null)
+            return false;
+
+        position = root.TransformPoint(GetHolderLocalFollowOffset());
+        rotation = root.rotation * Quaternion.Euler(GetBombLocalEulerOffset());
+        return true;
+    }
+
     private Vector3 GetHolderFollowPosition(PlayerStatusModule holder)
     {
         return holder.transform.position + GetHolderFollowOffset();
+    }
+
+    private Vector3 GetHolderFollowPosition(HamsterMotorShellImpactTarget holder)
+    {
+        return holder != null ? holder.CenterPosition + GetHolderFollowOffset() : GetBombSpawnPosition();
+    }
+
+    private Vector3 GetCurrentHolderBasePosition()
+    {
+        if (_currentHolder != null)
+            return _currentHolder.transform.position;
+
+        if (_currentHamsterHolder != null)
+            return _currentHamsterHolder.CenterPosition;
+
+        return transform.position;
+    }
+
+    private Vector3 GetCurrentHolderForward()
+    {
+        if (_currentHolder != null)
+            return _currentHolder.transform.forward;
+
+        if (_currentHamsterHolder != null)
+            return _currentHamsterHolder.Forward;
+
+        return transform.forward;
+    }
+
+    private string GetCurrentHolderName()
+    {
+        if (_currentHolder != null)
+            return _currentHolder.name;
+
+        if (_currentHamsterHolder != null)
+            return _currentHamsterHolder.TargetRoot.name;
+
+        return "<none>";
     }
 
     private Vector3 GetHolderFollowOffset()
@@ -1206,7 +1513,7 @@ public class BombPassGimmick : NetworkBehaviour
             return;
 
         Vector3 searchPosition = GetTargetSearchPosition();
-        Vector3 holderPosition = _currentHolder != null ? _currentHolder.transform.position : transform.position;
+        Vector3 holderPosition = HasCurrentHolder() ? GetCurrentHolderBasePosition() : transform.position;
         Vector3 spawnPosition = GetBombSpawnPosition();
 
         Gizmos.color = new Color(0.2f, 0.65f, 1f, 0.8f);

@@ -143,6 +143,8 @@ public class DeveloperIntrusionGimmick : MonoBehaviour
 
     private readonly List<PlayerSample> _samples = new List<PlayerSample>();
     private readonly List<ScanResult> _lastScanResults = new List<ScanResult>();
+    private readonly List<HamsterRecoverySample> _hamsterRecoverySamples = new List<HamsterRecoverySample>();
+    private readonly List<HamsterRecoveryScanResult> _lastHamsterRecoveryScanResults = new List<HamsterRecoveryScanResult>();
     private Coroutine _runningRoutine;
     private Coroutine _presentationSequenceRoutine;
     private Phase _phase = Phase.Idle;
@@ -181,6 +183,30 @@ public class DeveloperIntrusionGimmick : MonoBehaviour
         public string maxSpeedSource;
         public bool invalidStateDetected;
         public string invalidStateReason;
+    }
+
+    private struct HamsterRecoverySample
+    {
+        public HamsterMotorShellRagdollRecoveryAdapter recovery;
+        public Rigidbody rigidbody;
+        public Transform trackingTransform;
+        public Vector3 previousPosition;
+        public float speedSum;
+        public float angularSpeedSum;
+        public float maxFrameSpeed;
+        public float maxFrameAngularSpeed;
+        public int sampleCount;
+        public bool invalidStateDetected;
+        public string invalidStateReason;
+    }
+
+    private struct HamsterRecoveryScanResult
+    {
+        public HamsterMotorShellRagdollRecoveryAdapter Recovery;
+        public float AverageSpeed;
+        public float AverageAngularSpeed;
+        public bool Failed;
+        public string Reason;
     }
 
     public Coroutine StartGimmick(IList<PlayerStatusModule> players, bool playPresentationInternally = true)
@@ -258,6 +284,7 @@ public class DeveloperIntrusionGimmick : MonoBehaviour
     private IEnumerator RunRoutine(IList<PlayerStatusModule> players, bool playPresentationInternally)
     {
         _lastScanResults.Clear();
+        _lastHamsterRecoveryScanResults.Clear();
 
         if (playPresentationInternally)
             PrepareDeveloperActorForSequence();
@@ -317,9 +344,13 @@ public class DeveloperIntrusionGimmick : MonoBehaviour
     private void BuildSamples(IList<PlayerStatusModule> players)
     {
         _samples.Clear();
+        _hamsterRecoverySamples.Clear();
 
         if (players == null)
+        {
+            BuildHamsterRecoverySamples();
             return;
+        }
 
         for (int i = 0; i < players.Count; i++)
         {
@@ -359,6 +390,44 @@ public class DeveloperIntrusionGimmick : MonoBehaviour
                 invalidStateReason = invalidStateReason
             });
         }
+
+        BuildHamsterRecoverySamples();
+    }
+
+    private void BuildHamsterRecoverySamples()
+    {
+#if UNITY_6000_0_OR_NEWER
+        HamsterMotorShellRagdollRecoveryAdapter[] recoveries = FindObjectsByType<HamsterMotorShellRagdollRecoveryAdapter>(FindObjectsInactive.Exclude, FindObjectsSortMode.None);
+#else
+        HamsterMotorShellRagdollRecoveryAdapter[] recoveries = FindObjectsOfType<HamsterMotorShellRagdollRecoveryAdapter>();
+#endif
+        for (int i = 0; i < recoveries.Length; i++)
+        {
+            HamsterMotorShellRagdollRecoveryAdapter recovery = recoveries[i];
+            if (recovery == null || !recovery.CanReceiveRecoveryState)
+                continue;
+
+            Rigidbody rb = recovery.BodyRigidbody;
+            Transform trackingTransform = rb != null ? rb.transform : recovery.transform;
+            bool invalidState = recovery.IsKnockedOrRecovering || recovery.IsLiquidSwept;
+            string invalidStateReason = invalidState ? recovery.CurrentRecoveryState.ToString() : string.Empty;
+            _hamsterRecoverySamples.Add(new HamsterRecoverySample
+            {
+                recovery = recovery,
+                rigidbody = rb,
+                trackingTransform = trackingTransform,
+                previousPosition = trackingTransform != null ? trackingTransform.position : recovery.transform.position,
+                speedSum = 0f,
+                angularSpeedSum = 0f,
+                maxFrameSpeed = 0f,
+                maxFrameAngularSpeed = 0f,
+                sampleCount = 0,
+                invalidStateDetected = invalidState,
+                invalidStateReason = invalidStateReason
+            });
+        }
+
+        Log($"[MSDeveloper/RecoverySample] count={_hamsterRecoverySamples.Count}");
     }
 
     private void CaptureSample(float dt)
@@ -433,11 +502,47 @@ public class DeveloperIntrusionGimmick : MonoBehaviour
             sample.previousPosition = currentPosition;
             _samples[i] = sample;
         }
+
+        CaptureHamsterRecoverySample(dt);
+    }
+
+    private void CaptureHamsterRecoverySample(float dt)
+    {
+        for (int i = 0; i < _hamsterRecoverySamples.Count; i++)
+        {
+            HamsterRecoverySample sample = _hamsterRecoverySamples[i];
+            if (sample.recovery == null)
+                continue;
+
+            if (sample.recovery.IsKnockedOrRecovering || sample.recovery.IsLiquidSwept)
+            {
+                sample.invalidStateDetected = true;
+                sample.invalidStateReason = sample.recovery.CurrentRecoveryState.ToString();
+            }
+
+            Transform trackingTransform = sample.trackingTransform != null
+                ? sample.trackingTransform
+                : (sample.rigidbody != null ? sample.rigidbody.transform : sample.recovery.transform);
+            Vector3 currentPosition = trackingTransform != null ? trackingTransform.position : sample.recovery.transform.position;
+            Vector3 velocity = (currentPosition - sample.previousPosition) / Mathf.Max(dt, 0.0001f);
+            float horizontalSpeed = HorizontalMagnitude(velocity);
+            float angularSpeed = sample.rigidbody != null ? sample.rigidbody.angularVelocity.magnitude : 0f;
+
+            sample.speedSum += horizontalSpeed;
+            sample.angularSpeedSum += angularSpeed;
+            sample.maxFrameSpeed = Mathf.Max(sample.maxFrameSpeed, horizontalSpeed);
+            sample.maxFrameAngularSpeed = Mathf.Max(sample.maxFrameAngularSpeed, angularSpeed);
+            sample.sampleCount++;
+            sample.trackingTransform = trackingTransform;
+            sample.previousPosition = currentPosition;
+            _hamsterRecoverySamples[i] = sample;
+        }
     }
 
     private void BuildResults()
     {
         _lastScanResults.Clear();
+        _lastHamsterRecoveryScanResults.Clear();
 
         for (int i = 0; i < _samples.Count; i++)
         {
@@ -485,6 +590,51 @@ public class DeveloperIntrusionGimmick : MonoBehaviour
             _lastScanResults.Add(result);
             Log($"{LogPrefix} Scan result player:{sample.status.name} failed:{failed} avgSpeed:{averageSpeed:0.00}/{scanVelocityThreshold:0.00} avgAngular:{averageAngularSpeed:0.00}/{scanAngularVelocityThreshold:0.00} grounded:{FormatGrounded(sample.hasGroundedInfo, sample.isGrounded)} maxFrameSpeed:{sample.maxFrameSpeed:0.00} maxAngular:{sample.maxFrameAngularSpeed:0.00} maxSpeedSource:{sample.maxSpeedSource} reason:{reason}");
         }
+
+        BuildHamsterRecoveryResults();
+    }
+
+    private void BuildHamsterRecoveryResults()
+    {
+        for (int i = 0; i < _hamsterRecoverySamples.Count; i++)
+        {
+            HamsterRecoverySample sample = _hamsterRecoverySamples[i];
+            if (sample.recovery == null)
+                continue;
+
+            int count = Mathf.Max(1, sample.sampleCount);
+            float averageSpeed = sample.speedSum / count;
+            float averageAngularSpeed = sample.angularSpeedSum / count;
+            bool failed = false;
+            string reason = "Success";
+
+            if (sample.invalidStateDetected)
+            {
+                failed = true;
+                reason = sample.invalidStateReason;
+            }
+            else if (averageSpeed > scanVelocityThreshold)
+            {
+                failed = true;
+                reason = $"Average speed {averageSpeed:0.00} > threshold {scanVelocityThreshold:0.00}";
+            }
+            else if (averageAngularSpeed > scanAngularVelocityThreshold)
+            {
+                failed = true;
+                reason = $"Average angular speed {averageAngularSpeed:0.00} > threshold {scanAngularVelocityThreshold:0.00}";
+            }
+
+            _lastHamsterRecoveryScanResults.Add(new HamsterRecoveryScanResult
+            {
+                Recovery = sample.recovery,
+                AverageSpeed = averageSpeed,
+                AverageAngularSpeed = averageAngularSpeed,
+                Failed = failed,
+                Reason = reason
+            });
+
+            Log($"{LogPrefix} Scan result hamster:{sample.recovery.name} failed:{failed} avgSpeed:{averageSpeed:0.00}/{scanVelocityThreshold:0.00} avgAngular:{averageAngularSpeed:0.00}/{scanAngularVelocityThreshold:0.00} maxFrameSpeed:{sample.maxFrameSpeed:0.00} maxAngular:{sample.maxFrameAngularSpeed:0.00} reason:{reason}");
+        }
     }
 
     private void ResolveFailures()
@@ -518,6 +668,32 @@ public class DeveloperIntrusionGimmick : MonoBehaviour
             Vector3 impulse = direction * knockbackForce + Vector3.up * upwardForce;
             result.Status.ApplyKnockbackServer(impulse);
             LogWarning($"{LogPrefix} Failure resolved player:{result.Status.name} impulse:{impulse} avgSpeed:{result.AverageSpeed:0.00}/{scanVelocityThreshold:0.00} avgAngular:{result.AverageAngularSpeed:0.00}/{scanAngularVelocityThreshold:0.00} grounded:{FormatGrounded(result.HasGroundedInfo, result.IsGrounded)} reason:{result.Reason}");
+        }
+
+        ResolveHamsterRecoveryFailures();
+    }
+
+    private void ResolveHamsterRecoveryFailures()
+    {
+        for (int i = 0; i < _lastHamsterRecoveryScanResults.Count; i++)
+        {
+            HamsterRecoveryScanResult result = _lastHamsterRecoveryScanResults[i];
+            if (!result.Failed || result.Recovery == null)
+                continue;
+
+            Rigidbody body = result.Recovery.BodyRigidbody;
+            Vector3 targetPosition = body != null ? body.worldCenterOfMass : result.Recovery.transform.position;
+            Vector3 direction = targetPosition - transform.position;
+            direction.y = 0f;
+
+            if (direction.sqrMagnitude < 0.0001f)
+                direction = result.Recovery.transform.forward;
+            else
+                direction.Normalize();
+
+            Vector3 impulse = direction * knockbackForce + Vector3.up * upwardForce;
+            bool applied = result.Recovery.ApplyGimmickImpact(impulse, targetPosition, "DeveloperIntrusion");
+            LogWarning($"[MSDeveloper/Recovery] target={result.Recovery.name} impulse={impulse} result={applied} avgSpeed={result.AverageSpeed:0.00}/{scanVelocityThreshold:0.00} avgAngular={result.AverageAngularSpeed:0.00}/{scanAngularVelocityThreshold:0.00} reason={result.Reason}");
         }
     }
 
@@ -828,6 +1004,13 @@ public class DeveloperIntrusionGimmick : MonoBehaviour
                 continue;
 
             failedCount++;
+        }
+
+        for (int i = 0; i < _lastHamsterRecoveryScanResults.Count; i++)
+        {
+            HamsterRecoveryScanResult result = _lastHamsterRecoveryScanResults[i];
+            if (result.Failed && result.Recovery != null)
+                failedCount++;
         }
 
         return failedCount;

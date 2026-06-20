@@ -163,11 +163,13 @@ public sealed class HamsterMotorShellCombatAdapter : MonoBehaviour
 
         Vector3 impulse = BuildImpulse(profile, targetBody);
         ApplyDamage(targetRoot, profile.Damage);
-        ApplyImpulse(targetBody, impulse);
+        bool recoveryApplied = ApplyRecoveryImpact(hitCollider, targetRoot, targetBody, impulse);
+        if (!recoveryApplied)
+            ApplyImpulse(targetBody, impulse);
 
         Log(
             "[MSCombat/Hit]",
-            $"weapon={profile.WeaponName} id={profile.WeaponId} damage={profile.Damage:F1} target={(targetRoot != null ? targetRoot.name : "<null>")} collider={(hitCollider != null ? hitCollider.name : "<null>")} impulse={FormatVector(impulse)}");
+            $"weapon={profile.WeaponName} id={profile.WeaponId} damage={profile.Damage:F1} target={(targetRoot != null ? targetRoot.name : "<null>")} collider={(hitCollider != null ? hitCollider.name : "<null>")} impulse={FormatVector(impulse)} recoveryApplied={recoveryApplied}");
     }
 
     private AttackProfile BuildAttackProfile()
@@ -335,6 +337,9 @@ public sealed class HamsterMotorShellCombatAdapter : MonoBehaviour
 
     private void ApplyDamage(Transform targetRoot, float damage)
     {
+        if (HamsterMotorShellImpactTarget.TryFindOnTransform(targetRoot, out _))
+            return;
+
         IDamageable damageable = FindDamageable(targetRoot);
         if (damageable == null)
             return;
@@ -348,6 +353,48 @@ public sealed class HamsterMotorShellCombatAdapter : MonoBehaviour
             return;
 
         targetBody.AddForce(impulse, ForceMode.Impulse);
+    }
+
+    private bool ApplyRecoveryImpact(Collider hitCollider, Transform targetRoot, Rigidbody targetBody, Vector3 impulse)
+    {
+        HamsterMotorShellImpactTarget impactTarget = null;
+        if (hitCollider != null)
+            HamsterMotorShellImpactTarget.TryFindOnCollider(hitCollider, out impactTarget);
+
+        if (impactTarget == null && targetRoot != null)
+            HamsterMotorShellImpactTarget.TryFindOnTransform(targetRoot, out impactTarget);
+
+        if (impactTarget != null && !IsSelfRoot(impactTarget.TargetRoot))
+        {
+            Vector3 helperHitPoint = ResolveHitPoint(hitCollider, targetBody);
+            bool helperApplied = impactTarget.ApplyCombatHitLikeSugar(impulse, helperHitPoint, "HamsterCombat");
+            Log("[MSCombat/Recovery]", $"target={impactTarget.TargetRoot.name} impulse={FormatVector(impulse)} result={helperApplied}");
+            return helperApplied;
+        }
+
+        HamsterMotorShellRagdollRecoveryAdapter recovery = null;
+        if (hitCollider != null)
+            HamsterMotorShellRagdollRecoveryAdapter.TryFindOnCollider(hitCollider, out recovery);
+
+        if (recovery == null && targetRoot != null)
+            HamsterMotorShellRagdollRecoveryAdapter.TryFindOnTransform(targetRoot, out recovery);
+
+        if (recovery == null || IsSelfRoot(recovery.transform.root))
+            return false;
+
+        Vector3 hitPoint = ResolveHitPoint(hitCollider, targetBody);
+        bool applied = recovery.ApplyImpact(impulse, hitPoint, "Combat", 1f);
+        Log("[MSCombat/Recovery]", $"target={recovery.transform.root.name} impulse={FormatVector(impulse)} result={applied}");
+        return applied;
+    }
+
+    private Vector3 ResolveHitPoint(Collider hitCollider, Rigidbody targetBody)
+    {
+        Vector3 reference = GetAttackReferencePosition();
+        if (hitCollider != null)
+            return hitCollider.ClosestPoint(reference);
+
+        return targetBody != null ? targetBody.worldCenterOfMass : reference;
     }
 
     private IDamageable FindDamageable(Transform root)

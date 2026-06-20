@@ -169,6 +169,16 @@ public class HamsterFullRagdollMotor : MonoBehaviour
     private Vector3 _lastPlanarFacingForward = Vector3.forward;
     private Vector3 _lastDesiredFacingDirection = Vector3.forward;
     private string _lastAppliedYawSource = "Initial";
+    private bool _externalControlLocked;
+    private bool _externalJumpLocked;
+    private float _externalMovementControlScale = 1f;
+    private float _externalUprightControlScale = 1f;
+    private float _externalPoseControlScale = 1f;
+    private string _externalControlLockReason = "none";
+    private string _externalJumpLockReason = "none";
+    private string _externalMovementControlReason = "none";
+    private string _externalUprightControlReason = "none";
+    private string _externalPoseControlReason = "none";
 
     private struct MoveBasis
     {
@@ -202,10 +212,59 @@ public class HamsterFullRagdollMotor : MonoBehaviour
     public float CurrentPoseYaw => _currentPoseYaw;
     public string LastCameraBasisSource => _lastCameraBasisSource;
     public string LastAppliedYawSource => _lastAppliedYawSource;
+    public bool IsExternalControlLocked => _externalControlLocked;
+    public bool IsExternalJumpLocked => _externalJumpLocked;
+    public float ExternalMovementControlScale => _externalMovementControlScale;
+    public float ExternalUprightControlScale => _externalUprightControlScale;
+    public float ExternalPoseControlScale => _externalPoseControlScale;
+    public string ExternalControlLockReason => _externalControlLockReason;
+    public string ExternalJumpLockReason => _externalJumpLockReason;
+    public string ExternalMovementControlReason => _externalMovementControlReason;
+    public string ExternalUprightControlReason => _externalUprightControlReason;
+    public string ExternalPoseControlReason => _externalPoseControlReason;
 
     public void SetControlStrength(float value)
     {
         controlStrength = Mathf.Max(0f, value);
+    }
+
+    public void SetExternalControlLock(bool locked, string reason)
+    {
+        _externalControlLocked = locked;
+        _externalControlLockReason = string.IsNullOrEmpty(reason) ? "none" : reason;
+    }
+
+    public void SetExternalJumpLock(bool locked, string reason)
+    {
+        _externalJumpLocked = locked;
+        _externalJumpLockReason = string.IsNullOrEmpty(reason) ? "none" : reason;
+        if (locked)
+            _jumpBufferTimer = 0f;
+    }
+
+    public void SetExternalControlScale(float scale, string reason)
+    {
+        SetExternalMovementControlScale(scale, reason);
+        SetExternalUprightControlScale(scale, reason);
+        SetExternalPoseControlScale(scale, reason);
+    }
+
+    public void SetExternalMovementControlScale(float scale, string reason)
+    {
+        _externalMovementControlScale = Mathf.Clamp01(scale);
+        _externalMovementControlReason = string.IsNullOrEmpty(reason) ? "none" : reason;
+    }
+
+    public void SetExternalUprightControlScale(float scale, string reason)
+    {
+        _externalUprightControlScale = Mathf.Clamp01(scale);
+        _externalUprightControlReason = string.IsNullOrEmpty(reason) ? "none" : reason;
+    }
+
+    public void SetExternalPoseControlScale(float scale, string reason)
+    {
+        _externalPoseControlScale = Mathf.Clamp01(scale);
+        _externalPoseControlReason = string.IsNullOrEmpty(reason) ? "none" : reason;
     }
 
     private void Awake()
@@ -267,6 +326,10 @@ public class HamsterFullRagdollMotor : MonoBehaviour
         float acceleration = sprintHeld ? sprintAcceleration : walkAcceleration;
         float groundedMultiplier = _isGrounded ? 1f : airControlMultiplier;
         float effectiveControl = Mathf.Max(0f, controlStrength) * groundedMultiplier;
+        if (_externalControlLocked)
+            effectiveControl = 0f;
+        else
+            effectiveControl *= Mathf.Clamp01(_externalMovementControlScale);
         bool hasMoveInput = _smoothedMoveInput.sqrMagnitude > InputDeadzone * InputDeadzone;
         acceleration = ApplySprintPivotAssist(_smoothedMoveWorldDirection, sprintHeld, hasMoveInput, acceleration);
         _lastMaxSpeed = maxSpeed;
@@ -280,13 +343,14 @@ public class HamsterFullRagdollMotor : MonoBehaviour
         ApplyMovementForce(_smoothedMoveWorldDirection, maxSpeed, acceleration, effectiveControl);
         ApplyStopDragAssist(_smoothedMoveInput, effectiveControl);
         LogSprintState(hasMoveInput);
+        float uprightControlScale = _externalControlLocked ? 0f : Mathf.Clamp01(_externalUprightControlScale);
         Rigidbody uprightBody0 = null;
         Rigidbody uprightBody1 = null;
         Rigidbody uprightBody2 = null;
         Rigidbody uprightBody3 = null;
         Rigidbody uprightBody4 = null;
-        ApplyUprightTorqueOnce(hipsBody, uprightStrength, uprightDamping, ref uprightBody0, ref uprightBody1, ref uprightBody2, ref uprightBody3, ref uprightBody4);
-        ApplyUprightTorqueOnce(chestBody, uprightStrength * chestUprightMultiplier, uprightDamping * chestUprightMultiplier, ref uprightBody0, ref uprightBody1, ref uprightBody2, ref uprightBody3, ref uprightBody4);
+        ApplyUprightTorqueOnce(hipsBody, uprightStrength * uprightControlScale, uprightDamping * uprightControlScale, ref uprightBody0, ref uprightBody1, ref uprightBody2, ref uprightBody3, ref uprightBody4);
+        ApplyUprightTorqueOnce(chestBody, uprightStrength * chestUprightMultiplier * uprightControlScale, uprightDamping * chestUprightMultiplier * uprightControlScale, ref uprightBody0, ref uprightBody1, ref uprightBody2, ref uprightBody3, ref uprightBody4);
 
         bool inputRouteTarget = IsInputRouteTarget();
         bool poseHoldActive = (enableStandingPoseHold || inputRouteTarget) && _hasInitialPose;
@@ -417,6 +481,9 @@ public class HamsterFullRagdollMotor : MonoBehaviour
         if (!enableJump || _legacyInputUnavailable)
             return;
 
+        if (_externalControlLocked || _externalJumpLocked)
+            return;
+
         try
         {
             if (Input.GetKeyDown(jumpKey))
@@ -466,6 +533,15 @@ public class HamsterFullRagdollMotor : MonoBehaviour
     {
         if (_jumpBufferTimer <= 0f)
             return;
+
+        if (_externalControlLocked || _externalJumpLocked)
+        {
+            _jumpBufferTimer = 0f;
+            LogJumpSkip(_externalControlLocked
+                ? $"external control locked reason={_externalControlLockReason}"
+                : $"external jump locked reason={_externalJumpLockReason}");
+            return;
+        }
 
         if (!enableJump)
         {
@@ -1106,6 +1182,11 @@ public class HamsterFullRagdollMotor : MonoBehaviour
             return 0f;
 
         float strengthMultiplier = _isGrounded ? groundedPoseStrengthMultiplier : airbornePoseStrengthMultiplier;
+        if (_externalControlLocked)
+            strengthMultiplier = 0f;
+        else
+            strengthMultiplier *= Mathf.Clamp01(_externalPoseControlScale);
+
         return Mathf.Max(0f, strengthMultiplier);
     }
 

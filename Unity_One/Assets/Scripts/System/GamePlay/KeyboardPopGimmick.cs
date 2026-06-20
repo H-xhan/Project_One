@@ -162,6 +162,7 @@ public class KeyboardPopGimmick : NetworkBehaviour
     private float[] _hideAtTimes;
     private float[] _hideAfterLandingDelays;
     private readonly HashSet<PlayerStatusModule> _hitPlayers = new HashSet<PlayerStatusModule>();
+    private readonly HashSet<HamsterMotorShellRagdollRecoveryAdapter> _hitRecoveryAdapters = new HashSet<HamsterMotorShellRagdollRecoveryAdapter>();
     private Coroutine _runningRoutine;
     private Coroutine _clientVisualRoutine;
     private GameObject _activeKeyboardPopCastVfx;
@@ -238,6 +239,7 @@ public class KeyboardPopGimmick : NetworkBehaviour
     {
         Log($"{LogPrefix} Started.");
         _hitPlayers.Clear();
+        _hitRecoveryAdapters.Clear();
 
         yield return PlayTelegraphRoutine();
 
@@ -336,8 +338,6 @@ public class KeyboardPopGimmick : NetworkBehaviour
         }
 
         PlayerStatusModule[] players = FindPlayerStatusModules();
-        if (players == null || players.Length == 0)
-            return;
 
         float radius = Mathf.Max(0f, hitRadius);
         float radiusSqr = radius * radius;
@@ -352,7 +352,7 @@ public class KeyboardPopGimmick : NetworkBehaviour
             Vector3 keyPosition = key.position;
             Vector3 fallbackDirection = GetWorldScatterDirection(keyIndex, key);
 
-            for (int playerIndex = 0; playerIndex < players.Length; playerIndex++)
+            for (int playerIndex = 0; players != null && playerIndex < players.Length; playerIndex++)
             {
                 PlayerStatusModule status = players[playerIndex];
                 if (_hitPlayers.Contains(status) || !IsValidTarget(status))
@@ -380,6 +380,55 @@ public class KeyboardPopGimmick : NetworkBehaviour
                 _hitPlayers.Add(status);
                 Log($"{LogPrefix} Gimmick knockback requested target={status.name}, key:{key.name}, impulse:{impulse}");
             }
+
+            ApplyRecoveryAdapterKnockback(key, keyIndex, keyPosition, fallbackDirection, radius);
+        }
+    }
+
+    private void ApplyRecoveryAdapterKnockback(Transform key, int keyIndex, Vector3 keyPosition, Vector3 fallbackDirection, float radius)
+    {
+        int mask = playerMask.value != 0 ? playerMask.value : Physics.DefaultRaycastLayers;
+        ApplyRecoveryAdapterKnockbackOverlap(key, keyIndex, keyPosition, fallbackDirection, radius, mask, "Primary");
+
+        if (mask != ~0)
+            ApplyRecoveryAdapterKnockbackOverlap(key, keyIndex, keyPosition, fallbackDirection, radius, ~0, "Fallback");
+    }
+
+    private void ApplyRecoveryAdapterKnockbackOverlap(
+        Transform key,
+        int keyIndex,
+        Vector3 keyPosition,
+        Vector3 fallbackDirection,
+        float radius,
+        int mask,
+        string sourceSuffix)
+    {
+        Collider[] colliders = Physics.OverlapSphere(keyPosition, radius, mask, QueryTriggerInteraction.Ignore);
+        for (int i = 0; i < colliders.Length; i++)
+        {
+            if (!HamsterMotorShellImpactTarget.TryFindOnCollider(colliders[i], out HamsterMotorShellImpactTarget impactTarget))
+                continue;
+
+            HamsterMotorShellRagdollRecoveryAdapter recovery = impactTarget.GetComponentInChildren<HamsterMotorShellRagdollRecoveryAdapter>(true);
+            if (recovery == null || !_hitRecoveryAdapters.Add(recovery))
+                continue;
+
+            Vector3 targetPosition = impactTarget.CenterPosition;
+            Vector3 horizontalDirection = targetPosition - keyPosition;
+            horizontalDirection.y = 0f;
+
+            if (horizontalDirection.sqrMagnitude < 0.0001f)
+                horizontalDirection = fallbackDirection;
+
+            horizontalDirection.y = 0f;
+            if (horizontalDirection.sqrMagnitude < 0.0001f)
+                horizontalDirection = Vector3.forward;
+            else
+                horizontalDirection.Normalize();
+
+            Vector3 impulse = horizontalDirection * knockbackForce + Vector3.up * upwardForce;
+            bool applied = impactTarget.ApplyGimmickKnockbackLikeSugar(impulse, keyPosition, "KeyboardPop");
+            Log($"[MSKeyboard/Recovery] target={impactTarget.TargetRoot.name} key={(key != null ? key.name : keyIndex.ToString())} source={sourceSuffix} impulse={impulse} result={applied}");
         }
     }
 
@@ -877,6 +926,7 @@ public class KeyboardPopGimmick : NetworkBehaviour
         ClearKeyboardPopCastVfxLocal();
         RestoreOriginalTransforms();
         _hitPlayers.Clear();
+        _hitRecoveryAdapters.Clear();
     }
 
     private float[] BuildHideAfterLandingDelays(int count)

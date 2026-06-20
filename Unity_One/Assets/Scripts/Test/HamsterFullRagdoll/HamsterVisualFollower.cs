@@ -141,6 +141,12 @@ public sealed class HamsterVisualFollower : MonoBehaviour
     [SerializeField] private bool updateVerticalVelocityParameter = true;
     [SerializeField] private bool updateSprintParameter = true;
 
+    [Header("Recovery Visual")]
+    [SerializeField] private HamsterMotorShellRagdollRecoveryAdapter recoveryStateSource;
+    [SerializeField] private bool autoFindRecoveryStateSource = true;
+    [SerializeField] private bool followBodyRotationDuringRecovery = true;
+    [SerializeField] private float recoveryVisualRotationSmoothTime = 0.08f;
+
     [Header("Debug")]
     [SerializeField] private bool debugLogs = false;
     [SerializeField] private bool drawGizmos = false;
@@ -236,6 +242,8 @@ public sealed class HamsterVisualFollower : MonoBehaviour
     private bool _missingTargetBodyLogged;
     private float _nextTargetVisualFacingLogTime;
     private string _lastVisualFacingSource = "Velocity";
+    private Quaternion _initialBodyToVisualRotation = Quaternion.identity;
+    private bool _hasInitialBodyToVisualRotation;
 
     private void Awake()
     {
@@ -314,6 +322,13 @@ public sealed class HamsterVisualFollower : MonoBehaviour
             if (motorStateSource == null)
                 motorStateSource = GetComponentInParent<HamsterFullRagdollMotor>();
         }
+
+        if (autoFindRecoveryStateSource && recoveryStateSource == null)
+        {
+            recoveryStateSource = GetComponent<HamsterMotorShellRagdollRecoveryAdapter>();
+            if (recoveryStateSource == null)
+                recoveryStateSource = GetComponentInParent<HamsterMotorShellRagdollRecoveryAdapter>();
+        }
     }
 
     private void CacheInitialLocalTransform()
@@ -326,6 +341,7 @@ public sealed class HamsterVisualFollower : MonoBehaviour
         _initialLocalScale = visualRoot.localScale;
         _initialVisualLocalScale = visualRoot.localScale;
         _hasInitialVisualLocalScale = true;
+        CacheInitialBodyToVisualRotation();
     }
 
     private void ResetVisualLocalTransform()
@@ -1133,6 +1149,9 @@ public sealed class HamsterVisualFollower : MonoBehaviour
 
     private void UpdateVisualRotation(Vector3 planarVelocity, float planarSpeed, Vector3 localVelocity)
     {
+        if (TryApplyRecoveryVisualRotation())
+            return;
+
         bool stabilizeAirborne = ShouldStabilizeMainScenesAirborneVisuals();
         float targetYaw = 0f;
         bool usedMotorDesiredFacing = TryResolveTargetMotorDesiredFacing(out Vector3 motorDesiredFacing, out string visualFacingSource);
@@ -1257,6 +1276,56 @@ public sealed class HamsterVisualFollower : MonoBehaviour
         }
 
         return false;
+    }
+
+    private bool TryApplyRecoveryVisualRotation()
+    {
+        if (!followBodyRotationDuringRecovery ||
+            recoveryStateSource == null ||
+            !recoveryStateSource.ShouldVisualFollowBodyRotation ||
+            targetBody == null ||
+            visualRoot == null ||
+            !IsSafeVisualFacingRoot())
+        {
+            return false;
+        }
+
+        if (!_hasInitialBodyToVisualRotation)
+            CacheInitialBodyToVisualRotation();
+
+        ResetJumpVisualReactionState();
+        ResetMainScenesAirborneWobbleState();
+        _lastVisualFacingSource = "RecoveryBodyRotation";
+
+        Quaternion targetWorldRotation = targetBody.rotation * _initialBodyToVisualRotation * Quaternion.Euler(visualLocalEulerOffset);
+        float smoothTime = Mathf.Max(0f, recoveryVisualRotationSmoothTime);
+        float rotationT = smoothTime <= 0f
+            ? 1f
+            : 1f - Mathf.Exp(-Time.deltaTime / smoothTime);
+
+        if (visualRootIsChildOfTarget)
+        {
+            Transform parent = visualRoot.parent;
+            Quaternion targetLocalRotation = parent != null
+                ? Quaternion.Inverse(parent.rotation) * targetWorldRotation
+                : targetWorldRotation;
+            visualRoot.localRotation = Quaternion.Slerp(visualRoot.localRotation, targetLocalRotation, rotationT);
+        }
+        else
+        {
+            visualRoot.rotation = Quaternion.Slerp(visualRoot.rotation, targetWorldRotation, rotationT);
+        }
+
+        return true;
+    }
+
+    private void CacheInitialBodyToVisualRotation()
+    {
+        if (targetBody == null || visualRoot == null)
+            return;
+
+        _initialBodyToVisualRotation = Quaternion.Inverse(targetBody.rotation) * visualRoot.rotation;
+        _hasInitialBodyToVisualRotation = true;
     }
 
     private bool IsMainScenesTarget()

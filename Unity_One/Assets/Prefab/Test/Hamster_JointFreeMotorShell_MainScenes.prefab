@@ -15,6 +15,8 @@ GameObject:
   - component: {fileID: 6100000000000000100}
   - component: {fileID: 6100000000000000101}
   - component: {fileID: 6100000000000000102}
+  - component: {fileID: 6100000000000000103}
+  - component: {fileID: 6100000000000000104}
   m_Layer: 6
   m_Name: Hamster_JointFreeMotorShell_MainScenes
   m_TagString: Player
@@ -255,6 +257,75 @@ MonoBehaviour:
     serializedVersion: 2
     m_Bits: -1
   debugCombatLogs: 0
+--- !u!114 &6100000000000000103
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 692270962315936511}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: f376a22189804beeaa176a30b2d7c9d7, type: 3}
+  m_Name:
+  m_EditorClassIdentifier:
+  motor: {fileID: 984655929091462153}
+  bodyRigidbody: {fileID: 5171592592584334513}
+  bodyTransform: {fileID: 8055494772537699747}
+  visualFollower: {fileID: 6892046878001411185}
+  rootBodySync: {fileID: 6100000000000000100}
+  combatAdapter: {fileID: 6100000000000000102}
+  enableRecoveryAdapter: 1
+  impactImpulseMultiplier: 1
+  impactUpwardBonus: 0.5
+  impactTorqueMultiplier: 1
+  minKnockdownImpulse: 3
+  useProductionLikeLaunch: 1
+  useVelocityChangeForImpact: 1
+  productionHorizontalLaunchScale: 0.65
+  productionMinimumUpwardLaunch: 2.8
+  productionUpwardLaunchBonus: 1.1
+  productionTumbleTorque: 10
+  productionRandomYawTorque: 2.5
+  knockdownDuration: 1
+  recoveryDuration: 0.8
+  maxKnockdownDuration: 2
+  disableMotorControlWhileKnocked: 1
+  releaseRotationConstraintsWhileKnocked: 1
+  restoreOriginalConstraintsOnRecover: 1
+  recoveryUprightTorque: 30
+  recoveryDamping: 5
+  groundedRequiredToFinishRecovery: 1
+  maxRecoverPlanarSpeed: 2
+  minRecoverUpDot: 0.85
+  liquidSweepControlMultiplier: 0.25
+  liquidSweepDuration: 1.2
+  liquidSweepForceMultiplier: 1
+  liquidSweepInitialImpulseMultiplier: 0.35
+  liquidSweepAllowJump: 0
+  debugRecoveryLogs: 0
+  debugLogInterval: 0.5
+--- !u!114 &6100000000000000104
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 692270962315936511}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: d9e6a822cc404e92a2715939aac75115, type: 3}
+  m_Name:
+  m_EditorClassIdentifier:
+  recoveryAdapter: {fileID: 6100000000000000103}
+  bodyRigidbody: {fileID: 5171592592584334513}
+  impactCenter: {fileID: 8055494772537699747}
+  enableImpactTarget: 1
+  combatKnockdownDuration: 1
+  damageOnlyFallbackImpulse: 3
+  damageOnlyFallbackUpwardImpulse: 1
+  damageOnlyFallbackCooldown: 0.2
+  debugImpactLogs: 0
 --- !u!1 &1594514674284813732
 GameObject:
   m_ObjectHideFlags: 0
@@ -294,6 +365,7 @@ Transform:
   - {fileID: 4015340420288901693}
   - {fileID: 6100000000000000201}
   - {fileID: 6100000000000000203}
+  - {fileID: 6100000000000000211}
   m_Father: {fileID: 2153839895803566005}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
 --- !u!1 &6100000000000000200
@@ -358,6 +430,59 @@ Transform:
   m_Children: []
   m_Father: {fileID: 8055494772537699747}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!1 &6100000000000000210
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 6100000000000000211}
+  - component: {fileID: 6100000000000000212}
+  m_Layer: 11
+  m_Name: BodyHurtbox
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!4 &6100000000000000211
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 6100000000000000210}
+  serializedVersion: 2
+  m_LocalRotation: {x: -0, y: -0, z: -0, w: 1}
+  m_LocalPosition: {x: 0, y: 0.25, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 8055494772537699747}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!65 &6100000000000000212
+BoxCollider:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 6100000000000000210}
+  m_Material: {fileID: 0}
+  m_IncludeLayers:
+    serializedVersion: 2
+    m_Bits: 0
+  m_ExcludeLayers:
+    serializedVersion: 2
+    m_Bits: 0
+  m_LayerOverridePriority: 0
+  m_IsTrigger: 1
+  m_ProvidesContacts: 0
+  m_Enabled: 1
+  serializedVersion: 3
+  m_Size: {x: 0.65, y: 0.85, z: 0.65}
+  m_Center: {x: 0, y: 0.15, z: 0}
 --- !u!54 &5171592592584334513
 Rigidbody:
   m_ObjectHideFlags: 0
@@ -602,6 +727,10 @@ MonoBehaviour:
   updateGroundedParameter: 1
   updateVerticalVelocityParameter: 1
   updateSprintParameter: 1
+  recoveryStateSource: {fileID: 6100000000000000103}
+  autoFindRecoveryStateSource: 1
+  followBodyRotationDuringRecovery: 1
+  recoveryVisualRotationSmoothTime: 0.08
   debugLogs: 0
   drawGizmos: 0
 --- !u!114 &7958398752601989787

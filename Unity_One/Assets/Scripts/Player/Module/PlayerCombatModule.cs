@@ -135,6 +135,12 @@ public class PlayerCombatModule : NetworkBehaviour
             PlayerStatusModule targetStatus = targetRoot.GetComponentInChildren<PlayerStatusModule>(true);
             if (targetStatus == null)
             {
+                if (TryApplyHamsterRecoveryHit(hit, targetRoot, originTf, profile, out Vector3 hamsterHitVfxPosition))
+                {
+                    PlayHitVfxClientRpc(hamsterHitVfxPosition);
+                    continue;
+                }
+
                 LogWarning($"[PlayerCombat] TargetStatus not found on root: {targetRoot.name}");
                 continue;
             }
@@ -163,6 +169,43 @@ public class PlayerCombatModule : NetworkBehaviour
             Vector3 hitVfxPosition = GetHitVfxPosition(hit, originTf.position, targetRoot);
             PlayHitVfxClientRpc(hitVfxPosition);
         }
+    }
+
+    private bool TryApplyHamsterRecoveryHit(
+        Collider hit,
+        Transform targetRoot,
+        Transform originTf,
+        AttackProfile profile,
+        out Vector3 hitVfxPosition)
+    {
+        hitVfxPosition = Vector3.zero;
+        HamsterMotorShellImpactTarget hamsterTarget = null;
+        if (hit != null)
+            HamsterMotorShellImpactTarget.TryFindOnCollider(hit, out hamsterTarget);
+
+        if (hamsterTarget == null && targetRoot != null)
+            HamsterMotorShellImpactTarget.TryFindOnTransform(targetRoot, out hamsterTarget);
+
+        if (hamsterTarget == null || hamsterTarget.TargetRoot == originTf.root)
+            return false;
+
+        Vector3 dir = hamsterTarget.CenterPosition - originTf.position;
+        dir.y = 0f;
+
+        if (dir.sqrMagnitude < 0.0001f)
+            dir = originTf.forward;
+        else
+            dir.Normalize();
+
+        Vector3 impulse = dir * profile.hitForce + Vector3.up * profile.upwardForce;
+        Vector3 hitPoint = hit != null ? hit.ClosestPoint(originTf.position) : hamsterTarget.CenterPosition;
+        bool applied = hamsterTarget.ApplyCombatHitLikeSugar(impulse, hitPoint, "PlayerCombat");
+        Log($"[MSCombat/Recovery] target={hamsterTarget.TargetRoot.name} impulse={impulse} result={applied}");
+        if (!applied)
+            return false;
+
+        hitVfxPosition = GetHitVfxPosition(hit, originTf.position, hamsterTarget.TargetRoot);
+        return true;
     }
 
     private AttackProfile BuildAttackProfile()

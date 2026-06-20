@@ -225,6 +225,9 @@ public class LiquidSweepGimmick : NetworkBehaviour
     private readonly HashSet<PlayerStatusModule> _sweepHitPlayers = new HashSet<PlayerStatusModule>();
     private readonly HashSet<PlayerStatusModule> _sweepTickPlayers = new HashSet<PlayerStatusModule>();
     private readonly HashSet<PlayerStatusModule> _residueTickPlayers = new HashSet<PlayerStatusModule>();
+    private readonly HashSet<HamsterMotorShellImpactTarget> _sweepHitRecoveryAdapters = new HashSet<HamsterMotorShellImpactTarget>();
+    private readonly HashSet<HamsterMotorShellImpactTarget> _sweepTickRecoveryAdapters = new HashSet<HamsterMotorShellImpactTarget>();
+    private readonly HashSet<HamsterMotorShellImpactTarget> _residueTickRecoveryAdapters = new HashSet<HamsterMotorShellImpactTarget>();
     private readonly List<GameObject> _activeCircularIcePatchVisuals = new List<GameObject>();
     private readonly List<GameObject> _clientCircularIcePatchVisuals = new List<GameObject>();
     private readonly Dictionary<PlayerStatusModule, float> _circularIcePatchNextSlipTimes = new Dictionary<PlayerStatusModule, float>();
@@ -261,6 +264,9 @@ public class LiquidSweepGimmick : NetworkBehaviour
         _sweepHitPlayers.Clear();
         _sweepTickPlayers.Clear();
         _residueTickPlayers.Clear();
+        _sweepHitRecoveryAdapters.Clear();
+        _sweepTickRecoveryAdapters.Clear();
+        _residueTickRecoveryAdapters.Clear();
         _loggedEmptyPlayerMaskWarning = false;
         SelectActiveSweepLane();
         SetPresentationActive(false, false, false);
@@ -308,6 +314,9 @@ public class LiquidSweepGimmick : NetworkBehaviour
         _sweepHitPlayers.Clear();
         _sweepTickPlayers.Clear();
         _residueTickPlayers.Clear();
+        _sweepHitRecoveryAdapters.Clear();
+        _sweepTickRecoveryAdapters.Clear();
+        _residueTickRecoveryAdapters.Clear();
         ClearActiveSweepLane();
         _runningRoutine = null;
     }
@@ -432,6 +441,7 @@ public class LiquidSweepGimmick : NetworkBehaviour
     private void ApplySweepHit(Vector3 center, Quaternion rotation)
     {
         _sweepTickPlayers.Clear();
+        _sweepTickRecoveryAdapters.Clear();
         Vector3 halfExtents = GetSweepHalfExtents();
         int mask = GetPlayerMask();
 
@@ -442,12 +452,26 @@ public class LiquidSweepGimmick : NetworkBehaviour
             mask,
             QueryTriggerInteraction.Ignore);
         LogSourceDebug(SourceSweep, $"OverlapBox center={center}, half={halfExtents}, rotation={rotation.eulerAngles}, hits={colliders.Length}, mask={mask}");
+        LogLiquidOverlap(SourceSweep, center, halfExtents, rotation, mask, colliders.Length);
 
         Vector3 direction = GetSweepDirection();
         Vector3 impulse = direction * Mathf.Max(0f, knockbackForce) + Vector3.up * Mathf.Max(0f, upwardForce);
 
         for (int i = 0; i < colliders.Length; i++)
         {
+            if (TryApplyLiquidSweepToRecoveryAdapter(
+                    colliders[i],
+                    direction,
+                    Mathf.Max(0f, knockbackForce),
+                    Mathf.Max(0.01f, sweepDuration),
+                    SourceSweep,
+                    _sweepTickRecoveryAdapters,
+                    _sweepHitRecoveryAdapters,
+                    hitPlayerOnlyOncePerSweep))
+            {
+                continue;
+            }
+
             PlayerStatusModule status = FindPlayerStatusFromCollider(colliders[i], SourceSweep);
             if (!IsValidTarget(status))
             {
@@ -474,11 +498,24 @@ public class LiquidSweepGimmick : NetworkBehaviour
             _sweepHitPlayers.Add(status);
             Log($"{LogPrefix} Sweep hit player: {status.name}, impulse:{impulse}");
         }
+
+        ApplyLiquidSweepRecoveryFallback(
+            center,
+            halfExtents,
+            rotation,
+            direction,
+            Mathf.Max(0f, knockbackForce),
+            Mathf.Max(0.01f, sweepDuration),
+            SourceSweep,
+            _sweepTickRecoveryAdapters,
+            _sweepHitRecoveryAdapters,
+            hitPlayerOnlyOncePerSweep);
     }
 
     private void ApplyResidueSlip(Vector3 center, Quaternion rotation)
     {
         _residueTickPlayers.Clear();
+        _residueTickRecoveryAdapters.Clear();
         Vector3 halfExtents = GetResidueHalfExtents();
         int mask = GetPlayerMask();
 
@@ -489,12 +526,26 @@ public class LiquidSweepGimmick : NetworkBehaviour
             mask,
             QueryTriggerInteraction.Ignore);
         LogSourceDebug(SourceResidue, $"OverlapBox center={center}, half={halfExtents}, rotation={rotation.eulerAngles}, hits={colliders.Length}, mask={mask}");
+        LogLiquidOverlap(SourceResidue, center, halfExtents, rotation, mask, colliders.Length);
 
         Vector3 slipDirection = GetResidueSlipDirection();
         Vector3 slipImpulse = slipDirection * Mathf.Max(0f, residueSlipForce);
 
         for (int i = 0; i < colliders.Length; i++)
         {
+            if (TryApplyLiquidSweepToRecoveryAdapter(
+                    colliders[i],
+                    slipDirection,
+                    Mathf.Max(0f, residueSlipForce),
+                    Mathf.Max(0.01f, residueTickInterval * 1.25f),
+                    SourceResidue,
+                    _residueTickRecoveryAdapters,
+                    null,
+                    false))
+            {
+                continue;
+            }
+
             PlayerStatusModule status = FindPlayerStatusFromCollider(colliders[i], SourceResidue);
             if (!IsValidTarget(status))
             {
@@ -513,6 +564,123 @@ public class LiquidSweepGimmick : NetworkBehaviour
             LogSourceDebug(SourceResidue, $"Applied knockback to {status.name}");
             _residueTickPlayers.Add(status);
         }
+
+        ApplyLiquidSweepRecoveryFallback(
+            center,
+            halfExtents,
+            rotation,
+            slipDirection,
+            Mathf.Max(0f, residueSlipForce),
+            Mathf.Max(0.01f, residueTickInterval * 1.25f),
+            SourceResidue,
+            _residueTickRecoveryAdapters,
+            null,
+            false);
+    }
+
+    private void ApplyLiquidSweepRecoveryFallback(
+        Vector3 center,
+        Vector3 halfExtents,
+        Quaternion rotation,
+        Vector3 direction,
+        float force,
+        float duration,
+        string source,
+        HashSet<HamsterMotorShellImpactTarget> tickSet,
+        HashSet<HamsterMotorShellImpactTarget> hitOnceSet,
+        bool hitOnlyOnce)
+    {
+        const int allLayers = ~0;
+        Collider[] colliders = Physics.OverlapBox(
+            center,
+            halfExtents,
+            rotation,
+            allLayers,
+            QueryTriggerInteraction.Ignore);
+        LogLiquidOverlap(source + ":Fallback", center, halfExtents, rotation, allLayers, colliders.Length);
+
+        for (int i = 0; i < colliders.Length; i++)
+        {
+            TryApplyLiquidSweepToRecoveryAdapter(
+                colliders[i],
+                direction,
+                force,
+                duration,
+                source + ":Fallback",
+                tickSet,
+                hitOnceSet,
+                hitOnlyOnce);
+        }
+    }
+
+    private bool TryApplyLiquidSweepToRecoveryAdapter(
+        Collider hit,
+        Vector3 direction,
+        float force,
+        float duration,
+        string source,
+        HashSet<HamsterMotorShellImpactTarget> tickSet,
+        HashSet<HamsterMotorShellImpactTarget> hitOnceSet,
+        bool hitOnlyOnce)
+    {
+        bool found = HamsterMotorShellImpactTarget.TryFindOnCollider(hit, out HamsterMotorShellImpactTarget recovery);
+        if (!found)
+        {
+            LogLiquidHit(source, hit, false, null, false, direction, force, duration);
+            return false;
+        }
+
+        if (tickSet != null && tickSet.Contains(recovery))
+        {
+            LogSourceDebug(source, $"Skip duplicate hamster recovery target={recovery.TargetRoot.name}, reason=same tick");
+            LogLiquidHit(source, hit, true, recovery, false, direction, force, duration);
+            return true;
+        }
+
+        if (hitOnlyOnce && hitOnceSet != null && hitOnceSet.Contains(recovery))
+        {
+            LogSourceDebug(source, $"Skip duplicate hamster recovery target={recovery.TargetRoot.name}, reason=already hit this sweep");
+            LogLiquidHit(source, hit, true, recovery, false, direction, force, duration);
+            return true;
+        }
+
+        tickSet?.Add(recovery);
+        hitOnceSet?.Add(recovery);
+        bool applied = recovery.ApplyLiquidSweepLikeSugar(direction, force, duration, $"LiquidSweep:{source}");
+        LogSourceDebug(source, $"Applied hamster liquid sweep target={recovery.TargetRoot.name}, direction={direction}, force={force:0.###}, duration={duration:0.###}");
+        Log($"[MSLiquid/Recovery] target={recovery.TargetRoot.name} source={source} direction={direction} force={force:0.###} duration={duration:0.###} result={applied}");
+        LogLiquidHit(source, hit, true, recovery, applied, direction, force, duration);
+        return true;
+    }
+
+    private bool TryApplyCircularIcePatchRecoverySlip(
+        Collider candidate,
+        Vector3 slipDirection,
+        Vector3 testPoint,
+        bool isInsideCircle)
+    {
+        if (!HamsterMotorShellImpactTarget.TryFindOnCollider(candidate, out HamsterMotorShellImpactTarget recovery))
+            return false;
+
+        if (!isInsideCircle)
+        {
+            LogSourceDebug(SourceResidue, $"Skip hamster circular ice target={recovery.TargetRoot.name}, reason=outside circle, testPoint={testPoint}");
+            return true;
+        }
+
+        if (_residueTickRecoveryAdapters.Contains(recovery))
+        {
+            LogSourceDebug(SourceResidue, $"Skip hamster circular ice target={recovery.TargetRoot.name}, reason=already affected this tick");
+            return true;
+        }
+
+        _residueTickRecoveryAdapters.Add(recovery);
+        float force = Mathf.Max(0f, GetFiniteFloatOrZero(circularIcePatchSlipForce));
+        float duration = Mathf.Max(0.01f, residueTickInterval * 1.25f);
+        bool applied = recovery.ApplyLiquidSweepLikeSugar(slipDirection, force, duration, "LiquidSweep:CircularIcePatch");
+        LogSourceDebug(SourceResidue, $"Applied hamster circular ice slip target={recovery.TargetRoot.name}, direction={slipDirection}, force={force:0.###}, duration={duration:0.###}");
+        Log($"[MSLiquid/Recovery] target={recovery.TargetRoot.name} source=CircularIcePatch direction={slipDirection} force={force:0.###} duration={duration:0.###} result={applied}");
+        return true;
     }
 
     private bool ShouldUseRandomCircularIcePatches()
@@ -790,6 +958,12 @@ public class LiquidSweepGimmick : NetworkBehaviour
             Vector3 testPoint = GetCircularIcePatchTestPoint(candidate, patch.center);
             float xzDistance = GetHorizontalDistance(testPoint, patch.center);
             bool isInsideCircle = IsInsideCircularIcePatch(testPoint, patch.center, radius);
+            if (TryApplyCircularIcePatchRecoverySlip(candidate, slipDirection, testPoint, isInsideCircle))
+            {
+                appliedCount++;
+                continue;
+            }
+
             PlayerStatusModule status = FindPlayerStatusFromCollider(candidate, SourceResidue);
             if (!IsValidTarget(status))
             {
@@ -1615,6 +1789,9 @@ public class LiquidSweepGimmick : NetworkBehaviour
         _sweepHitPlayers.Clear();
         _sweepTickPlayers.Clear();
         _residueTickPlayers.Clear();
+        _sweepHitRecoveryAdapters.Clear();
+        _sweepTickRecoveryAdapters.Clear();
+        _residueTickRecoveryAdapters.Clear();
         CleanupActiveCircularIcePatchVisuals();
         CleanupClientCircularIcePatchVisuals();
         ClearCircularIcePatchSlipCooldowns();
@@ -1809,6 +1986,38 @@ public class LiquidSweepGimmick : NetworkBehaviour
         }
 
         Debug.Log($"{LogPrefix} [{source}] {message}", this);
+    }
+
+    private void LogLiquidOverlap(string phase, Vector3 center, Vector3 halfExtents, Quaternion rotation, int mask, int hitCount)
+    {
+        if (!enableDebugLogs)
+            return;
+
+        Debug.Log(
+            $"[MSLiquid/Overlap] phase={phase} center={center} halfExtents={halfExtents} rotation={rotation.eulerAngles} mask={mask} hits={hitCount}",
+            this);
+    }
+
+    private void LogLiquidHit(
+        string phase,
+        Collider hit,
+        bool tryFindResult,
+        HamsterMotorShellImpactTarget recovery,
+        bool applyResult,
+        Vector3 direction,
+        float force,
+        float duration)
+    {
+        if (!enableDebugLogs)
+            return;
+
+        string colliderName = hit != null ? hit.name : "<null>";
+        int colliderLayer = hit != null ? hit.gameObject.layer : -1;
+        string layerName = colliderLayer >= 0 ? LayerMask.LayerToName(colliderLayer) : "<null>";
+        Transform root = hit != null ? hit.transform.root : null;
+        Debug.Log(
+            $"[MSLiquid/Hit] phase={phase} collider={colliderName} layer={layerName}({colliderLayer}) root={(root != null ? root.name : "<null>")} tryFind={tryFindResult} recovery={(recovery != null ? recovery.TargetRoot.name : "<null>")} applyResult={applyResult} direction={direction} force={force:0.###} duration={duration:0.###}",
+            this);
     }
 
     private static string FormatStatusState(PlayerStatusModule status)
