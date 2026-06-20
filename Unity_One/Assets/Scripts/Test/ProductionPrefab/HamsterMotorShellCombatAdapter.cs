@@ -13,6 +13,8 @@ public sealed class HamsterMotorShellCombatAdapter : MonoBehaviour
     [SerializeField] private Camera ownerCamera;
     [SerializeField] private HamsterMotorShellItemAdapter itemAdapter;
     [SerializeField] private Rigidbody carrierBody;
+    [SerializeField] private HamsterVisualClipStateDriver visualClipStateDriver;
+    [SerializeField] private HamsterAnimationEventRelay animationEventRelay;
 
     [Header("Attack")]
     [SerializeField] private bool enableCombatAdapter = true;
@@ -28,6 +30,14 @@ public sealed class HamsterMotorShellCombatAdapter : MonoBehaviour
     [SerializeField] private float upwardImpulse = 0.5f;
     [SerializeField] private LayerMask hitMask = ~0;
 
+    [Header("Attack Animation")]
+    [SerializeField] private string attackStateName = "Attack";
+    [SerializeField] private float attackCrossFade = 0.05f;
+    [SerializeField] private float attackMinVisualTime = 0.15f;
+    [SerializeField] private float attackMaxVisualTime = 0.6f;
+    [SerializeField] private bool requireAttackMotion = true;
+    [SerializeField] private bool useAttackAnimationEventTiming = true;
+
     [Header("Debug")]
     [SerializeField] private bool debugCombatLogs = false;
 
@@ -37,6 +47,7 @@ public sealed class HamsterMotorShellCombatAdapter : MonoBehaviour
     private bool _pendingAttack;
     private float _pendingAttackTime;
     private float _nextAttackTime;
+    private bool _waitingForAttackAnimationEvent;
 
     private struct AttackProfile
     {
@@ -70,6 +81,7 @@ public sealed class HamsterMotorShellCombatAdapter : MonoBehaviour
         if (_pendingAttack && Time.time >= _pendingAttackTime)
         {
             _pendingAttack = false;
+            _waitingForAttackAnimationEvent = false;
             ExecuteAttack();
         }
     }
@@ -94,6 +106,16 @@ public sealed class HamsterMotorShellCombatAdapter : MonoBehaviour
             if (motorShellBody != null)
                 carrierBody = motorShellBody.GetComponent<Rigidbody>();
         }
+
+        if (visualClipStateDriver == null)
+            visualClipStateDriver = GetComponentInChildren<HamsterVisualClipStateDriver>(true);
+        if (visualClipStateDriver == null)
+            visualClipStateDriver = GetComponentInParent<HamsterVisualClipStateDriver>();
+
+        if (animationEventRelay == null)
+            animationEventRelay = GetComponentInChildren<HamsterAnimationEventRelay>(true);
+        if (animationEventRelay == null)
+            animationEventRelay = GetComponentInParent<HamsterAnimationEventRelay>();
     }
 
     private bool CanReadOwnerInput()
@@ -141,9 +163,28 @@ public sealed class HamsterMotorShellCombatAdapter : MonoBehaviour
         }
 
         _nextAttackTime = Time.time + Mathf.Max(0.01f, profile.Cooldown);
+        bool attackVisualStarted = TryPlayAttackVisual();
         _pendingAttack = true;
-        _pendingAttackTime = Time.time + Mathf.Max(0f, attackWindup);
-        Log("[MSCombat/Attack]", $"queued weapon={profile.WeaponName} id={profile.WeaponId} cooldown={profile.Cooldown:F2} active={attackActiveDuration:F2}");
+        _waitingForAttackAnimationEvent = attackVisualStarted && useAttackAnimationEventTiming;
+        float fallbackDelay = _waitingForAttackAnimationEvent
+            ? Mathf.Max(Mathf.Max(0f, attackWindup), Mathf.Max(0f, attackMinVisualTime))
+            : Mathf.Max(0f, attackWindup);
+        _pendingAttackTime = Time.time + fallbackDelay;
+        Log("[MSCombat/Attack]", $"queued weapon={profile.WeaponName} id={profile.WeaponId} cooldown={profile.Cooldown:F2} active={attackActiveDuration:F2} visual={attackVisualStarted} eventTiming={_waitingForAttackAnimationEvent} fallbackDelay={fallbackDelay:F2}");
+    }
+
+    public void CompletePendingAttackFromAnimationEvent()
+    {
+        if (!_pendingAttack)
+        {
+            Log("[MSCombat/Event]", "attackHit ignored=noPendingAttack");
+            return;
+        }
+
+        _pendingAttack = false;
+        _waitingForAttackAnimationEvent = false;
+        Log("[MSCombat/Event]", "attackHit execute=pendingAttack");
+        ExecuteAttack();
     }
 
     private void ExecuteAttack()
@@ -170,6 +211,42 @@ public sealed class HamsterMotorShellCombatAdapter : MonoBehaviour
         Log(
             "[MSCombat/Hit]",
             $"weapon={profile.WeaponName} id={profile.WeaponId} damage={profile.Damage:F1} target={(targetRoot != null ? targetRoot.name : "<null>")} collider={(hitCollider != null ? hitCollider.name : "<null>")} impulse={FormatVector(impulse)} recoveryApplied={recoveryApplied}");
+    }
+
+    private bool TryPlayAttackVisual()
+    {
+        if (string.IsNullOrWhiteSpace(attackStateName))
+        {
+            Log("[MSCombat/Visual]", "skip=stateNameEmpty");
+            return false;
+        }
+
+        CacheReferences();
+        if (visualClipStateDriver == null)
+        {
+            Log("[MSCombat/Visual]", "skip=clipStateDriverMissing");
+            return false;
+        }
+
+        if (visualClipStateDriver.IsExternalOneShotActive)
+        {
+            Log("[MSCombat/Visual]", "skip=externalOneShotActive");
+            return false;
+        }
+
+        bool played = visualClipStateDriver.TryPlayOneShotState(
+            attackStateName,
+            attackCrossFade,
+            attackMinVisualTime,
+            attackMaxVisualTime,
+            requireAttackMotion,
+            out int stateHash,
+            out string failureReason);
+
+        Log("[MSCombat/Visual]", played
+            ? $"play state={attackStateName} hash={stateHash}"
+            : $"skip={failureReason} state={attackStateName} requireMotion={requireAttackMotion}");
+        return played;
     }
 
     private AttackProfile BuildAttackProfile()

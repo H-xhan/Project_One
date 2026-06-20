@@ -242,6 +242,8 @@ MonoBehaviour:
   ownerCamera: {fileID: 6100000000000000009}
   itemAdapter: {fileID: 6100000000000000101}
   carrierBody: {fileID: 5171592592584334513}
+  visualClipStateDriver: {fileID: 8165324872318489426}
+  animationEventRelay: {fileID: 1083548310705894094}
   enableCombatAdapter: 1
   enableLeftMouseAttack: 1
   attackCooldown: 0.35
@@ -256,6 +258,12 @@ MonoBehaviour:
   hitMask:
     serializedVersion: 2
     m_Bits: -1
+  attackStateName: Attack
+  attackCrossFade: 0.05
+  attackMinVisualTime: 0.15
+  attackMaxVisualTime: 0.6
+  requireAttackMotion: 1
+  useAttackAnimationEventTiming: 1
   debugCombatLogs: 0
 --- !u!114 &6100000000000000103
 MonoBehaviour:
@@ -2158,7 +2166,9 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: 
   grabber: {fileID: 5469712445494703521}
+  combatAdapter: {fileID: 6100000000000000102}
   autoFindGrabber: 1
+  autoFindCombatAdapter: 1
   debugLogs: 0
   ignoreFaceEvents: 1
 --- !u!4 &7431157597389740895 stripped
