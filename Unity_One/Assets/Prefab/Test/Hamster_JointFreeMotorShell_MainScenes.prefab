@@ -285,11 +285,11 @@ MonoBehaviour:
   minimumKnockdownDuration: 0.9
   useProductionLikeLaunch: 1
   useVelocityChangeForImpact: 1
-  productionHorizontalLaunchScale: 0.65
+  productionHorizontalLaunchScale: 0.56
   productionMinimumUpwardLaunch: 2.8
   productionUpwardLaunchBonus: 1.1
-  productionTumbleTorque: 14
-  productionRandomYawTorque: 4
+  productionTumbleTorque: 12
+  productionRandomYawTorque: 3.4
   knockdownDuration: 1.2
   recoveryDuration: 1.2
   maxKnockdownDuration: 2.4
