@@ -148,6 +148,14 @@ public sealed class HamsterVisualFollower : MonoBehaviour
     [SerializeField] private float recoveryVisualRotationSmoothTime = 0.08f;
     [SerializeField] private bool debugRecoveryVisualLogs = false;
 
+    [Header("SpinDash Visual")]
+    [SerializeField] private bool enableSpinDashVisualSpin = true;
+    [SerializeField] private float spinDashVisualDegreesPerSecond = 1080f;
+    [SerializeField] private float spinDashVisualBlendOutDuration = 0.18f;
+    [SerializeField] private Vector3 spinDashVisualLocalAxis = Vector3.right;
+    [SerializeField] private bool spinDashInvertVisualSpin = false;
+    [SerializeField] private bool debugSpinDashVisualLogs = false;
+
     [Header("Debug")]
     [SerializeField] private bool debugLogs = false;
     [SerializeField] private bool drawGizmos = false;
@@ -249,8 +257,18 @@ public sealed class HamsterVisualFollower : MonoBehaviour
     private string _recoveryVisualSuppressionReason = "none";
     private bool _getUpVisualLocked;
     private string _getUpVisualLockReason = "none";
+    private bool _spinDashVisualSpinActive;
+    private bool _spinDashVisualSpinBlendingOut;
+    private float _spinDashVisualSpinAngle;
+    private float _spinDashVisualSpinWeight;
+    private float _spinDashVisualSpinBlendOutDuration;
+    private float _spinDashVisualSpinBlendOutTimer;
+    private float _activeSpinDashVisualDegreesPerSecond;
+    private Vector3 _activeSpinDashVisualLocalAxis = Vector3.right;
+    private string _spinDashVisualSpinReason = "none";
 
     public bool IsGetUpVisualLocked => _getUpVisualLocked;
+    public bool IsSpinDashVisualSpinActive => _spinDashVisualSpinActive || _spinDashVisualSpinBlendingOut;
 
     private void Awake()
     {
@@ -291,6 +309,7 @@ public sealed class HamsterVisualFollower : MonoBehaviour
 
         if (IsGetUpVisualLocked)
         {
+            ClearSpinDashVisualSpin("GetUpVisualLock");
             ResetGetUpVisualLockDynamics();
             UpdateAnimator(planarSpeed);
             LogDebugState(velocity, planarSpeed, localVelocity);
@@ -299,7 +318,10 @@ public sealed class HamsterVisualFollower : MonoBehaviour
         }
 
         if (IsRecoveryVisualSuppressed())
+        {
+            ClearSpinDashVisualSpin("RecoveryVisualSuppressed");
             ResetRecoveryVisualDynamics();
+        }
 
         if (ShouldStabilizeMainScenesAirborneVisuals())
             ResetMainScenesAirborneVisualState();
@@ -330,6 +352,7 @@ public sealed class HamsterVisualFollower : MonoBehaviour
 
     public void ResetRecoveryVisualDynamics()
     {
+        ClearSpinDashVisualSpin("ResetRecoveryVisualDynamics");
         ResetJumpVisualReactionState();
         ResetMainScenesAirborneWobbleState();
         _currentPlanarAcceleration = Vector3.zero;
@@ -366,6 +389,7 @@ public sealed class HamsterVisualFollower : MonoBehaviour
 
     public void ResetGetUpVisualLockDynamics()
     {
+        ClearSpinDashVisualSpin("ResetGetUpVisualLockDynamics");
         ResetRecoveryVisualDynamics();
         _yawVelocity = 0f;
         _currentYaw = 0f;
@@ -399,6 +423,91 @@ public sealed class HamsterVisualFollower : MonoBehaviour
         visualRoot.localPosition = _initialLocalPosition;
         visualRoot.localRotation = _initialLocalRotation;
         visualRoot.localScale = _initialLocalScale;
+    }
+
+    public void SetSpinDashVisualSpin(bool active, Vector3 dashWorldDirection, float degreesPerSecond, float blendOutDuration, string reason)
+    {
+        SetSpinDashVisualSpin(
+            active,
+            dashWorldDirection,
+            degreesPerSecond,
+            blendOutDuration,
+            spinDashVisualLocalAxis,
+            spinDashInvertVisualSpin,
+            reason);
+    }
+
+    public void SetSpinDashVisualSpin(
+        bool active,
+        Vector3 dashWorldDirection,
+        float degreesPerSecond,
+        float blendOutDuration,
+        Vector3 localAxis,
+        bool invert,
+        string reason)
+    {
+        if (!enableSpinDashVisualSpin || !IsSafeVisualFacingRoot())
+        {
+            if (!active)
+                ClearSpinDashVisualSpin(reason);
+            return;
+        }
+
+        if (IsGetUpVisualLocked || IsRecoveryVisualSuppressed())
+        {
+            ClearSpinDashVisualSpin(reason);
+            return;
+        }
+
+        _spinDashVisualSpinReason = string.IsNullOrEmpty(reason) ? "none" : reason;
+        _spinDashVisualSpinBlendOutDuration = Mathf.Max(0f, blendOutDuration);
+
+        if (active)
+        {
+            _spinDashVisualSpinActive = true;
+            _spinDashVisualSpinBlendingOut = false;
+            _spinDashVisualSpinWeight = 1f;
+            _spinDashVisualSpinBlendOutTimer = 0f;
+            _activeSpinDashVisualDegreesPerSecond = Mathf.Max(0f, degreesPerSecond <= 0f ? spinDashVisualDegreesPerSecond : degreesPerSecond);
+            _activeSpinDashVisualLocalAxis = ResolveSpinDashVisualLocalAxis(localAxis, dashWorldDirection, invert);
+            LogSpinDashVisualSpin($"active=True reason={_spinDashVisualSpinReason} dps={_activeSpinDashVisualDegreesPerSecond:F1} axis={FormatVector3(_activeSpinDashVisualLocalAxis)}");
+            return;
+        }
+
+        if (!_spinDashVisualSpinActive && !_spinDashVisualSpinBlendingOut)
+            return;
+
+        if (_spinDashVisualSpinBlendOutDuration <= 0f)
+        {
+            ClearSpinDashVisualSpin(reason);
+            return;
+        }
+
+        _spinDashVisualSpinActive = false;
+        _spinDashVisualSpinBlendingOut = true;
+        _spinDashVisualSpinBlendOutTimer = 0f;
+        LogSpinDashVisualSpin($"active=False reason={_spinDashVisualSpinReason} blendOut={_spinDashVisualSpinBlendOutDuration:F2}");
+    }
+
+    public void ClearSpinDashVisualSpin(string reason)
+    {
+        if (!_spinDashVisualSpinActive &&
+            !_spinDashVisualSpinBlendingOut &&
+            _spinDashVisualSpinAngle == 0f &&
+            _spinDashVisualSpinWeight == 0f)
+        {
+            return;
+        }
+
+        _spinDashVisualSpinActive = false;
+        _spinDashVisualSpinBlendingOut = false;
+        _spinDashVisualSpinAngle = 0f;
+        _spinDashVisualSpinWeight = 0f;
+        _spinDashVisualSpinBlendOutTimer = 0f;
+        _activeSpinDashVisualDegreesPerSecond = 0f;
+        _activeSpinDashVisualLocalAxis = Vector3.right;
+        _spinDashVisualSpinReason = string.IsNullOrEmpty(reason) ? "none" : reason;
+        LogSpinDashVisualSpin($"clear reason={_spinDashVisualSpinReason}");
     }
 
     private void ResolveReferences()
@@ -1363,13 +1472,52 @@ public sealed class HamsterVisualFollower : MonoBehaviour
         Quaternion offsetRot = suppressAdditiveVisuals
             ? Quaternion.Euler(0f, visualLocalEulerOffset.y, 0f)
             : Quaternion.Euler(visualLocalEulerOffset);
+        Quaternion spinDashVisualSpinRot = UpdateSpinDashVisualSpinOverlay(Time.deltaTime);
 
         if (visualRootIsChildOfTarget)
-            visualRoot.localRotation = _initialLocalRotation * yawRot * leanRot * accelerationWobbleRot * stopOvershootRot * turnWobbleRot * impactWobbleRot * jumpVisualRot * offsetRot;
+            visualRoot.localRotation = _initialLocalRotation * yawRot * leanRot * accelerationWobbleRot * stopOvershootRot * turnWobbleRot * impactWobbleRot * jumpVisualRot * offsetRot * spinDashVisualSpinRot;
         else
-            visualRoot.rotation = yawRot * leanRot * accelerationWobbleRot * stopOvershootRot * turnWobbleRot * impactWobbleRot * jumpVisualRot * offsetRot;
+            visualRoot.rotation = yawRot * leanRot * accelerationWobbleRot * stopOvershootRot * turnWobbleRot * impactWobbleRot * jumpVisualRot * offsetRot * spinDashVisualSpinRot;
 
         LogTargetVisualFacing(usedMotorDesiredFacing, motorDesiredFacing, targetYaw, planarSpeed);
+    }
+
+    private Quaternion UpdateSpinDashVisualSpinOverlay(float deltaTime)
+    {
+        if (!_spinDashVisualSpinActive && !_spinDashVisualSpinBlendingOut)
+            return Quaternion.identity;
+
+        if (IsGetUpVisualLocked || IsRecoveryVisualSuppressed() || !IsSafeVisualFacingRoot())
+        {
+            ClearSpinDashVisualSpin("SpinDashOverlayBlocked");
+            return Quaternion.identity;
+        }
+
+        float safeDeltaTime = Mathf.Max(0f, deltaTime);
+        float degreesPerSecond = Mathf.Max(0f, _activeSpinDashVisualDegreesPerSecond);
+        _spinDashVisualSpinAngle = Mathf.Repeat(_spinDashVisualSpinAngle + degreesPerSecond * safeDeltaTime, 360f);
+
+        if (_spinDashVisualSpinBlendingOut)
+        {
+            _spinDashVisualSpinBlendOutTimer += safeDeltaTime;
+            float duration = Mathf.Max(0.0001f, _spinDashVisualSpinBlendOutDuration);
+            _spinDashVisualSpinWeight = Mathf.Clamp01(1f - (_spinDashVisualSpinBlendOutTimer / duration));
+            if (_spinDashVisualSpinWeight <= 0.0001f)
+            {
+                ClearSpinDashVisualSpin("SpinDashBlendOutComplete");
+                return Quaternion.identity;
+            }
+        }
+        else
+        {
+            _spinDashVisualSpinWeight = 1f;
+        }
+
+        // SpinDash visual spin is a visual-only overlay. It does not drive physics or gameplay movement.
+        Vector3 axis = _activeSpinDashVisualLocalAxis.sqrMagnitude > 0.0001f
+            ? _activeSpinDashVisualLocalAxis.normalized
+            : Vector3.right;
+        return Quaternion.AngleAxis(_spinDashVisualSpinAngle * _spinDashVisualSpinWeight, axis);
     }
 
     private bool TryResolveTargetMotorDesiredFacing(out Vector3 desiredFacing, out string visualFacingSource)
@@ -1535,6 +1683,25 @@ public sealed class HamsterVisualFollower : MonoBehaviour
                visualRoot.GetComponent("PlayerHub") == null;
     }
 
+    private Vector3 ResolveSpinDashVisualLocalAxis(Vector3 requestedLocalAxis, Vector3 dashWorldDirection, bool invert)
+    {
+        Vector3 axis = requestedLocalAxis.sqrMagnitude > 0.0001f
+            ? requestedLocalAxis
+            : spinDashVisualLocalAxis;
+
+        if (axis.sqrMagnitude <= 0.0001f && visualRoot != null && IsFiniteVector(dashWorldDirection))
+        {
+            Vector3 localDashDirection = visualRoot.InverseTransformDirection(dashWorldDirection);
+            axis = Vector3.Cross(Vector3.up, localDashDirection);
+        }
+
+        if (axis.sqrMagnitude <= 0.0001f)
+            axis = Vector3.right;
+
+        axis.Normalize();
+        return invert ? -axis : axis;
+    }
+
     private void LogRecoveryVisualSuppression(bool suppress, string reason)
     {
         if (!debugRecoveryVisualLogs)
@@ -1549,6 +1716,14 @@ public sealed class HamsterVisualFollower : MonoBehaviour
             return;
 
         Debug.Log($"[MSVisualRecovery:{GetInputRouteObjectName()}] getUpLock={locked} reason={reason}", this);
+    }
+
+    private void LogSpinDashVisualSpin(string message)
+    {
+        if (!debugSpinDashVisualLogs)
+            return;
+
+        Debug.Log($"[MSVisualSpin:{GetInputRouteObjectName()}] {message}", this);
     }
 
     private void LogTargetVisualFacing(bool usedMotorDesiredFacing, Vector3 desiredFacing, float targetYaw, float planarSpeed)

@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using Unity.Netcode;
 using UnityEngine;
@@ -47,9 +48,12 @@ public sealed class HamsterMotorShellCombatAdapter : MonoBehaviour
     [Header("Debug")]
     [SerializeField] private bool debugCombatLogs = false;
 
+    public event Action AttackStarted;
+
     private readonly HashSet<int> _processedTargets = new HashSet<int>();
     private NetworkObject _ownerNetworkObject;
     private Transform _targetRoot;
+    private HamsterMotorShellSpinDashAdapter _spinDashAdapter;
     private bool _pendingAttack;
     private float _pendingAttackTime;
     private float _nextAttackTime;
@@ -122,6 +126,9 @@ public sealed class HamsterMotorShellCombatAdapter : MonoBehaviour
             animationEventRelay = GetComponentInChildren<HamsterAnimationEventRelay>(true);
         if (animationEventRelay == null)
             animationEventRelay = GetComponentInParent<HamsterAnimationEventRelay>();
+
+        if (_spinDashAdapter == null && _targetRoot != null)
+            _spinDashAdapter = _targetRoot.GetComponentInChildren<HamsterMotorShellSpinDashAdapter>(true);
     }
 
     private bool CanReadOwnerInput()
@@ -161,6 +168,12 @@ public sealed class HamsterMotorShellCombatAdapter : MonoBehaviour
             return;
         }
 
+        if (IsSpinDashDizzyInputBlocked())
+        {
+            Log("[MSCombat/Input]", "skip=spindashDizzy");
+            return;
+        }
+
         AttackProfile profile = BuildAttackProfile();
         if (Time.time < _nextAttackTime)
         {
@@ -180,6 +193,7 @@ public sealed class HamsterMotorShellCombatAdapter : MonoBehaviour
             ? Mathf.Max(Mathf.Max(0f, attackWindup), Mathf.Max(0f, attackVisualMinTime))
             : Mathf.Max(0f, attackWindup);
         _pendingAttackTime = Time.time + fallbackDelay;
+        AttackStarted?.Invoke();
         Log("[MSCombat/Attack]", $"queued weapon={profile.WeaponName} id={profile.WeaponId} heldItem={hasHeldItem} selectedState={selectedAttackStateName} visual={attackVisualStarted} visualFallback={usedVisualFallback} cooldown={profile.Cooldown:F2} active={attackActiveDuration:F2} eventTiming={_waitingForAttackAnimationEvent} fallbackDelay={fallbackDelay:F2}");
     }
 
@@ -323,6 +337,11 @@ public sealed class HamsterMotorShellCombatAdapter : MonoBehaviour
     private bool HasHeldItemForAttack()
     {
         return itemAdapter != null && itemAdapter.HasHeldItem;
+    }
+
+    private bool IsSpinDashDizzyInputBlocked()
+    {
+        return _spinDashAdapter != null && _spinDashAdapter.IsDizzyActive;
     }
 
     private AttackProfile BuildAttackProfile()

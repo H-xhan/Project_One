@@ -114,6 +114,7 @@ public sealed class HamsterMotorShellItemAdapter : MonoBehaviour
     private NetworkObject _ownerNetworkObject;
     private PlayerHub _playerHub;
     private Transform _targetRoot;
+    private HamsterMotorShellSpinDashAdapter _spinDashAdapter;
     private Transform _runtimeRightHandSocket;
     private Transform _resolvedVisualRightHand;
     private Transform _heldGripPoint;
@@ -172,6 +173,9 @@ public sealed class HamsterMotorShellItemAdapter : MonoBehaviour
         if (!CanReadOwnerInput())
             return;
 
+        if (IsSpinDashDizzyInputBlocked())
+            return;
+
         bool pickupDropPressed = ReadPickupDropPressed();
         bool dropPressed = ReadKeyDown(dropKey);
         bool throwPressed = ReadKeyDown(throwKey);
@@ -228,6 +232,9 @@ public sealed class HamsterMotorShellItemAdapter : MonoBehaviour
 
         if (motorStateSource == null && _targetRoot != null)
             motorStateSource = _targetRoot.GetComponentInChildren<HamsterFullRagdollMotor>(true);
+
+        if (_spinDashAdapter == null && _targetRoot != null)
+            _spinDashAdapter = _targetRoot.GetComponentInChildren<HamsterMotorShellSpinDashAdapter>(true);
     }
 
     private bool CanReadOwnerInput()
@@ -258,6 +265,11 @@ public sealed class HamsterMotorShellItemAdapter : MonoBehaviour
         }
 
         return true;
+    }
+
+    private bool IsSpinDashDizzyInputBlocked()
+    {
+        return _spinDashAdapter != null && _spinDashAdapter.IsDizzyActive;
     }
 
     private bool ReadPickupDropPressed()
