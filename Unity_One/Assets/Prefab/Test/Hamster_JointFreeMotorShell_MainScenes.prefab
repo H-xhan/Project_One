@@ -264,6 +264,12 @@ MonoBehaviour:
   attackMaxVisualTime: 0.6
   requireAttackMotion: 1
   useAttackAnimationEventTiming: 1
+  useHeldItemAttackVisual: 1
+  heldItemAttackStateName: Attack_HeldItem
+  heldItemAttackCrossFade: 0.05
+  heldItemAttackMinVisualTime: 0.2
+  heldItemAttackMaxVisualTime: 0.7
+  fallbackToUnarmedAttackVisualIfHeldMotionMissing: 1
   debugCombatLogs: 0
 --- !u!114 &6100000000000000103
 MonoBehaviour:

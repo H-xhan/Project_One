@@ -37,6 +37,12 @@ public sealed class HamsterMotorShellCombatAdapter : MonoBehaviour
     [SerializeField] private float attackMaxVisualTime = 0.6f;
     [SerializeField] private bool requireAttackMotion = true;
     [SerializeField] private bool useAttackAnimationEventTiming = true;
+    [SerializeField] private bool useHeldItemAttackVisual = true;
+    [SerializeField] private string heldItemAttackStateName = "Attack_HeldItem";
+    [SerializeField] private float heldItemAttackCrossFade = 0.05f;
+    [SerializeField] private float heldItemAttackMinVisualTime = 0.2f;
+    [SerializeField] private float heldItemAttackMaxVisualTime = 0.7f;
+    [SerializeField] private bool fallbackToUnarmedAttackVisualIfHeldMotionMissing = true;
 
     [Header("Debug")]
     [SerializeField] private bool debugCombatLogs = false;
@@ -163,14 +169,18 @@ public sealed class HamsterMotorShellCombatAdapter : MonoBehaviour
         }
 
         _nextAttackTime = Time.time + Mathf.Max(0.01f, profile.Cooldown);
-        bool attackVisualStarted = TryPlayAttackVisual();
+        bool attackVisualStarted = TryPlayAttackVisual(
+            out float attackVisualMinTime,
+            out string selectedAttackStateName,
+            out bool hasHeldItem,
+            out bool usedVisualFallback);
         _pendingAttack = true;
         _waitingForAttackAnimationEvent = attackVisualStarted && useAttackAnimationEventTiming;
         float fallbackDelay = _waitingForAttackAnimationEvent
-            ? Mathf.Max(Mathf.Max(0f, attackWindup), Mathf.Max(0f, attackMinVisualTime))
+            ? Mathf.Max(Mathf.Max(0f, attackWindup), Mathf.Max(0f, attackVisualMinTime))
             : Mathf.Max(0f, attackWindup);
         _pendingAttackTime = Time.time + fallbackDelay;
-        Log("[MSCombat/Attack]", $"queued weapon={profile.WeaponName} id={profile.WeaponId} cooldown={profile.Cooldown:F2} active={attackActiveDuration:F2} visual={attackVisualStarted} eventTiming={_waitingForAttackAnimationEvent} fallbackDelay={fallbackDelay:F2}");
+        Log("[MSCombat/Attack]", $"queued weapon={profile.WeaponName} id={profile.WeaponId} heldItem={hasHeldItem} selectedState={selectedAttackStateName} visual={attackVisualStarted} visualFallback={usedVisualFallback} cooldown={profile.Cooldown:F2} active={attackActiveDuration:F2} eventTiming={_waitingForAttackAnimationEvent} fallbackDelay={fallbackDelay:F2}");
     }
 
     public void CompletePendingAttackFromAnimationEvent()
@@ -213,15 +223,19 @@ public sealed class HamsterMotorShellCombatAdapter : MonoBehaviour
             $"weapon={profile.WeaponName} id={profile.WeaponId} damage={profile.Damage:F1} target={(targetRoot != null ? targetRoot.name : "<null>")} collider={(hitCollider != null ? hitCollider.name : "<null>")} impulse={FormatVector(impulse)} recoveryApplied={recoveryApplied}");
     }
 
-    private bool TryPlayAttackVisual()
+    private bool TryPlayAttackVisual(
+        out float visualMinTime,
+        out string selectedStateName,
+        out bool hasHeldItem,
+        out bool usedFallbackState)
     {
-        if (string.IsNullOrWhiteSpace(attackStateName))
-        {
-            Log("[MSCombat/Visual]", "skip=stateNameEmpty");
-            return false;
-        }
+        visualMinTime = Mathf.Max(0f, attackMinVisualTime);
+        selectedStateName = attackStateName;
+        hasHeldItem = false;
+        usedFallbackState = false;
 
         CacheReferences();
+        hasHeldItem = HasHeldItemForAttack();
         if (visualClipStateDriver == null)
         {
             Log("[MSCombat/Visual]", "skip=clipStateDriverMissing");
@@ -234,19 +248,81 @@ public sealed class HamsterMotorShellCombatAdapter : MonoBehaviour
             return false;
         }
 
-        bool played = visualClipStateDriver.TryPlayOneShotState(
+        if (useHeldItemAttackVisual && hasHeldItem && !string.IsNullOrWhiteSpace(heldItemAttackStateName))
+        {
+            selectedStateName = heldItemAttackStateName;
+            visualMinTime = Mathf.Max(0f, heldItemAttackMinVisualTime);
+            bool heldPlayed = TryPlayAttackVisualState(
+                heldItemAttackStateName,
+                heldItemAttackCrossFade,
+                heldItemAttackMinVisualTime,
+                heldItemAttackMaxVisualTime,
+                out int heldStateHash,
+                out string heldFailureReason);
+
+            if (heldPlayed)
+            {
+                Log("[MSCombat/Visual]", $"play state={heldItemAttackStateName} hash={heldStateHash} heldItem=true");
+                return true;
+            }
+
+            Log("[MSCombat/Visual]", $"skip={heldFailureReason} state={heldItemAttackStateName} requireMotion={requireAttackMotion} heldItem=true");
+            if (!fallbackToUnarmedAttackVisualIfHeldMotionMissing)
+                return false;
+
+            usedFallbackState = true;
+        }
+
+        selectedStateName = attackStateName;
+        visualMinTime = Mathf.Max(0f, attackMinVisualTime);
+        bool played = TryPlayAttackVisualState(
             attackStateName,
             attackCrossFade,
             attackMinVisualTime,
             attackMaxVisualTime,
-            requireAttackMotion,
             out int stateHash,
             out string failureReason);
 
         Log("[MSCombat/Visual]", played
-            ? $"play state={attackStateName} hash={stateHash}"
-            : $"skip={failureReason} state={attackStateName} requireMotion={requireAttackMotion}");
+            ? $"play state={attackStateName} hash={stateHash} heldItem={hasHeldItem} fallback={usedFallbackState}"
+            : $"skip={failureReason} state={attackStateName} requireMotion={requireAttackMotion} heldItem={hasHeldItem} fallback={usedFallbackState}");
         return played;
+    }
+
+    private bool TryPlayAttackVisualState(
+        string stateName,
+        float crossFade,
+        float minTime,
+        float maxTime,
+        out int stateHash,
+        out string failureReason)
+    {
+        stateHash = 0;
+        if (string.IsNullOrWhiteSpace(stateName))
+        {
+            failureReason = "stateNameEmpty";
+            return false;
+        }
+
+        if (visualClipStateDriver == null)
+        {
+            failureReason = "clipStateDriverMissing";
+            return false;
+        }
+
+        return visualClipStateDriver.TryPlayOneShotState(
+            stateName,
+            crossFade,
+            minTime,
+            maxTime,
+            requireAttackMotion,
+            out stateHash,
+            out failureReason);
+    }
+
+    private bool HasHeldItemForAttack()
+    {
+        return itemAdapter != null && itemAdapter.HasHeldItem;
     }
 
     private AttackProfile BuildAttackProfile()
