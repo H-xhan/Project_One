@@ -533,10 +533,70 @@ MonoBehaviour:
   blockGlideDuringRecovery: 1
   blockGlideDuringLiquidSweep: 1
   blockGlideDuringSpinDashOrDizzy: 1
+  enableWallClimb: 1
+  allowWallClimbFromGround: 1
+  requireWallInputToStart: 1
+  wallClimbHoldKey: 119
+  wallMoveDownKey: 115
+  wallMoveLeftKey: 97
+  wallMoveRightKey: 100
+  wallJumpKey: 32
+  wallMask:
+    serializedVersion: 2
+    m_Bits: 4294967295
+  wallCheckDistance: 0.65
+  wallCheckRadius: 0.28
+  wallMinApproachDot: 0.35
+  wallMaxUpDot: 0.35
+  maxWallClimbDuration: 1.5
+  wallStickAcceleration: 10
+  wallClimbUpAcceleration: 12
+  wallMoveDownAcceleration: 7
+  wallMoveSideAcceleration: 8
+  wallSideMoveVerticalHoldAcceleration: 12
+  wallSideMoveMaxFallSpeed: 0.15
+  wallClingVerticalHoldAcceleration: 9.5
+  wallClingMaxFallSpeed: 0.35
+  wallSlideSlowAcceleration: 6
+  maxWallSlideFallSpeed: 2.5
+  useWallVerticalSpeedControl: 1
+  wallUpTargetVerticalSpeed: 2.2
+  wallDownTargetVerticalSpeed: -1.8
+  wallSideTargetVerticalSpeed: 0
+  wallIdleTargetVerticalSpeed: -0.05
+  wallVerticalSpeedControlGain: 12
+  wallVerticalGravityCompensation: 9.8
+  maxWallVerticalControlAcceleration: 35
+  useRigidbodyVerticalSpeedForWallControl: 1
+  useWallSideSpeedControl: 1
+  wallSideTargetSpeed: 2.2
+  wallSideSpeedControlGain: 14
+  maxWallSideControlAcceleration: 45
+  useRigidbodySideSpeedForWallControl: 1
+  wallJumpUpVelocityChange: 5.5
+  wallJumpAwayVelocityChange: 4.5
+  wallJumpCooldown: 0.25
+  glideDelayAfterWallJump: 0.18
+  wallMovementControlScale: 0.2
+  wallUprightControlScale: 0.4
+  requireForwardInputForWallClimb: 1
+  wallMoveInputDeadzone: 0.1
+  blockWallClimbDuringRecovery: 1
+  blockWallClimbDuringLiquidSweep: 1
+  blockWallClimbDuringSpinDashOrDizzy: 1
+  debugWallTraversalLogs: 0
   useGlideAnimation: 1
   glideAnimationStateName: Glide
   glideAnimationCrossFade: 0.08
-  debugTraversalLogs: 0
+  useWallAnimation: 1
+  wallClingStateName: WallCling
+  wallMoveUpStateName: WallMove_Up
+  wallMoveDownStateName: WallMove_Down
+  wallMoveLeftStateName: WallMove_Left
+  wallMoveRightStateName: WallMove_Right
+  wallAnimationCrossFade: 0.08
+  requireWallAnimationMotion: 1
+  debugTraversalLogs: 1
 --- !u!1 &1594514674284813732
 GameObject:
   m_ObjectHideFlags: 0
@@ -2284,7 +2344,7 @@ PrefabInstance:
       objectReference: {fileID: 0}
     - target: {fileID: 5866666021909216657, guid: 83fbe5706b3039349abb894620751b26, type: 3}
       propertyPath: m_Controller
-      value: 
+      value:
       objectReference: {fileID: 9100000, guid: 66dd25e0fb2ae0341bffb4dfe8046d62, type: 2}
     - target: {fileID: 5866666021909216657, guid: 83fbe5706b3039349abb894620751b26, type: 3}
       propertyPath: m_CullingMode

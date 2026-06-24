@@ -521,6 +521,23 @@ public sealed class HamsterVisualClipStateDriver : MonoBehaviour
             if (_externalSustainedStateReason == reason && _externalSustainedStateName == stateName)
                 return true;
 
+            if (_externalSustainedStateReason == reason)
+            {
+                if (!CanPlayOneShotState(stateName, requireStateMotion, out int replacementStateHash, out failureReason))
+                    return false;
+
+                visualAnimator.CrossFade(replacementStateHash, Mathf.Max(0f, crossFadeDuration), BaseLayerIndex, 0f);
+                _currentStateHash = replacementStateHash;
+                _currentStateName = stateName;
+                _stateTimer = 0f;
+                _externalSustainedStateHash = replacementStateHash;
+                _externalSustainedStateName = stateName;
+                _externalSustainedStateTimer = 0f;
+                _externalSustainedCrossFadeDuration = Mathf.Max(0f, crossFadeDuration);
+                ClearInteractionState();
+                return true;
+            }
+
             failureReason = $"sustained state active reason={_externalSustainedStateReason} state={_externalSustainedStateName}";
             return false;
         }

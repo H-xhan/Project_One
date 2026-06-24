@@ -7,12 +7,26 @@ public sealed class HamsterMotorShellTraversalAdapter : MonoBehaviour
     private const string MotorShellBodyName = "MotorShellBody";
     private const string PlayerCameraName = "PlayerCamera";
     private const string TraversalReason = "TraversalGlide";
+    private const string TraversalWallReason = "TraversalWall";
 
     private enum TraversalState
     {
         Normal,
+        WallContact,
+        WallClinging,
+        WallClimbing,
+        WallJumping,
         Gliding,
         Cooldown
+    }
+
+    private enum WallMoveDirection
+    {
+        None,
+        Up,
+        Down,
+        Left,
+        Right
     }
 
     [Header("References")]
@@ -43,10 +57,77 @@ public sealed class HamsterMotorShellTraversalAdapter : MonoBehaviour
     [SerializeField] private bool blockGlideDuringLiquidSweep = true;
     [SerializeField] private bool blockGlideDuringSpinDashOrDizzy = true;
 
+    [Header("Wall Climb")]
+    [SerializeField] private bool enableWallClimb = true;
+    [SerializeField] private bool allowWallClimbFromGround = true;
+    [SerializeField] private bool requireWallInputToStart = true;
+    [SerializeField] private KeyCode wallClimbHoldKey = KeyCode.W;
+    [SerializeField] private KeyCode wallMoveDownKey = KeyCode.S;
+    [SerializeField] private KeyCode wallMoveLeftKey = KeyCode.A;
+    [SerializeField] private KeyCode wallMoveRightKey = KeyCode.D;
+    [SerializeField] private KeyCode wallJumpKey = KeyCode.Space;
+    [SerializeField] private LayerMask wallMask = ~0;
+    [SerializeField] private float wallCheckDistance = 0.65f;
+    [SerializeField] private float wallCheckRadius = 0.28f;
+    [SerializeField] private float wallMinApproachDot = 0.35f;
+    [SerializeField] private float wallMaxUpDot = 0.35f;
+    [SerializeField] private float maxWallClimbDuration = 1.5f;
+    [SerializeField] private float wallStickAcceleration = 10f;
+    [SerializeField] private float wallClimbUpAcceleration = 12f;
+    [SerializeField] private float wallMoveDownAcceleration = 7f;
+    [SerializeField] private float wallMoveSideAcceleration = 8f;
+    [SerializeField] private float wallSideMoveVerticalHoldAcceleration = 12f;
+    [SerializeField] private float wallSideMoveMaxFallSpeed = 0.15f;
+    [SerializeField] private float wallClingVerticalHoldAcceleration = 9.5f;
+    [SerializeField] private float wallClingMaxFallSpeed = 0.35f;
+    [SerializeField] private float wallSlideSlowAcceleration = 6f;
+    [SerializeField] private float maxWallSlideFallSpeed = 2.5f;
+
+    [Header("Wall Vertical Speed Control")]
+    [SerializeField] private bool useWallVerticalSpeedControl = true;
+    [SerializeField] private float wallUpTargetVerticalSpeed = 2.2f;
+    [SerializeField] private float wallDownTargetVerticalSpeed = -1.8f;
+    [SerializeField] private float wallSideTargetVerticalSpeed = 0f;
+    [SerializeField] private float wallIdleTargetVerticalSpeed = -0.05f;
+    [SerializeField] private float wallVerticalSpeedControlGain = 12f;
+    [SerializeField] private float wallVerticalGravityCompensation = 9.8f;
+    [SerializeField] private float maxWallVerticalControlAcceleration = 35f;
+    [SerializeField] private bool useRigidbodyVerticalSpeedForWallControl = true;
+
+    [Header("Wall Side Speed Control")]
+    [SerializeField] private bool useWallSideSpeedControl = true;
+    [SerializeField] private float wallSideTargetSpeed = 2.2f;
+    [SerializeField] private float wallSideSpeedControlGain = 14f;
+    [SerializeField] private float maxWallSideControlAcceleration = 45f;
+    [SerializeField] private bool useRigidbodySideSpeedForWallControl = true;
+
+    [SerializeField] private float wallJumpUpVelocityChange = 5.5f;
+    [SerializeField] private float wallJumpAwayVelocityChange = 4.5f;
+    [SerializeField] private float wallJumpCooldown = 0.25f;
+    [SerializeField] private float glideDelayAfterWallJump = 0.18f;
+    [SerializeField] private float wallMovementControlScale = 0.2f;
+    [SerializeField] private float wallUprightControlScale = 0.4f;
+    [SerializeField] private bool requireForwardInputForWallClimb = true;
+    [SerializeField] private float wallMoveInputDeadzone = 0.1f;
+    [SerializeField] private bool blockWallClimbDuringRecovery = true;
+    [SerializeField] private bool blockWallClimbDuringLiquidSweep = true;
+    [SerializeField] private bool blockWallClimbDuringSpinDashOrDizzy = true;
+    [SerializeField] private bool debugWallTraversalLogs = false;
+
     [Header("Glide Animation")]
     [SerializeField] private bool useGlideAnimation = true;
     [SerializeField] private string glideAnimationStateName = "Glide";
     [SerializeField] private float glideAnimationCrossFade = 0.08f;
+
+    [Header("Wall Animation")]
+    [SerializeField] private bool useWallAnimation = true;
+    [SerializeField] private string wallClingStateName = "WallCling";
+    [SerializeField] private string wallMoveUpStateName = "WallMove_Up";
+    [SerializeField] private string wallMoveDownStateName = "WallMove_Down";
+    [SerializeField] private string wallMoveLeftStateName = "WallMove_Left";
+    [SerializeField] private string wallMoveRightStateName = "WallMove_Right";
+    [SerializeField] private float wallAnimationCrossFade = 0.08f;
+    [SerializeField] private bool requireWallAnimationMotion = true;
 
     [Header("Debug")]
     [SerializeField] private bool debugTraversalLogs = false;
@@ -54,14 +135,36 @@ public sealed class HamsterMotorShellTraversalAdapter : MonoBehaviour
     private Transform _targetRoot;
     private TraversalState _state;
     private float _lastGlideKeyDownTime = float.NegativeInfinity;
+    private float _lastWallJumpKeyDownTime = float.NegativeInfinity;
+    private float _lastWallJumpConsumedTime = float.NegativeInfinity;
     private float _glideStartedTime = float.NegativeInfinity;
+    private float _wallStartedTime = float.NegativeInfinity;
+    private float _wallJumpStartedTime = float.NegativeInfinity;
+    private float _glideBlockedUntil = float.NegativeInfinity;
     private float _cooldownUntil;
     private bool _legacyInputUnavailable;
     private bool _appliedMovementScale;
     private bool _appliedUprightScale;
+    private bool _appliedWallMovementScale;
+    private bool _appliedWallUprightScale;
+    private bool _appliedWallJumpLock;
     private bool _glideAnimationActive;
+    private bool _wallAnimationActive;
+    private string _currentWallAnimationStateName = string.Empty;
+    private Vector3 _currentWallNormal;
+    private Vector2 _lastWallMoveInput;
+    private WallMoveDirection _lastWallMoveDirection;
+    private readonly RaycastHit[] _wallHits = new RaycastHit[8];
 
     public bool IsGliding => _state == TraversalState.Gliding;
+    public bool IsWallClinging => _state == TraversalState.WallClinging;
+    public bool IsWallClimbing => _state == TraversalState.WallClimbing;
+    public bool IsWallJumping => _state == TraversalState.WallJumping;
+    public bool IsWallTraversing => _state == TraversalState.WallContact ||
+                                     _state == TraversalState.WallClinging ||
+                                     _state == TraversalState.WallClimbing ||
+                                     _state == TraversalState.WallJumping;
+    public Vector3 CurrentWallNormal => _currentWallNormal;
     public string CurrentTraversalStateName => _state.ToString();
 
     private void Awake()
@@ -77,11 +180,15 @@ public sealed class HamsterMotorShellTraversalAdapter : MonoBehaviour
     private void OnDisable()
     {
         EndGlide("OnDisable", false);
+        EndWallTraversal("OnDisable", false);
+        EndWallJump("OnDisable");
     }
 
     private void OnDestroy()
     {
         EndGlide("OnDestroy", false);
+        EndWallTraversal("OnDestroy", false);
+        EndWallJump("OnDestroy");
     }
 
     private void Update()
@@ -93,6 +200,7 @@ public sealed class HamsterMotorShellTraversalAdapter : MonoBehaviour
             CacheReferences();
 
         CaptureGlideKeyDown();
+        CaptureWallJumpKeyDown();
 
         if (_state == TraversalState.Cooldown && Time.time >= _cooldownUntil)
             _state = TraversalState.Normal;
@@ -100,12 +208,63 @@ public sealed class HamsterMotorShellTraversalAdapter : MonoBehaviour
         if (_state == TraversalState.Gliding)
         {
             if (ShouldEndGlide(out string endReason))
+            {
                 EndGlide(endReason, true);
+                return;
+            }
+
+            if (CanStartWallTraversal(out RaycastHit wallHit, out string wallBlockReason))
+            {
+                EndGlide("wall traversal", false);
+                BeginWallTraversal(wallHit);
+            }
+            else if (debugWallTraversalLogs && !string.IsNullOrEmpty(wallBlockReason))
+            {
+                WallLog($"start blocked reason={wallBlockReason}");
+            }
+
+            return;
+        }
+
+        if (IsWallClinging || IsWallClimbing || _state == TraversalState.WallContact)
+        {
+            if (ShouldBeginWallJump())
+            {
+                BeginWallJump();
+                return;
+            }
+
+            if (ShouldEndWallTraversal(out string wallEndReason))
+            {
+                EndWallTraversal(wallEndReason, false);
+                return;
+            }
+
+            UpdateWallTraversalAnimation();
+
+            return;
+        }
+
+        if (_state == TraversalState.WallJumping)
+        {
+            if (Time.time - _wallJumpStartedTime >= Mathf.Max(0f, wallJumpCooldown))
+                EndWallJump("wall jump cooldown");
+
             return;
         }
 
         if (_state == TraversalState.Normal)
         {
+            if (CanStartWallTraversal(out RaycastHit wallHit, out string wallBlockReason))
+            {
+                BeginWallTraversal(wallHit);
+                return;
+            }
+            else if (debugWallTraversalLogs && !string.IsNullOrEmpty(wallBlockReason))
+            {
+                WallLog($"start blocked reason={wallBlockReason}");
+            }
+
             if (CanStartGlide(out string startBlockReason))
             {
                 BeginGlide();
@@ -119,19 +278,34 @@ public sealed class HamsterMotorShellTraversalAdapter : MonoBehaviour
 
     private void FixedUpdate()
     {
-        if (!IsTargetRoot() || _state != TraversalState.Gliding)
+        if (!IsTargetRoot())
             return;
 
         if (autoFindReferences)
             CacheReferences();
 
-        if (ShouldEndGlide(out string endReason))
+        if (_state == TraversalState.Gliding)
         {
-            EndGlide(endReason, true);
+            if (ShouldEndGlide(out string endReason))
+            {
+                EndGlide(endReason, true);
+                return;
+            }
+
+            ApplyGlideForces();
             return;
         }
 
-        ApplyGlideForces();
+        if (IsWallClinging || IsWallClimbing || _state == TraversalState.WallContact)
+        {
+            if (ShouldEndWallTraversal(out string wallEndReason))
+            {
+                EndWallTraversal(wallEndReason, false);
+                return;
+            }
+
+            ApplyWallTraversalForces();
+        }
     }
 
     private void CacheReferences()
@@ -191,6 +365,26 @@ public sealed class HamsterMotorShellTraversalAdapter : MonoBehaviour
         }
     }
 
+    private void CaptureWallJumpKeyDown()
+    {
+        if (_legacyInputUnavailable || IsUiInputBlocked())
+            return;
+
+        try
+        {
+            if (Input.GetKeyDown(wallJumpKey))
+                _lastWallJumpKeyDownTime = Time.time;
+        }
+        catch (System.InvalidOperationException exception)
+        {
+            DisableLegacyInput(exception.Message);
+        }
+        catch (System.ArgumentException exception)
+        {
+            DisableLegacyInput(exception.Message);
+        }
+    }
+
     private bool CanStartGlide(out string blockReason)
     {
         blockReason = string.Empty;
@@ -218,6 +412,9 @@ public sealed class HamsterMotorShellTraversalAdapter : MonoBehaviour
 
         if (Time.time - _lastGlideKeyDownTime < Mathf.Max(0f, glideMinAirTimeAfterJump))
             return Block("min air time", out blockReason);
+
+        if (Time.time < _glideBlockedUntil)
+            return Block("glide delayed", out blockReason);
 
         if (requireFallingOrLowVerticalSpeed && motor.CurrentVerticalVelocity > maxVerticalSpeedToStartGlide)
             return Block("vertical speed too high", out blockReason);
@@ -309,6 +506,126 @@ public sealed class HamsterMotorShellTraversalAdapter : MonoBehaviour
         return false;
     }
 
+    private bool CanStartWallTraversal(out RaycastHit wallHit, out string blockReason)
+    {
+        wallHit = default(RaycastHit);
+        blockReason = string.Empty;
+
+        if (!enableWallClimb)
+            return Block("disabled", out blockReason);
+
+        if (_legacyInputUnavailable)
+            return Block("legacy input unavailable", out blockReason);
+
+        if (motor == null)
+            return Block("motor missing", out blockReason);
+
+        if (bodyRigidbody == null || bodyRigidbody.isKinematic)
+            return Block(bodyRigidbody == null ? "body missing" : "body kinematic", out blockReason);
+
+        if (motor.IsGrounded && !allowWallClimbFromGround)
+            return Block("grounded", out blockReason);
+
+        if (IsUiInputBlocked())
+            return Block("ui input blocked", out blockReason);
+
+        if ((requireWallInputToStart || requireForwardInputForWallClimb) &&
+            !TryReadWallMoveInput(out Vector2 startInput))
+        {
+            return Block("wall input missing", out blockReason);
+        }
+
+        if (IsWallBlockedByExternalState(out blockReason))
+            return false;
+
+        if (!TryFindWall(out wallHit, out blockReason))
+            return false;
+
+        return true;
+    }
+
+    private bool ShouldEndWallTraversal(out string reason)
+    {
+        reason = "none";
+
+        if (motor == null)
+        {
+            reason = "motor missing";
+            return true;
+        }
+
+        if (bodyRigidbody == null || bodyRigidbody.isKinematic)
+        {
+            reason = bodyRigidbody == null ? "body missing" : "body kinematic";
+            return true;
+        }
+
+        if (motor.IsGrounded && !allowWallClimbFromGround)
+        {
+            reason = "grounded";
+            return true;
+        }
+
+        if (maxWallClimbDuration > 0f && Time.time - _wallStartedTime >= maxWallClimbDuration)
+        {
+            reason = "max duration";
+            return true;
+        }
+
+        if (IsWallBlockedByExternalState(out reason))
+            return true;
+
+        if (!TryFindWall(out RaycastHit wallHit, out reason))
+            return true;
+
+        SetCurrentWall(wallHit);
+        return false;
+    }
+
+    private bool IsWallBlockedByExternalState(out string reason)
+    {
+        reason = string.Empty;
+
+        if (blockWallClimbDuringRecovery &&
+            recoveryAdapter != null &&
+            recoveryAdapter.CurrentRecoveryState != HamsterMotorShellRagdollRecoveryAdapter.RecoveryState.Normal)
+        {
+            reason = $"recovery {recoveryAdapter.CurrentRecoveryState}";
+            return true;
+        }
+
+        if (blockWallClimbDuringLiquidSweep && recoveryAdapter != null && recoveryAdapter.IsLiquidSwept)
+        {
+            reason = "liquid sweep";
+            return true;
+        }
+
+        if (blockWallClimbDuringSpinDashOrDizzy && spinDashAdapter != null && spinDashAdapter.IsDizzyActive)
+        {
+            reason = "dizzy";
+            return true;
+        }
+
+        if (blockWallClimbDuringRecovery &&
+            (IsBlockedExternalReason(motor != null ? motor.ExternalControlLockReason : null) ||
+             IsBlockedExternalReason(motor != null ? motor.ExternalJumpLockReason : null)))
+        {
+            reason = "external lock";
+            return true;
+        }
+
+        if (blockWallClimbDuringSpinDashOrDizzy &&
+            (IsBlockedExternalReason(motor != null ? motor.ExternalMovementControlReason : null) ||
+             IsBlockedExternalReason(motor != null ? motor.ExternalUprightControlReason : null) ||
+             IsBlockedExternalReason(motor != null ? motor.ExternalPoseControlReason : null)))
+        {
+            reason = "external scale";
+            return true;
+        }
+
+        return false;
+    }
+
     private void BeginGlide()
     {
         _state = TraversalState.Gliding;
@@ -362,14 +679,153 @@ public sealed class HamsterMotorShellTraversalAdapter : MonoBehaviour
             return;
         }
 
-        if (_appliedMovementScale && IsTraversalReason(motor.ExternalMovementControlReason))
+        if (_appliedMovementScale && IsGlideTraversalReason(motor.ExternalMovementControlReason))
             motor.SetExternalMovementControlScale(1f, "TraversalGlide:Restore");
 
-        if (_appliedUprightScale && IsTraversalReason(motor.ExternalUprightControlReason))
+        if (_appliedUprightScale && IsGlideTraversalReason(motor.ExternalUprightControlReason))
             motor.SetExternalUprightControlScale(1f, "TraversalGlide:Restore");
 
         _appliedMovementScale = false;
         _appliedUprightScale = false;
+    }
+
+    private void BeginWallTraversal(RaycastHit wallHit)
+    {
+        if (_state == TraversalState.Gliding)
+            EndGlide("wall traversal", false);
+
+        SetCurrentWall(wallHit);
+        _state = wallClimbUpAcceleration > 0f ? TraversalState.WallClimbing : TraversalState.WallClinging;
+        _wallStartedTime = Time.time;
+        ApplyWallMotorControl();
+        UpdateWallTraversalAnimation();
+        WallLog($"started normal={FormatVector3(_currentWallNormal)}");
+    }
+
+    private void EndWallTraversal(string reason, bool enterCooldown)
+    {
+        if (!IsWallClinging &&
+            !IsWallClimbing &&
+            _state != TraversalState.WallContact &&
+            !_appliedWallMovementScale &&
+            !_appliedWallUprightScale &&
+            !_appliedWallJumpLock)
+        {
+            return;
+        }
+
+        EndWallAnimation();
+        RestoreWallMotorControlIfOwned(true);
+        ClearWallState();
+
+        if (enterCooldown && wallJumpCooldown > 0f)
+        {
+            _state = TraversalState.Cooldown;
+            _cooldownUntil = Time.time + Mathf.Max(0f, wallJumpCooldown);
+        }
+        else
+        {
+            _state = TraversalState.Normal;
+        }
+
+        WallLog($"ended reason={reason} cooldown={enterCooldown}");
+    }
+
+    private bool ShouldBeginWallJump()
+    {
+        if (_legacyInputUnavailable || bodyRigidbody == null || bodyRigidbody.isKinematic)
+            return false;
+
+        return _lastWallJumpKeyDownTime > _wallStartedTime &&
+               _lastWallJumpKeyDownTime > _lastWallJumpConsumedTime;
+    }
+
+    private void BeginWallJump()
+    {
+        Vector3 wallNormal = TryNormalizePlanar(_currentWallNormal, out Vector3 planarNormal)
+            ? planarNormal
+            : _currentWallNormal;
+
+        if (!IsFiniteVector(wallNormal) || wallNormal.sqrMagnitude <= 0.0001f)
+            wallNormal = bodyTransform != null ? -bodyTransform.forward : Vector3.back;
+
+        wallNormal = wallNormal.normalized;
+        _lastWallJumpConsumedTime = _lastWallJumpKeyDownTime;
+        _wallJumpStartedTime = Time.time;
+        _glideBlockedUntil = Time.time + Mathf.Max(0f, glideDelayAfterWallJump);
+
+        EndWallAnimation();
+        RestoreWallMotorControlIfOwned(false);
+        ApplyWallJumpLock();
+        ClearWallState();
+        _state = TraversalState.WallJumping;
+
+        Vector3 wallJumpForce =
+            Vector3.up * Mathf.Max(0f, wallJumpUpVelocityChange) +
+            wallNormal * Mathf.Max(0f, wallJumpAwayVelocityChange);
+
+        if (bodyRigidbody != null && !bodyRigidbody.isKinematic && IsFiniteVector(wallJumpForce))
+            bodyRigidbody.AddForce(wallJumpForce, ForceMode.VelocityChange);
+
+        WallLog($"wall jump normal={FormatVector3(wallNormal)} force={FormatVector3(wallJumpForce)}");
+    }
+
+    private void EndWallJump(string reason)
+    {
+        if (_state != TraversalState.WallJumping && !_appliedWallJumpLock)
+            return;
+
+        RestoreWallMotorControlIfOwned(true);
+        _wallJumpStartedTime = float.NegativeInfinity;
+        _state = TraversalState.Normal;
+        WallLog($"wall jump ended reason={reason}");
+    }
+
+    private void ApplyWallMotorControl()
+    {
+        if (motor == null)
+            return;
+
+        motor.SetExternalMovementControlScale(Mathf.Clamp01(wallMovementControlScale), TraversalWallReason);
+        motor.SetExternalUprightControlScale(Mathf.Clamp01(wallUprightControlScale), TraversalWallReason);
+        ApplyWallJumpLock();
+        _appliedWallMovementScale = true;
+        _appliedWallUprightScale = true;
+    }
+
+    private void ApplyWallJumpLock()
+    {
+        if (motor == null)
+            return;
+
+        motor.SetExternalJumpLock(true, TraversalWallReason);
+        _appliedWallJumpLock = true;
+    }
+
+    private void RestoreWallMotorControlIfOwned(bool restoreJumpLock)
+    {
+        if (motor == null)
+        {
+            _appliedWallMovementScale = false;
+            _appliedWallUprightScale = false;
+            if (restoreJumpLock)
+                _appliedWallJumpLock = false;
+            return;
+        }
+
+        if (_appliedWallMovementScale && IsWallTraversalReason(motor.ExternalMovementControlReason))
+            motor.SetExternalMovementControlScale(1f, "TraversalWall:Restore");
+
+        if (_appliedWallUprightScale && IsWallTraversalReason(motor.ExternalUprightControlReason))
+            motor.SetExternalUprightControlScale(1f, "TraversalWall:Restore");
+
+        if (restoreJumpLock && _appliedWallJumpLock && IsWallTraversalReason(motor.ExternalJumpLockReason))
+            motor.SetExternalJumpLock(false, "TraversalWall:Restore");
+
+        _appliedWallMovementScale = false;
+        _appliedWallUprightScale = false;
+        if (restoreJumpLock)
+            _appliedWallJumpLock = false;
     }
 
     private void ApplyGlideForces()
@@ -386,6 +842,141 @@ public sealed class HamsterMotorShellTraversalAdapter : MonoBehaviour
 
         if (TryGetGlideForward(out Vector3 forward))
             bodyRigidbody.AddForce(forward * Mathf.Max(0f, glideForwardAcceleration), ForceMode.Acceleration);
+    }
+
+    private void ApplyWallTraversalForces()
+    {
+        if (bodyRigidbody == null || bodyRigidbody.isKinematic || !TryNormalizePlanar(_currentWallNormal, out Vector3 wallNormal))
+            return;
+
+        bool hasWallMoveInput = TryReadWallMoveInput(out Vector2 wallMoveInput);
+        _lastWallMoveInput = wallMoveInput;
+        _lastWallMoveDirection = SelectWallMoveDirection(wallMoveInput);
+        _state = hasWallMoveInput ? TraversalState.WallClimbing : TraversalState.WallClinging;
+
+        Vector3 intoWall = -wallNormal;
+        if (wallStickAcceleration > 0f)
+            bodyRigidbody.AddForce(intoWall * Mathf.Max(0f, wallStickAcceleration), ForceMode.Acceleration);
+
+        if (hasWallMoveInput && TryGetWallRight(wallNormal, out Vector3 wallRight))
+        {
+            Vector3 moveForce = Vector3.zero;
+            if (wallMoveInput.x != 0f && !useWallSideSpeedControl)
+                moveForce += wallRight * (wallMoveInput.x * Mathf.Max(0f, wallMoveSideAcceleration));
+
+            if (wallMoveInput.x != 0f && useWallSideSpeedControl)
+                ApplyWallSideSpeedControl(wallMoveInput.x, wallRight);
+
+            if (!useWallVerticalSpeedControl)
+            {
+                if (wallMoveInput.y > 0f)
+                    moveForce += Vector3.up * (wallMoveInput.y * Mathf.Max(0f, wallClimbUpAcceleration));
+                else if (wallMoveInput.y < 0f)
+                    moveForce += Vector3.down * (-wallMoveInput.y * Mathf.Max(0f, wallMoveDownAcceleration));
+            }
+
+            if (IsFiniteVector(moveForce) && moveForce.sqrMagnitude > 0.0001f)
+                bodyRigidbody.AddForce(moveForce, ForceMode.Acceleration);
+        }
+
+        float verticalVelocity = GetWallControlVerticalSpeed();
+        if (useWallVerticalSpeedControl)
+            ApplyWallVerticalSpeedControl(wallMoveInput, verticalVelocity);
+        else
+            ApplyWallVerticalHold(wallMoveInput, verticalVelocity);
+
+        if (verticalVelocity < -Mathf.Max(0.01f, maxWallSlideFallSpeed) && wallSlideSlowAcceleration > 0f)
+            bodyRigidbody.AddForce(Vector3.up * Mathf.Max(0f, wallSlideSlowAcceleration), ForceMode.Acceleration);
+    }
+
+    private float GetWallControlVerticalSpeed()
+    {
+        if (useRigidbodyVerticalSpeedForWallControl && bodyRigidbody != null)
+            return bodyRigidbody.linearVelocity.y;
+
+        return motor != null ? motor.CurrentVerticalVelocity : (bodyRigidbody != null ? bodyRigidbody.linearVelocity.y : 0f);
+    }
+
+    private void ApplyWallVerticalSpeedControl(Vector2 wallMoveInput, float verticalVelocity)
+    {
+        float targetVerticalSpeed = SelectWallTargetVerticalSpeed(wallMoveInput);
+        float speedError = targetVerticalSpeed - verticalVelocity;
+        float acceleration = speedError * Mathf.Max(0f, wallVerticalSpeedControlGain) + wallVerticalGravityCompensation;
+        acceleration = Mathf.Clamp(
+            acceleration,
+            -Mathf.Max(0f, maxWallVerticalControlAcceleration),
+            Mathf.Max(0f, maxWallVerticalControlAcceleration));
+
+        if (Mathf.Abs(acceleration) > 0.001f)
+            bodyRigidbody.AddForce(Vector3.up * acceleration, ForceMode.Acceleration);
+    }
+
+    private float SelectWallTargetVerticalSpeed(Vector2 wallMoveInput)
+    {
+        if (wallMoveInput.y > wallMoveInputDeadzone)
+            return wallUpTargetVerticalSpeed;
+
+        if (wallMoveInput.y < -wallMoveInputDeadzone)
+            return wallDownTargetVerticalSpeed;
+
+        if (Mathf.Abs(wallMoveInput.x) > wallMoveInputDeadzone)
+            return wallSideTargetVerticalSpeed;
+
+        return wallIdleTargetVerticalSpeed;
+    }
+
+    private void ApplyWallSideSpeedControl(float sideInput, Vector3 wallRight)
+    {
+        float targetSideSpeed = Mathf.Clamp(sideInput, -1f, 1f) * Mathf.Max(0f, wallSideTargetSpeed);
+        float currentSideSpeed = GetWallControlSideSpeed(wallRight);
+        float speedError = targetSideSpeed - currentSideSpeed;
+        float acceleration = speedError * Mathf.Max(0f, wallSideSpeedControlGain);
+        acceleration = Mathf.Clamp(
+            acceleration,
+            -Mathf.Max(0f, maxWallSideControlAcceleration),
+            Mathf.Max(0f, maxWallSideControlAcceleration));
+
+        if (Mathf.Abs(acceleration) > 0.001f)
+            bodyRigidbody.AddForce(wallRight * acceleration, ForceMode.Acceleration);
+    }
+
+    private float GetWallControlSideSpeed(Vector3 wallRight)
+    {
+        if (bodyRigidbody != null && useRigidbodySideSpeedForWallControl)
+            return Vector3.Dot(bodyRigidbody.linearVelocity, wallRight);
+
+        if (motor != null)
+            return Vector3.Dot(motor.CurrentPlanarVelocity, wallRight);
+
+        return bodyRigidbody != null ? Vector3.Dot(bodyRigidbody.linearVelocity, wallRight) : 0f;
+    }
+
+    private void ApplyWallVerticalHold(Vector2 wallMoveInput, float verticalVelocity)
+    {
+        if (wallMoveInput.y < -wallMoveInputDeadzone)
+            return;
+
+        bool horizontalOnly = Mathf.Abs(wallMoveInput.x) > wallMoveInputDeadzone &&
+                              Mathf.Abs(wallMoveInput.y) <= wallMoveInputDeadzone;
+        bool noMoveInput = wallMoveInput.sqrMagnitude <= wallMoveInputDeadzone * wallMoveInputDeadzone;
+
+        if (horizontalOnly)
+        {
+            ApplyWallFallLimit(verticalVelocity, wallSideMoveMaxFallSpeed, wallSideMoveVerticalHoldAcceleration);
+            return;
+        }
+
+        if (noMoveInput)
+            ApplyWallFallLimit(verticalVelocity, wallClingMaxFallSpeed, wallClingVerticalHoldAcceleration);
+    }
+
+    private void ApplyWallFallLimit(float verticalVelocity, float maxFallSpeed, float holdAcceleration)
+    {
+        if (holdAcceleration <= 0f)
+            return;
+
+        if (verticalVelocity < -Mathf.Max(0.01f, maxFallSpeed))
+            bodyRigidbody.AddForce(Vector3.up * Mathf.Max(0f, holdAcceleration), ForceMode.Acceleration);
     }
 
     private void TryBeginGlideAnimation()
@@ -419,6 +1010,79 @@ public sealed class HamsterMotorShellTraversalAdapter : MonoBehaviour
         _glideAnimationActive = false;
     }
 
+    private void UpdateWallTraversalAnimation()
+    {
+        if (!useWallAnimation || visualClipStateDriver == null)
+            return;
+
+        TryReadWallMoveInput(out Vector2 wallMoveInput);
+        _lastWallMoveInput = wallMoveInput;
+        _lastWallMoveDirection = SelectWallMoveDirection(wallMoveInput);
+        if (_state == TraversalState.WallContact || IsWallClinging || IsWallClimbing)
+            _state = _lastWallMoveDirection == WallMoveDirection.None
+                ? TraversalState.WallClinging
+                : TraversalState.WallClimbing;
+
+        string stateName = GetWallAnimationStateName(_lastWallMoveDirection);
+        if (string.IsNullOrWhiteSpace(stateName))
+        {
+            EndWallAnimation();
+            return;
+        }
+
+        if (_wallAnimationActive &&
+            _currentWallAnimationStateName == stateName &&
+            visualClipStateDriver.IsExternalSustainedStateActive(TraversalWallReason))
+        {
+            return;
+        }
+
+        if (visualClipStateDriver.TryBeginExternalSustainedState(
+                TraversalWallReason,
+                stateName,
+                wallAnimationCrossFade,
+                requireWallAnimationMotion,
+                out string failureReason))
+        {
+            _wallAnimationActive = true;
+            _currentWallAnimationStateName = stateName;
+            return;
+        }
+
+        WallLog($"animation skipped state={stateName} reason={failureReason}");
+    }
+
+    private string GetWallAnimationStateName(WallMoveDirection direction)
+    {
+        switch (direction)
+        {
+            case WallMoveDirection.Up:
+                return wallMoveUpStateName;
+            case WallMoveDirection.Down:
+                return wallMoveDownStateName;
+            case WallMoveDirection.Left:
+                return wallMoveLeftStateName;
+            case WallMoveDirection.Right:
+                return wallMoveRightStateName;
+            default:
+                return wallClingStateName;
+        }
+    }
+
+    private void EndWallAnimation()
+    {
+        if (!_wallAnimationActive || visualClipStateDriver == null)
+        {
+            _wallAnimationActive = false;
+            _currentWallAnimationStateName = string.Empty;
+            return;
+        }
+
+        visualClipStateDriver.EndExternalSustainedState(TraversalWallReason);
+        _wallAnimationActive = false;
+        _currentWallAnimationStateName = string.Empty;
+    }
+
     private bool ReadGlideHeld()
     {
         if (_legacyInputUnavailable)
@@ -440,6 +1104,71 @@ public sealed class HamsterMotorShellTraversalAdapter : MonoBehaviour
         return false;
     }
 
+    private bool ReadWallClimbHeld()
+    {
+        if (_legacyInputUnavailable)
+            return false;
+
+        try
+        {
+            return Input.GetKey(wallClimbHoldKey);
+        }
+        catch (System.InvalidOperationException exception)
+        {
+            DisableLegacyInput(exception.Message);
+        }
+        catch (System.ArgumentException exception)
+        {
+            DisableLegacyInput(exception.Message);
+        }
+
+        return false;
+    }
+
+    private bool TryReadWallMoveInput(out Vector2 input)
+    {
+        input = Vector2.zero;
+
+        if (_legacyInputUnavailable)
+            return false;
+
+        try
+        {
+            if (Input.GetKey(wallMoveLeftKey))
+                input.x -= 1f;
+
+            if (Input.GetKey(wallMoveRightKey))
+                input.x += 1f;
+
+            if (Input.GetKey(wallClimbHoldKey))
+                input.y += 1f;
+
+            if (Input.GetKey(wallMoveDownKey))
+                input.y -= 1f;
+        }
+        catch (System.InvalidOperationException exception)
+        {
+            DisableLegacyInput(exception.Message);
+            input = Vector2.zero;
+            return false;
+        }
+        catch (System.ArgumentException exception)
+        {
+            DisableLegacyInput(exception.Message);
+            input = Vector2.zero;
+            return false;
+        }
+
+        if (input.sqrMagnitude <= wallMoveInputDeadzone * wallMoveInputDeadzone)
+        {
+            input = Vector2.zero;
+            return false;
+        }
+
+        input = Vector2.ClampMagnitude(input, 1f);
+        return true;
+    }
+
     private bool TryGetGlideForward(out Vector3 forward)
     {
         if (motor != null && TryNormalizePlanar(motor.SmoothedMoveWorldDirection, out forward))
@@ -453,6 +1182,156 @@ public sealed class HamsterMotorShellTraversalAdapter : MonoBehaviour
 
         forward = Vector3.zero;
         return false;
+    }
+
+    private bool TryFindWall(out RaycastHit wallHit, out string failureReason)
+    {
+        wallHit = default;
+        failureReason = string.Empty;
+
+        if (!TryGetWallCheckDirection(out Vector3 checkDirection))
+            return Block("wall direction missing", out failureReason);
+
+        Vector3 origin = bodyRigidbody != null
+            ? bodyRigidbody.worldCenterOfMass
+            : (bodyTransform != null ? bodyTransform.position : transform.position);
+
+        int hitCount = Physics.SphereCastNonAlloc(
+            origin,
+            Mathf.Max(0.01f, wallCheckRadius),
+            checkDirection,
+            _wallHits,
+            Mathf.Max(0.01f, wallCheckDistance),
+            wallMask,
+            QueryTriggerInteraction.Ignore);
+
+        if (hitCount <= 0)
+            return Block("wall missing", out failureReason);
+
+        float bestDistance = float.PositiveInfinity;
+        bool rejectedSelf = false;
+        bool rejectedSlope = false;
+        bool rejectedApproach = false;
+
+        for (int i = 0; i < hitCount; i++)
+        {
+            RaycastHit hit = _wallHits[i];
+            if (hit.collider == null)
+                continue;
+
+            if (IsOwnCollider(hit.collider))
+            {
+                rejectedSelf = true;
+                continue;
+            }
+
+            if (!IsFiniteVector(hit.normal) || hit.normal.sqrMagnitude <= 0.0001f)
+                continue;
+
+            Vector3 hitNormal = hit.normal.normalized;
+            float upDot = Mathf.Abs(Vector3.Dot(hitNormal, Vector3.up));
+            if (upDot > Mathf.Clamp01(wallMaxUpDot))
+            {
+                rejectedSlope = true;
+                continue;
+            }
+
+            float approachDot = Vector3.Dot(checkDirection, -hitNormal);
+            if (approachDot < wallMinApproachDot)
+            {
+                rejectedApproach = true;
+                continue;
+            }
+
+            if (hit.distance < bestDistance)
+            {
+                bestDistance = hit.distance;
+                wallHit = hit;
+            }
+        }
+
+        if (wallHit.collider != null)
+            return true;
+
+        if (rejectedSelf)
+            return Block("own collider", out failureReason);
+
+        if (rejectedSlope)
+            return Block("wall slope rejected", out failureReason);
+
+        if (rejectedApproach)
+            return Block("approach dot rejected", out failureReason);
+
+        return Block("wall rejected", out failureReason);
+    }
+
+    private bool TryGetWallCheckDirection(out Vector3 direction)
+    {
+        if (TryNormalizePlanar(-_currentWallNormal, out direction))
+            return true;
+
+        if (motor != null && TryNormalizePlanar(motor.DesiredFacingDirection, out direction))
+            return true;
+
+        if (bodyTransform != null && TryNormalizePlanar(bodyTransform.forward, out direction))
+            return true;
+
+        if (ownerCamera != null && TryNormalizePlanar(ownerCamera.transform.forward, out direction))
+            return true;
+
+        if (motor != null && TryNormalizePlanar(motor.SmoothedMoveWorldDirection, out direction))
+            return true;
+
+        direction = Vector3.zero;
+        return false;
+    }
+
+    private static bool TryGetWallRight(Vector3 wallNormal, out Vector3 wallRight)
+    {
+        wallRight = Vector3.Cross(wallNormal, Vector3.up);
+        if (!IsFiniteVector(wallRight) || wallRight.sqrMagnitude <= 0.0001f)
+        {
+            wallRight = Vector3.zero;
+            return false;
+        }
+
+        wallRight.Normalize();
+        return true;
+    }
+
+    private WallMoveDirection SelectWallMoveDirection(Vector2 input)
+    {
+        if (input.sqrMagnitude <= wallMoveInputDeadzone * wallMoveInputDeadzone)
+            return WallMoveDirection.None;
+
+        if (Mathf.Abs(input.y) >= Mathf.Abs(input.x))
+            return input.y >= 0f ? WallMoveDirection.Up : WallMoveDirection.Down;
+
+        return input.x >= 0f ? WallMoveDirection.Right : WallMoveDirection.Left;
+    }
+
+    private void SetCurrentWall(RaycastHit wallHit)
+    {
+        _currentWallNormal = IsFiniteVector(wallHit.normal) && wallHit.normal.sqrMagnitude > 0.0001f
+            ? wallHit.normal.normalized
+            : Vector3.zero;
+    }
+
+    private void ClearWallState()
+    {
+        _currentWallNormal = Vector3.zero;
+        _lastWallMoveInput = Vector2.zero;
+        _lastWallMoveDirection = WallMoveDirection.None;
+        _wallStartedTime = float.NegativeInfinity;
+    }
+
+    private bool IsOwnCollider(Collider wallCollider)
+    {
+        if (wallCollider == null || _targetRoot == null)
+            return false;
+
+        Transform hitTransform = wallCollider.transform;
+        return hitTransform == _targetRoot || hitTransform.IsChildOf(_targetRoot);
     }
 
     private bool IsTargetRoot()
@@ -479,7 +1358,17 @@ public sealed class HamsterMotorShellTraversalAdapter : MonoBehaviour
 
     private static bool IsTraversalReason(string reason)
     {
+        return IsGlideTraversalReason(reason) || IsWallTraversalReason(reason);
+    }
+
+    private static bool IsGlideTraversalReason(string reason)
+    {
         return reason == TraversalReason || reason == "TraversalGlide:Restore";
+    }
+
+    private static bool IsWallTraversalReason(string reason)
+    {
+        return reason == TraversalWallReason || reason == "TraversalWall:Restore";
     }
 
     private static bool TryNormalizePlanar(Vector3 value, out Vector3 normalized)
@@ -546,6 +1435,19 @@ public sealed class HamsterMotorShellTraversalAdapter : MonoBehaviour
         Debug.Log($"[MSTraversal:{name}] state={_state} {message}", this);
     }
 
+    private void WallLog(string message)
+    {
+        if (!debugWallTraversalLogs)
+            return;
+
+        Debug.Log($"[MSTraversalWall:{name}] state={_state} {message}", this);
+    }
+
+    private static string FormatVector3(Vector3 value)
+    {
+        return $"({value.x:F2},{value.y:F2},{value.z:F2})";
+    }
+
     private void OnValidate()
     {
         glideMinAirTimeAfterJump = Mathf.Max(0f, glideMinAirTimeAfterJump);
@@ -558,5 +1460,38 @@ public sealed class HamsterMotorShellTraversalAdapter : MonoBehaviour
         glideUprightControlScale = Mathf.Clamp01(glideUprightControlScale);
         maxVerticalSpeedToStartGlide = Mathf.Max(0f, maxVerticalSpeedToStartGlide);
         glideAnimationCrossFade = Mathf.Max(0f, glideAnimationCrossFade);
+        wallCheckDistance = Mathf.Max(0.01f, wallCheckDistance);
+        wallCheckRadius = Mathf.Max(0.01f, wallCheckRadius);
+        wallMinApproachDot = Mathf.Clamp(wallMinApproachDot, -1f, 1f);
+        wallMaxUpDot = Mathf.Clamp01(wallMaxUpDot);
+        maxWallClimbDuration = Mathf.Max(0f, maxWallClimbDuration);
+        wallStickAcceleration = Mathf.Max(0f, wallStickAcceleration);
+        wallClimbUpAcceleration = Mathf.Max(0f, wallClimbUpAcceleration);
+        wallMoveDownAcceleration = Mathf.Max(0f, wallMoveDownAcceleration);
+        wallMoveSideAcceleration = Mathf.Max(0f, wallMoveSideAcceleration);
+        wallSideMoveVerticalHoldAcceleration = Mathf.Max(0f, wallSideMoveVerticalHoldAcceleration);
+        wallSideMoveMaxFallSpeed = Mathf.Max(0f, wallSideMoveMaxFallSpeed);
+        wallClingVerticalHoldAcceleration = Mathf.Max(0f, wallClingVerticalHoldAcceleration);
+        wallClingMaxFallSpeed = Mathf.Max(0f, wallClingMaxFallSpeed);
+        wallSlideSlowAcceleration = Mathf.Max(0f, wallSlideSlowAcceleration);
+        maxWallSlideFallSpeed = Mathf.Max(0.01f, maxWallSlideFallSpeed);
+        maxWallVerticalControlAcceleration = Mathf.Max(0f, maxWallVerticalControlAcceleration);
+        wallVerticalSpeedControlGain = Mathf.Max(0f, wallVerticalSpeedControlGain);
+        wallVerticalGravityCompensation = Mathf.Max(0f, wallVerticalGravityCompensation);
+        wallUpTargetVerticalSpeed = Mathf.Max(0f, wallUpTargetVerticalSpeed);
+        wallDownTargetVerticalSpeed = Mathf.Min(0f, wallDownTargetVerticalSpeed);
+        wallSideTargetVerticalSpeed = Mathf.Max(0f, wallSideTargetVerticalSpeed);
+        wallIdleTargetVerticalSpeed = Mathf.Min(0f, wallIdleTargetVerticalSpeed);
+        wallSideTargetSpeed = Mathf.Max(0f, wallSideTargetSpeed);
+        wallSideSpeedControlGain = Mathf.Max(0f, wallSideSpeedControlGain);
+        maxWallSideControlAcceleration = Mathf.Max(0f, maxWallSideControlAcceleration);
+        wallJumpUpVelocityChange = Mathf.Max(0f, wallJumpUpVelocityChange);
+        wallJumpAwayVelocityChange = Mathf.Max(0f, wallJumpAwayVelocityChange);
+        wallJumpCooldown = Mathf.Max(0f, wallJumpCooldown);
+        glideDelayAfterWallJump = Mathf.Max(0f, glideDelayAfterWallJump);
+        wallMovementControlScale = Mathf.Clamp01(wallMovementControlScale);
+        wallUprightControlScale = Mathf.Clamp01(wallUprightControlScale);
+        wallMoveInputDeadzone = Mathf.Max(0f, wallMoveInputDeadzone);
+        wallAnimationCrossFade = Mathf.Max(0f, wallAnimationCrossFade);
     }
 }
