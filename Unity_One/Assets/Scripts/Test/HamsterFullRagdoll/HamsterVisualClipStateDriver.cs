@@ -404,6 +404,29 @@ public sealed class HamsterVisualClipStateDriver : MonoBehaviour
         out int stateHash,
         out string failureReason)
     {
+        if (!CanPlayOneShotState(stateName, requireStateMotion, out stateHash, out failureReason))
+            return false;
+
+        visualAnimator.CrossFade(stateHash, Mathf.Max(0f, crossFadeDuration), BaseLayerIndex, 0f);
+        _currentStateHash = stateHash;
+        _currentStateName = stateName;
+        _stateTimer = 0f;
+        _externalOneShotActive = true;
+        _externalOneShotStateHash = stateHash;
+        _externalOneShotStateName = stateName;
+        _externalOneShotTimer = 0f;
+        _externalOneShotMinTime = Mathf.Max(0f, minTime);
+        _externalOneShotMaxTime = Mathf.Max(_externalOneShotMinTime, maxTime);
+        ClearInteractionState();
+        return true;
+    }
+
+    public bool CanPlayOneShotState(
+        string stateName,
+        bool requireStateMotion,
+        out int stateHash,
+        out string failureReason)
+    {
         stateHash = 0;
         failureReason = "none";
 
@@ -437,17 +460,6 @@ public sealed class HamsterVisualClipStateDriver : MonoBehaviour
             return false;
         }
 
-        visualAnimator.CrossFade(stateHash, Mathf.Max(0f, crossFadeDuration), BaseLayerIndex, 0f);
-        _currentStateHash = stateHash;
-        _currentStateName = stateName;
-        _stateTimer = 0f;
-        _externalOneShotActive = true;
-        _externalOneShotStateHash = stateHash;
-        _externalOneShotStateName = stateName;
-        _externalOneShotTimer = 0f;
-        _externalOneShotMinTime = Mathf.Max(0f, minTime);
-        _externalOneShotMaxTime = Mathf.Max(_externalOneShotMinTime, maxTime);
-        ClearInteractionState();
         return true;
     }
 

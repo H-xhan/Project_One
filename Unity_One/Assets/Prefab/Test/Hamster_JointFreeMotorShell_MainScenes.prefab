@@ -345,7 +345,14 @@ MonoBehaviour:
   alignBodyUprightOnGetUpStart: 1
   alignBodyUprightOnGetUpFinish: 1
   resetBodyLocalPositionOnGetUp: 1
-  getUpStateName: GetUp
+  getUpStateName: Legacy_GetUp_DISABLED
+  useImpactDirectionForGetUp: 1
+  getUpFrontStateName: GetUp_Front
+  getUpBackStateName: GetUp_Back
+  impactDirectionDotThreshold: 0.3
+  invertImpactFrontBack: 0
+  fallbackToAnchorOnlyWhenAmbiguous: 1
+  fallbackToAnchorOnlyWhenNoDirection: 1
   driveGetUpStateOnlyWhenMotionAssigned: 1
   getUpCrossFadeDuration: 0.08
   minGetUpStateTime: 0.4
@@ -362,6 +369,8 @@ MonoBehaviour:
   getUpPoseScale: 0
   blendOutJumpUnlockAtEnd: 1
   returnToLocomotionAfterGetUp: 1
+  debugImpactGetUpLogs: 0
+  debugGetUpPlayLogs: 0
   debugGetUpLogs: 0
   debugRecoveryLogs: 0
   debugLogInterval: 0.5

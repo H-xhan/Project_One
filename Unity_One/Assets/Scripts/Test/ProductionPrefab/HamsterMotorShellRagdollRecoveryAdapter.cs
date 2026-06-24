@@ -19,6 +19,13 @@ public sealed class HamsterMotorShellRagdollRecoveryAdapter : MonoBehaviour
         LiquidSwept
     }
 
+    private enum DirectionalGetUpMode
+    {
+        AnchorOnly,
+        Front,
+        Back
+    }
+
     [Header("References")]
     [SerializeField] private HamsterFullRagdollMotor motor;
     [SerializeField] private Rigidbody bodyRigidbody;
@@ -84,7 +91,14 @@ public sealed class HamsterMotorShellRagdollRecoveryAdapter : MonoBehaviour
     [SerializeField] private bool alignBodyUprightOnGetUpStart = true;
     [SerializeField] private bool alignBodyUprightOnGetUpFinish = true;
     [SerializeField] private bool resetBodyLocalPositionOnGetUp = true;
-    [SerializeField] private string getUpStateName = "GetUp";
+    [SerializeField] private string getUpStateName = "Legacy_GetUp_DISABLED";
+    [SerializeField] private bool useImpactDirectionForGetUp = true;
+    [SerializeField] private string getUpFrontStateName = "GetUp_Front";
+    [SerializeField] private string getUpBackStateName = "GetUp_Back";
+    [SerializeField] private float impactDirectionDotThreshold = 0.3f;
+    [SerializeField] private bool invertImpactFrontBack = false;
+    [SerializeField] private bool fallbackToAnchorOnlyWhenAmbiguous = true;
+    [SerializeField] private bool fallbackToAnchorOnlyWhenNoDirection = true;
     [SerializeField] private bool driveGetUpStateOnlyWhenMotionAssigned = true;
     [SerializeField] private float getUpCrossFadeDuration = 0.08f;
     [SerializeField] private float minGetUpStateTime = 0.4f;
@@ -101,6 +115,8 @@ public sealed class HamsterMotorShellRagdollRecoveryAdapter : MonoBehaviour
     [SerializeField] private float getUpPoseScale = 0f;
     [SerializeField] private bool blendOutJumpUnlockAtEnd = true;
     [SerializeField] private bool returnToLocomotionAfterGetUp = true;
+    [SerializeField] private bool debugImpactGetUpLogs = false;
+    [SerializeField] private bool debugGetUpPlayLogs = false;
     [SerializeField] private bool debugGetUpLogs = false;
 
     [Header("Debug")]
@@ -130,6 +146,11 @@ public sealed class HamsterMotorShellRagdollRecoveryAdapter : MonoBehaviour
     private bool _getUpAnimationActive;
     private int _getUpStateHash;
     private float _getUpStateTimer;
+    private Vector3 _lastImpactPlanarDirection;
+    private Vector3 _preImpactFacingForward;
+    private bool _hasLastImpactPlanarDirection;
+    private bool _hasPreImpactFacingForward;
+    private string _activeGetUpStateName;
 
     public RecoveryState CurrentRecoveryState => _state;
     public bool IsKnockedOrRecovering => _state == RecoveryState.Impacted ||
@@ -287,11 +308,13 @@ public sealed class HamsterMotorShellRagdollRecoveryAdapter : MonoBehaviour
         float duration = overrideKnockdownDuration > 0f ? overrideKnockdownDuration : knockdownDuration;
         if (shouldKnockdown)
         {
+            CaptureImpactGetUpContext(safeImpulse);
             BeginImpactStateBeforeImpulse(source, duration);
             releasedConstraints = bodyRigidbody.constraints;
         }
         else
         {
+            ClearImpactGetUpContext("ImpactNoKnockdown");
             bodyRigidbody.WakeUp();
         }
 
@@ -323,6 +346,7 @@ public sealed class HamsterMotorShellRagdollRecoveryAdapter : MonoBehaviour
         _activeLiquidSweepDuration = Mathf.Max(0.01f, duration > 0f ? duration : liquidSweepDuration);
         _stateTimer = 0f;
         _lastSource = string.IsNullOrEmpty(source) ? "LiquidSweep" : source;
+        ClearImpactGetUpContext("LiquidSweep");
         ResetGetUpAnimationState("LiquidSweep");
         SetGetUpVisualLock(false, "LiquidSweep");
         SetRecoveryVisualSuppression(false, "LiquidSweep");
@@ -416,7 +440,7 @@ public sealed class HamsterMotorShellRagdollRecoveryAdapter : MonoBehaviour
         if (_stateTimer < prepareDuration)
             return;
 
-        if (!IsReadyToStartGetUp())
+        if (!IsReadyToAttemptDirectionalGetUpAnimation())
         {
             EnterRecovering();
             return;
@@ -628,6 +652,7 @@ public sealed class HamsterMotorShellRagdollRecoveryAdapter : MonoBehaviour
         SetRecoveryVisualSuppression(false, "Normal");
         _liquidSweepDirection = Vector3.zero;
         _liquidSweepForce = 0f;
+        ClearImpactGetUpContext("Normal");
         if (_hardGetUpPhysicsIsolationActive && alignBodyUprightOnGetUpFinish)
             StabilizeBodyPoseForGetUpBoundary("EnterNormal", true, zeroAngularVelocityOnGetUpFinish);
         RestoreOriginalBodyPhysicsState();
@@ -1078,6 +1103,13 @@ public sealed class HamsterMotorShellRagdollRecoveryAdapter : MonoBehaviour
         return groundedOk && speedOk && uprightOk && IsRecoveryAngularVelocityOk();
     }
 
+    private bool IsReadyToAttemptDirectionalGetUpAnimation()
+    {
+        bool groundedOk = !groundedRequiredToFinishRecovery || motor == null || motor.IsGrounded;
+        bool speedOk = GetPlanarSpeed() <= Mathf.Max(0f, maxRecoverPlanarSpeed);
+        return groundedOk && speedOk && IsRecoveryAngularVelocityOk();
+    }
+
     private void SetRecoveryVisualSuppression(bool suppress, string reason)
     {
         if (!suppressVisualDuringGetUp && suppress)
@@ -1102,36 +1134,112 @@ public sealed class HamsterMotorShellRagdollRecoveryAdapter : MonoBehaviour
     private bool TryStartGetUpAnimation()
     {
         ResetGetUpAnimationState("TryStart");
-        if (!useGetUpAnimation || string.IsNullOrWhiteSpace(getUpStateName))
+        if (!useGetUpAnimation)
         {
-            LogGetUp($"skip reason=disabled state={getUpStateName}");
+            LogGetUp($"anchorOnly reason=disabled legacyState={getUpStateName}");
             return false;
         }
 
         ResolveReferences();
         if (visualClipStateDriver == null)
         {
-            LogGetUp("skip reason=driver missing");
+            LogGetUp("anchorOnly reason=driver missing");
+            return false;
+        }
+
+        DirectionalGetUpMode mode = SelectDirectionalGetUpMode(out string selectedStateName, out string selectionFailureReason);
+        if (mode == DirectionalGetUpMode.AnchorOnly)
+        {
+            LogGetUp($"anchorOnly reason={selectionFailureReason}");
+            return false;
+        }
+
+        if (!visualClipStateDriver.CanPlayOneShotState(
+                selectedStateName,
+                driveGetUpStateOnlyWhenMotionAssigned,
+                out int selectedStateHash,
+                out string failureReason))
+        {
+            LogGetUp($"anchorOnly reason={failureReason} state={selectedStateName}");
             return false;
         }
 
         if (!visualClipStateDriver.TryPlayOneShotState(
-                getUpStateName,
+                selectedStateName,
                 getUpCrossFadeDuration,
                 minGetUpStateTime,
                 maxGetUpStateTime,
                 driveGetUpStateOnlyWhenMotionAssigned,
                 out _getUpStateHash,
-                out string failureReason))
+                out failureReason))
         {
-            LogGetUp($"skip reason={failureReason} state={getUpStateName}");
+            LogGetUp($"anchorOnly reason={failureReason} state={selectedStateName}");
             return false;
         }
 
         _getUpAnimationActive = true;
         _getUpStateTimer = 0f;
-        LogGetUp($"play state={getUpStateName} hash={_getUpStateHash} requireMotion={driveGetUpStateOnlyWhenMotionAssigned}");
+        _activeGetUpStateName = selectedStateName;
+        LogGetUp($"play mode={mode} state={selectedStateName} hash={_getUpStateHash} precheckHash={selectedStateHash} requireMotion={driveGetUpStateOnlyWhenMotionAssigned}");
         return true;
+    }
+
+    private DirectionalGetUpMode SelectDirectionalGetUpMode(out string stateName, out string failureReason)
+    {
+        stateName = null;
+        failureReason = "none";
+
+        if (!useImpactDirectionForGetUp)
+        {
+            failureReason = "impact direction disabled";
+            return DirectionalGetUpMode.AnchorOnly;
+        }
+
+        if (!_hasLastImpactPlanarDirection)
+        {
+            failureReason = fallbackToAnchorOnlyWhenNoDirection ? "impact direction missing" : "impact direction missing fallback disabled";
+            LogImpactGetUp($"select anchorOnly reason={failureReason}");
+            return DirectionalGetUpMode.AnchorOnly;
+        }
+
+        if (!_hasPreImpactFacingForward)
+        {
+            failureReason = fallbackToAnchorOnlyWhenNoDirection ? "pre-impact facing missing" : "pre-impact facing missing fallback disabled";
+            LogImpactGetUp($"select anchorOnly reason={failureReason}");
+            return DirectionalGetUpMode.AnchorOnly;
+        }
+
+        float frontBackThreshold = Mathf.Clamp01(impactDirectionDotThreshold);
+        float dot = Vector3.Dot(_lastImpactPlanarDirection, _preImpactFacingForward);
+        if (Mathf.Abs(dot) <= frontBackThreshold)
+        {
+            failureReason = fallbackToAnchorOnlyWhenAmbiguous ? "impact direction ambiguous" : "impact direction ambiguous fallback disabled";
+            LogImpactGetUp($"select anchorOnly reason={failureReason} dot={dot:F2} threshold={frontBackThreshold:F2}");
+            return DirectionalGetUpMode.AnchorOnly;
+        }
+
+        bool useBack = dot > frontBackThreshold;
+        if (invertImpactFrontBack)
+            useBack = !useBack;
+
+        stateName = useBack ? getUpBackStateName : getUpFrontStateName;
+        if (string.IsNullOrWhiteSpace(stateName))
+        {
+            failureReason = useBack ? "back state empty" : "front state empty";
+            LogImpactGetUp($"select anchorOnly reason={failureReason} dot={dot:F2} inverted={invertImpactFrontBack}");
+            return DirectionalGetUpMode.AnchorOnly;
+        }
+
+        if (IsLegacyGetUpStateName(stateName))
+        {
+            failureReason = $"legacy get-up state disabled: {stateName}";
+            LogImpactGetUp($"select anchorOnly reason={failureReason} dot={dot:F2} inverted={invertImpactFrontBack}");
+            return DirectionalGetUpMode.AnchorOnly;
+        }
+
+        DirectionalGetUpMode mode = useBack ? DirectionalGetUpMode.Back : DirectionalGetUpMode.Front;
+        LogImpactGetUp($"select mode={mode} state={stateName} dot={dot:F2} threshold={frontBackThreshold:F2} inverted={invertImpactFrontBack}");
+        return mode;
     }
 
     private bool IsGetUpAnimationBlockingRecovery(float deltaTime)
@@ -1170,7 +1278,7 @@ public sealed class HamsterMotorShellRagdollRecoveryAdapter : MonoBehaviour
     private void ResetGetUpAnimationState(string reason)
     {
         if (_getUpAnimationActive)
-            LogGetUp($"clear reason={reason} returnToLocomotion={returnToLocomotionAfterGetUp}");
+            LogGetUp($"clear reason={reason} state={_activeGetUpStateName} returnToLocomotion={returnToLocomotionAfterGetUp}");
 
         if (visualClipStateDriver != null && visualClipStateDriver.IsExternalOneShotActive)
             visualClipStateDriver.CancelExternalOneShot(reason);
@@ -1178,6 +1286,58 @@ public sealed class HamsterMotorShellRagdollRecoveryAdapter : MonoBehaviour
         _getUpAnimationActive = false;
         _getUpStateHash = 0;
         _getUpStateTimer = 0f;
+        _activeGetUpStateName = null;
+    }
+
+    private void CaptureImpactGetUpContext(Vector3 impulse)
+    {
+        _hasLastImpactPlanarDirection = TryNormalizePlanarDirection(impulse, out _lastImpactPlanarDirection);
+        _hasPreImpactFacingForward = TryResolvePreImpactFacingForward(out _preImpactFacingForward);
+        LogImpactGetUp($"capture hasDirection={_hasLastImpactPlanarDirection} direction={FormatVector(_lastImpactPlanarDirection)} hasFacing={_hasPreImpactFacingForward} facing={FormatVector(_preImpactFacingForward)}");
+    }
+
+    private void ClearImpactGetUpContext(string reason)
+    {
+        if (!_hasLastImpactPlanarDirection && !_hasPreImpactFacingForward)
+            return;
+
+        _lastImpactPlanarDirection = Vector3.zero;
+        _preImpactFacingForward = Vector3.zero;
+        _hasLastImpactPlanarDirection = false;
+        _hasPreImpactFacingForward = false;
+        LogImpactGetUp($"clear reason={reason}");
+    }
+
+    private bool TryResolvePreImpactFacingForward(out Vector3 forward)
+    {
+        Transform root = transform.root != null ? transform.root : transform;
+        if (root != null && TryNormalizePlanarDirection(root.forward, out forward))
+            return true;
+
+        if (bodyTransform != null && TryNormalizePlanarDirection(bodyTransform.forward, out forward))
+            return true;
+
+        forward = Vector3.zero;
+        return false;
+    }
+
+    private static bool TryNormalizePlanarDirection(Vector3 value, out Vector3 planarDirection)
+    {
+        Vector3 planar = Vector3.ProjectOnPlane(SanitizeVector(value), Vector3.up);
+        if (planar.sqrMagnitude <= 0.0001f)
+        {
+            planarDirection = Vector3.zero;
+            return false;
+        }
+
+        planarDirection = planar.normalized;
+        return IsFiniteVector(planarDirection);
+    }
+
+    private static bool IsLegacyGetUpStateName(string stateName)
+    {
+        return string.Equals(stateName, "GetUp", System.StringComparison.Ordinal) ||
+               string.Equals(stateName, "Legacy_GetUp_DISABLED", System.StringComparison.Ordinal);
     }
 
     private float GetPlanarSpeed()
@@ -1305,10 +1465,18 @@ public sealed class HamsterMotorShellRagdollRecoveryAdapter : MonoBehaviour
 
     private void LogGetUp(string message)
     {
-        if (!debugGetUpLogs)
+        if (!debugGetUpLogs && !debugGetUpPlayLogs)
             return;
 
         Debug.Log($"[MSGetUp] {message}", this);
+    }
+
+    private void LogImpactGetUp(string message)
+    {
+        if (!debugImpactGetUpLogs)
+            return;
+
+        Debug.Log($"[MSGetUp/Impact] {message}", this);
     }
 
     private static string FormatVector(Vector3 value)
