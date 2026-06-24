@@ -55,8 +55,8 @@ MonoBehaviour:
   m_Enabled: 1
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: d5a57f767e5e46a458fc5d3c628d0cbb, type: 3}
-  m_Name:
-  m_EditorClassIdentifier:
+  m_Name: 
+  m_EditorClassIdentifier: 
   GlobalObjectIdHash: 1151326904
   InScenePlacedSourceGlobalObjectIdHash: 0
   DeferredDespawnTick: 0
@@ -80,8 +80,8 @@ MonoBehaviour:
   m_Enabled: 1
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: 5c1d5e9e18c4bf849b81f24eff595457, type: 3}
-  m_Name:
-  m_EditorClassIdentifier:
+  m_Name: 
+  m_EditorClassIdentifier: 
   ShowTopMostFoldoutHeaderGroup: 1
   cameraRoot: {fileID: 6100000000000000007}
   audioListener: {fileID: 0}
@@ -154,8 +154,8 @@ MonoBehaviour:
   m_Enabled: 1
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: 4c21f3f4d3a64d148f6d6fb05fc4cd88, type: 3}
-  m_Name:
-  m_EditorClassIdentifier:
+  m_Name: 
+  m_EditorClassIdentifier: 
   debugLogs: 0
   logInterval: 0.5
 --- !u!114 &6100000000000000100
@@ -168,8 +168,8 @@ MonoBehaviour:
   m_Enabled: 1
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: 3d5f52c8a7fb4f34a8d9cf5e7a62137b, type: 3}
-  m_Name:
-  m_EditorClassIdentifier:
+  m_Name: 
+  m_EditorClassIdentifier: 
   bodyRigidbody: {fileID: 5171592592584334513}
   bodyTransform: {fileID: 8055494772537699747}
   alignBodyToRootOnEnable: 1
@@ -191,8 +191,8 @@ MonoBehaviour:
   m_Enabled: 1
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: 8c4d33d9e5b14ac4aa1f8f8ab96c4f31, type: 3}
-  m_Name:
-  m_EditorClassIdentifier:
+  m_Name: 
+  m_EditorClassIdentifier: 
   ownerCamera: {fileID: 6100000000000000009}
   heldItemSocket: {fileID: 6100000000000000201}
   itemDropAnchor: {fileID: 6100000000000000203}
@@ -242,8 +242,8 @@ MonoBehaviour:
   m_Enabled: 1
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: a1c9f2d6b7e94a14a6d5c2b3107f4e82, type: 3}
-  m_Name:
-  m_EditorClassIdentifier:
+  m_Name: 
+  m_EditorClassIdentifier: 
   ownerCamera: {fileID: 6100000000000000009}
   itemAdapter: {fileID: 6100000000000000101}
   carrierBody: {fileID: 5171592592584334513}
@@ -286,8 +286,8 @@ MonoBehaviour:
   m_Enabled: 1
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: f376a22189804beeaa176a30b2d7c9d7, type: 3}
-  m_Name:
-  m_EditorClassIdentifier:
+  m_Name: 
+  m_EditorClassIdentifier: 
   motor: {fileID: 984655929091462153}
   bodyRigidbody: {fileID: 5171592592584334513}
   bodyTransform: {fileID: 8055494772537699747}
@@ -385,8 +385,8 @@ MonoBehaviour:
   m_Enabled: 1
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: d9e6a822cc404e92a2715939aac75115, type: 3}
-  m_Name:
-  m_EditorClassIdentifier:
+  m_Name: 
+  m_EditorClassIdentifier: 
   recoveryAdapter: {fileID: 6100000000000000103}
   bodyRigidbody: {fileID: 5171592592584334513}
   impactCenter: {fileID: 8055494772537699747}
@@ -406,8 +406,8 @@ MonoBehaviour:
   m_Enabled: 1
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: 01d281f00beb4d91ab87690b12b064aa, type: 3}
-  m_Name:
-  m_EditorClassIdentifier:
+  m_Name: 
+  m_EditorClassIdentifier: 
   faceController: {fileID: 6100000000000000105}
   combatAdapter: {fileID: 6100000000000000102}
   itemAdapter: {fileID: 6100000000000000101}
@@ -441,8 +441,8 @@ MonoBehaviour:
   m_Enabled: 1
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: 844849503be94c45abf69c34abe0c70f, type: 3}
-  m_Name:
-  m_EditorClassIdentifier:
+  m_Name: 
+  m_EditorClassIdentifier: 
   motor: {fileID: 984655929091462153}
   bodyRigidbody: {fileID: 5171592592584334513}
   bodyTransform: {fileID: 8055494772537699747}
@@ -507,8 +507,8 @@ MonoBehaviour:
   m_Enabled: 1
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: b7f94a1c3d6941a3a3cb8e1e2db8c901, type: 3}
-  m_Name:
-  m_EditorClassIdentifier:
+  m_Name: 
+  m_EditorClassIdentifier: 
   motor: {fileID: 984655929091462153}
   bodyRigidbody: {fileID: 5171592592584334513}
   bodyTransform: {fileID: 8055494772537699747}
@@ -596,7 +596,7 @@ MonoBehaviour:
   wallMoveRightStateName: WallMove_Right
   wallAnimationCrossFade: 0.08
   requireWallAnimationMotion: 1
-  debugTraversalLogs: 1
+  debugTraversalLogs: 0
 --- !u!1 &1594514674284813732
 GameObject:
   m_ObjectHideFlags: 0
@@ -697,8 +697,8 @@ MonoBehaviour:
   m_Enabled: 1
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: 7706d370b30a0c24e89bd128da840709, type: 3}
-  m_Name:
-  m_EditorClassIdentifier:
+  m_Name: 
+  m_EditorClassIdentifier: 
   hipsBody: {fileID: 5171592592584334513}
   chestBody: {fileID: 5171592592584334513}
   headBody: {fileID: 0}
@@ -778,8 +778,8 @@ MonoBehaviour:
   m_Enabled: 1
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: 1bbed6e876488dc4ca1019fe60108375, type: 3}
-  m_Name:
-  m_EditorClassIdentifier:
+  m_Name: 
+  m_EditorClassIdentifier: 
   targetBody: {fileID: 5171592592584334513}
   visualRoot: {fileID: 4015340420288901693}
   visualAnimator: {fileID: 215362220143687087}
@@ -907,8 +907,8 @@ MonoBehaviour:
   m_Enabled: 1
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: 0ef27d8c187dc3645b1b9809245c7144, type: 3}
-  m_Name:
-  m_EditorClassIdentifier:
+  m_Name: 
+  m_EditorClassIdentifier: 
   targetBody: {fileID: 5171592592584334513}
   visualFollower: {fileID: 6892046878001411185}
   ignoredLayers:
@@ -948,8 +948,8 @@ MonoBehaviour:
   m_Enabled: 1
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: fdfffa3970924ac4d8eea2e6675d4d58, type: 3}
-  m_Name:
-  m_EditorClassIdentifier:
+  m_Name: 
+  m_EditorClassIdentifier: 
   visualAnimator: {fileID: 215362220143687087}
   motorStateSource: {fileID: 984655929091462153}
   targetBody: {fileID: 5171592592584334513}
@@ -1019,8 +1019,8 @@ MonoBehaviour:
   m_Enabled: 1
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: c34dd733675ec1540a765d95682bb5b5, type: 3}
-  m_Name:
-  m_EditorClassIdentifier:
+  m_Name: 
+  m_EditorClassIdentifier: 
   targetBody: {fileID: 5171592592584334513}
   aimReference: {fileID: 0}
   holdReference: {fileID: 8055494772537699747}
@@ -1140,8 +1140,8 @@ MonoBehaviour:
   m_Enabled: 1
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: 2880a4508a3ffde40b68c339503404a1, type: 3}
-  m_Name:
-  m_EditorClassIdentifier:
+  m_Name: 
+  m_EditorClassIdentifier: 
   UpdateMode: 2
   TwoDDistanceCheck: 0
   TwoDPositionInfluence: 0
@@ -1435,8 +1435,8 @@ MonoBehaviour:
   m_Enabled: 1
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: 2880a4508a3ffde40b68c339503404a1, type: 3}
-  m_Name:
-  m_EditorClassIdentifier:
+  m_Name: 
+  m_EditorClassIdentifier: 
   UpdateMode: 2
   TwoDDistanceCheck: 0
   TwoDPositionInfluence: 0
@@ -1697,8 +1697,8 @@ MonoBehaviour:
   m_Enabled: 1
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: 2880a4508a3ffde40b68c339503404a1, type: 3}
-  m_Name:
-  m_EditorClassIdentifier:
+  m_Name: 
+  m_EditorClassIdentifier: 
   UpdateMode: 2
   TwoDDistanceCheck: 0
   TwoDPositionInfluence: 0
@@ -1961,8 +1961,8 @@ MonoBehaviour:
   m_Enabled: 1
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: 31041fa31085b4c4d92322c2edd014db, type: 3}
-  m_Name:
-  m_EditorClassIdentifier:
+  m_Name: 
+  m_EditorClassIdentifier: 
   mouseSensitivityX: 0.2
   mouseSensitivityY: 0.2
   mouseDeadzone: 0.5
@@ -1983,8 +1983,8 @@ MonoBehaviour:
   m_Enabled: 1
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: e6fd6fcf48409274abafed3888449e37, type: 3}
-  m_Name:
-  m_EditorClassIdentifier:
+  m_Name: 
+  m_EditorClassIdentifier: 
   ShowTopMostFoldoutHeaderGroup: 1
   startingCoins: 5
   maxCoins: 999
@@ -2002,8 +2002,8 @@ MonoBehaviour:
   m_Enabled: 1
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: cba61b9c86572c54f93e94dcf42339ec, type: 3}
-  m_Name:
-  m_EditorClassIdentifier:
+  m_Name: 
+  m_EditorClassIdentifier: 
   ShowTopMostFoldoutHeaderGroup: 1
   maxStamina: 100
   startingStamina: 1
@@ -2137,8 +2137,8 @@ MonoBehaviour:
   m_Enabled: 1
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: a79441f348de89743a2939f4d699eac1, type: 3}
-  m_Name:
-  m_EditorClassIdentifier:
+  m_Name: 
+  m_EditorClassIdentifier: 
   m_RenderShadows: 1
   m_RequiresDepthTextureOption: 2
   m_RequiresOpaqueTextureOption: 2
@@ -2344,7 +2344,7 @@ PrefabInstance:
       objectReference: {fileID: 0}
     - target: {fileID: 5866666021909216657, guid: 83fbe5706b3039349abb894620751b26, type: 3}
       propertyPath: m_Controller
-      value:
+      value: 
       objectReference: {fileID: 9100000, guid: 66dd25e0fb2ae0341bffb4dfe8046d62, type: 2}
     - target: {fileID: 5866666021909216657, guid: 83fbe5706b3039349abb894620751b26, type: 3}
       propertyPath: m_CullingMode
@@ -2400,8 +2400,8 @@ MonoBehaviour:
   m_Enabled: 1
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: 2fac27289395ee243ad9994e877fedeb, type: 3}
-  m_Name:
-  m_EditorClassIdentifier:
+  m_Name: 
+  m_EditorClassIdentifier: 
   grabber: {fileID: 5469712445494703521}
   combatAdapter: {fileID: 6100000000000000102}
   autoFindGrabber: 1
@@ -2418,8 +2418,8 @@ MonoBehaviour:
   m_Enabled: 1
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: 83164c2da5ca259429b5a22f82fe2633, type: 3}
-  m_Name:
-  m_EditorClassIdentifier:
+  m_Name: 
+  m_EditorClassIdentifier: 
   faceRenderer: {fileID: 669553309817560430}
   materialIndex: 0
   columns: 6
