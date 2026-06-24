@@ -19,6 +19,7 @@ GameObject:
   - component: {fileID: 6100000000000000104}
   - component: {fileID: 6100000000000000106}
   - component: {fileID: 6100000000000000107}
+  - component: {fileID: 6100000000000000108}
   m_Layer: 6
   m_Name: Hamster_JointFreeMotorShell_MainScenes
   m_TagString: Player
@@ -496,6 +497,46 @@ MonoBehaviour:
   visualSpinLocalAxis: {x: 0, y: 1, z: 0}
   invertVisualSpin: 0
   debugSpinDashLogs: 0
+--- !u!114 &6100000000000000108
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 692270962315936511}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: b7f94a1c3d6941a3a3cb8e1e2db8c901, type: 3}
+  m_Name:
+  m_EditorClassIdentifier:
+  motor: {fileID: 984655929091462153}
+  bodyRigidbody: {fileID: 5171592592584334513}
+  bodyTransform: {fileID: 8055494772537699747}
+  ownerCamera: {fileID: 6100000000000000009}
+  recoveryAdapter: {fileID: 6100000000000000103}
+  spinDashAdapter: {fileID: 6100000000000000107}
+  visualClipStateDriver: {fileID: 8165324872318489426}
+  autoFindReferences: 1
+  enableGlide: 1
+  glideKey: 32
+  glideMinAirTimeAfterJump: 0.2
+  maxGlideDuration: 1.5
+  glideCooldown: 0.25
+  maxGlideFallSpeed: 4
+  glideLiftAcceleration: 12
+  glideForwardAcceleration: 2
+  glideMovementControlScale: 0.55
+  glideUprightControlScale: 0.5
+  requireFallingOrLowVerticalSpeed: 1
+  maxVerticalSpeedToStartGlide: 1
+  endGlideOnGrounded: 1
+  blockGlideDuringRecovery: 1
+  blockGlideDuringLiquidSweep: 1
+  blockGlideDuringSpinDashOrDizzy: 1
+  useGlideAnimation: 1
+  glideAnimationStateName: Glide
+  glideAnimationCrossFade: 0.08
+  debugTraversalLogs: 0
 --- !u!1 &1594514674284813732
 GameObject:
   m_ObjectHideFlags: 0

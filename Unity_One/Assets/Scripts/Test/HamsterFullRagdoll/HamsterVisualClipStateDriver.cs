@@ -143,6 +143,12 @@ public sealed class HamsterVisualClipStateDriver : MonoBehaviour
     private float _externalOneShotTimer;
     private float _externalOneShotMinTime;
     private float _externalOneShotMaxTime;
+    private bool _externalSustainedStateActive;
+    private int _externalSustainedStateHash;
+    private string _externalSustainedStateName = string.Empty;
+    private string _externalSustainedStateReason = string.Empty;
+    private float _externalSustainedStateTimer;
+    private float _externalSustainedCrossFadeDuration;
     private bool _warnedMissingAnimator;
     private bool _warnedAnimatorDisabled;
     private bool _warnedMissingController;
@@ -225,6 +231,9 @@ public sealed class HamsterVisualClipStateDriver : MonoBehaviour
             return;
 
         if (TickExternalOneShot(deltaTime))
+            return;
+
+        if (TickExternalSustainedState(deltaTime))
             return;
 
         MotionSample sample = ReadMotionSample();
@@ -480,6 +489,76 @@ public sealed class HamsterVisualClipStateDriver : MonoBehaviour
         ClearExternalOneShot();
     }
 
+    public bool TryBeginExternalSustainedState(
+        string reason,
+        string stateName,
+        float crossFadeDuration,
+        bool requireStateMotion,
+        out string failureReason)
+    {
+        failureReason = "none";
+
+        if (string.IsNullOrWhiteSpace(reason))
+        {
+            failureReason = "reason empty";
+            return false;
+        }
+
+        if (string.IsNullOrWhiteSpace(stateName))
+        {
+            failureReason = "state name empty";
+            return false;
+        }
+
+        if (_externalOneShotActive)
+        {
+            failureReason = "one-shot active";
+            return false;
+        }
+
+        if (_externalSustainedStateActive)
+        {
+            if (_externalSustainedStateReason == reason && _externalSustainedStateName == stateName)
+                return true;
+
+            failureReason = $"sustained state active reason={_externalSustainedStateReason} state={_externalSustainedStateName}";
+            return false;
+        }
+
+        if (!CanPlayOneShotState(stateName, requireStateMotion, out int stateHash, out failureReason))
+            return false;
+
+        visualAnimator.CrossFade(stateHash, Mathf.Max(0f, crossFadeDuration), BaseLayerIndex, 0f);
+        _currentStateHash = stateHash;
+        _currentStateName = stateName;
+        _stateTimer = 0f;
+        _externalSustainedStateActive = true;
+        _externalSustainedStateHash = stateHash;
+        _externalSustainedStateName = stateName;
+        _externalSustainedStateReason = reason;
+        _externalSustainedStateTimer = 0f;
+        _externalSustainedCrossFadeDuration = Mathf.Max(0f, crossFadeDuration);
+        ClearInteractionState();
+        return true;
+    }
+
+    public void EndExternalSustainedState(string reason)
+    {
+        if (!_externalSustainedStateActive)
+            return;
+
+        if (_externalSustainedStateReason != reason)
+            return;
+
+        ClearExternalSustainedState();
+        ReturnFromExternalSustainedState(reason);
+    }
+
+    public bool IsExternalSustainedStateActive(string reason)
+    {
+        return _externalSustainedStateActive && _externalSustainedStateReason == reason;
+    }
+
     public bool TryGetAnimatorStateNormalizedTime(int stateHash, out float normalizedTime)
     {
         normalizedTime = 0f;
@@ -534,6 +613,59 @@ public sealed class HamsterVisualClipStateDriver : MonoBehaviour
         _externalOneShotMaxTime = 0f;
     }
 
+    private bool TickExternalSustainedState(float deltaTime)
+    {
+        if (!_externalSustainedStateActive)
+            return false;
+
+        _externalSustainedStateTimer += Mathf.Max(0f, deltaTime);
+        if (!IsAnimatorInState(_externalSustainedStateHash))
+        {
+            visualAnimator.CrossFade(
+                _externalSustainedStateHash,
+                _externalSustainedCrossFadeDuration,
+                BaseLayerIndex,
+                0f);
+            _currentStateHash = _externalSustainedStateHash;
+            _currentStateName = _externalSustainedStateName;
+            _stateTimer = 0f;
+        }
+
+        return true;
+    }
+
+    private void ClearExternalSustainedState()
+    {
+        _externalSustainedStateActive = false;
+        _externalSustainedStateHash = 0;
+        _externalSustainedStateName = string.Empty;
+        _externalSustainedStateReason = string.Empty;
+        _externalSustainedStateTimer = 0f;
+        _externalSustainedCrossFadeDuration = 0f;
+    }
+
+    private void ReturnFromExternalSustainedState(string reason)
+    {
+        if (_externalOneShotActive || !enableClipStateDriver || !CanDriveAnimator())
+            return;
+
+        MotionSample sample = ReadMotionSample();
+        bool grounded = sample.HasGroundedState && sample.IsGrounded;
+        if (TryDriveCarryState(sample, sample.HasGroundedState && !grounded))
+            return;
+
+        if (sample.HasGroundedState && !grounded)
+        {
+            TryCrossFade(ClipState.JumpUp, jumpCrossFadeDuration, sample, reason);
+            return;
+        }
+
+        if (!driveGroundLocomotion)
+            return;
+
+        TryCrossFade(SelectLocomotionState(sample, out string locomotionReason), locomotionCrossFadeDuration, sample, locomotionReason);
+    }
+
     private void ResetRuntimeState()
     {
         _currentStateHash = 0;
@@ -548,6 +680,7 @@ public sealed class HamsterVisualClipStateDriver : MonoBehaviour
         _suppressNextGrabCountInteractionTrigger = false;
         _suppressNextThrowCountInteractionTrigger = false;
         ClearExternalOneShot();
+        ClearExternalSustainedState();
         ClearInteractionState();
 
         MotionSample sample = ReadMotionSample();
