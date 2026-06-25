@@ -71,7 +71,7 @@ public sealed class HamsterMotorShellTraversalAdapter : MonoBehaviour
     [SerializeField] private float wallCheckRadius = 0.28f;
     [SerializeField] private float wallMinApproachDot = 0.35f;
     [SerializeField] private float wallMaxUpDot = 0.35f;
-    [SerializeField] private float maxWallClimbDuration = 1.5f;
+    [SerializeField] private float maxWallClimbDuration = 0f;
     [SerializeField] private float wallStickAcceleration = 10f;
     [SerializeField] private float wallClimbUpAcceleration = 12f;
     [SerializeField] private float wallMoveDownAcceleration = 7f;
@@ -82,6 +82,20 @@ public sealed class HamsterMotorShellTraversalAdapter : MonoBehaviour
     [SerializeField] private float wallClingMaxFallSpeed = 0.35f;
     [SerializeField] private float wallSlideSlowAcceleration = 6f;
     [SerializeField] private float maxWallSlideFallSpeed = 2.5f;
+
+    [Header("Wall Contact Stability")]
+    [SerializeField] private float wallContactGraceTime = 0.22f;
+    [SerializeField] private float wallReattachGraceTime = 0.6f;
+    [SerializeField] private float wallReattachMaxDistance = 1.0f;
+    [SerializeField] private bool useCachedWallNormalForReattach = true;
+    [SerializeField] private bool keepWallTraversalDuringContactGrace = true;
+
+    [Header("Wall Start Validation")]
+    [SerializeField] private bool requireWallClimbHoldForStart = true;
+    [SerializeField] private float wallStartMinApproachDot = 0.55f;
+    [SerializeField] private float wallStartMaxUpDot = 0.2f;
+    [SerializeField] private bool rejectLowWallStartHitsWhenGrounded = true;
+    [SerializeField] private float wallStartMinHitPointYOffsetFromBody = -0.35f;
 
     [Header("Wall Vertical Speed Control")]
     [SerializeField] private bool useWallVerticalSpeedControl = true;
@@ -105,6 +119,12 @@ public sealed class HamsterMotorShellTraversalAdapter : MonoBehaviour
     [SerializeField] private float wallJumpAwayVelocityChange = 4.5f;
     [SerializeField] private float wallJumpCooldown = 0.25f;
     [SerializeField] private float glideDelayAfterWallJump = 0.18f;
+
+    [Header("Wall Jump Input Suppression")]
+    [SerializeField] private float wallJumpSuppressNormalJumpDuration = 0.45f;
+    [SerializeField] private bool holdJumpLockUntilWallJumpKeyRelease = true;
+    [SerializeField] private bool clearTraversalJumpKeyOnWallJump = true;
+
     [SerializeField] private float wallMovementControlScale = 0.2f;
     [SerializeField] private float wallUprightControlScale = 0.4f;
     [SerializeField] private bool requireForwardInputForWallClimb = true;
@@ -140,6 +160,7 @@ public sealed class HamsterMotorShellTraversalAdapter : MonoBehaviour
     private float _glideStartedTime = float.NegativeInfinity;
     private float _wallStartedTime = float.NegativeInfinity;
     private float _wallJumpStartedTime = float.NegativeInfinity;
+    private float _wallJumpSuppressNormalJumpUntil = float.NegativeInfinity;
     private float _glideBlockedUntil = float.NegativeInfinity;
     private float _cooldownUntil;
     private bool _legacyInputUnavailable;
@@ -152,9 +173,14 @@ public sealed class HamsterMotorShellTraversalAdapter : MonoBehaviour
     private bool _wallAnimationActive;
     private string _currentWallAnimationStateName = string.Empty;
     private Vector3 _currentWallNormal;
+    private Vector3 _cachedWallNormal;
+    private Vector3 _cachedWallPoint;
+    private Collider _cachedWallCollider;
+    private float _lastWallSeenTime = float.NegativeInfinity;
     private Vector2 _lastWallMoveInput;
     private WallMoveDirection _lastWallMoveDirection;
     private readonly RaycastHit[] _wallHits = new RaycastHit[8];
+    private readonly Vector3[] _wallCheckDirections = new Vector3[6];
 
     public bool IsGliding => _state == TraversalState.Gliding;
     public bool IsWallClinging => _state == TraversalState.WallClinging;
@@ -247,8 +273,8 @@ public sealed class HamsterMotorShellTraversalAdapter : MonoBehaviour
 
         if (_state == TraversalState.WallJumping)
         {
-            if (Time.time - _wallJumpStartedTime >= Mathf.Max(0f, wallJumpCooldown))
-                EndWallJump("wall jump cooldown");
+            if (ShouldEndWallJump(out string wallJumpEndReason))
+                EndWallJump(wallJumpEndReason);
 
             return;
         }
@@ -529,6 +555,9 @@ public sealed class HamsterMotorShellTraversalAdapter : MonoBehaviour
         if (IsUiInputBlocked())
             return Block("ui input blocked", out blockReason);
 
+        if (requireWallClimbHoldForStart && !ReadWallClimbHeld())
+            return Block("wall climb key missing", out blockReason);
+
         if ((requireWallInputToStart || requireForwardInputForWallClimb) &&
             !TryReadWallMoveInput(out Vector2 startInput))
         {
@@ -538,7 +567,7 @@ public sealed class HamsterMotorShellTraversalAdapter : MonoBehaviour
         if (IsWallBlockedByExternalState(out blockReason))
             return false;
 
-        if (!TryFindWall(out wallHit, out blockReason))
+        if (!TryFindWallForStart(out wallHit, out blockReason))
             return false;
 
         return true;
@@ -575,8 +604,16 @@ public sealed class HamsterMotorShellTraversalAdapter : MonoBehaviour
         if (IsWallBlockedByExternalState(out reason))
             return true;
 
-        if (!TryFindWall(out RaycastHit wallHit, out reason))
+        if (!TryFindWallForMaintain(out RaycastHit wallHit, out reason))
+        {
+            if (CanKeepWallTraversalDuringContactGrace(out string graceReason))
+            {
+                reason = graceReason;
+                return false;
+            }
+
             return true;
+        }
 
         SetCurrentWall(wallHit);
         return false;
@@ -751,7 +788,11 @@ public sealed class HamsterMotorShellTraversalAdapter : MonoBehaviour
 
         wallNormal = wallNormal.normalized;
         _lastWallJumpConsumedTime = _lastWallJumpKeyDownTime;
+        if (clearTraversalJumpKeyOnWallJump)
+            _lastWallJumpKeyDownTime = float.NegativeInfinity;
+
         _wallJumpStartedTime = Time.time;
+        _wallJumpSuppressNormalJumpUntil = Time.time + Mathf.Max(0f, wallJumpSuppressNormalJumpDuration);
         _glideBlockedUntil = Time.time + Mathf.Max(0f, glideDelayAfterWallJump);
 
         EndWallAnimation();
@@ -777,8 +818,34 @@ public sealed class HamsterMotorShellTraversalAdapter : MonoBehaviour
 
         RestoreWallMotorControlIfOwned(true);
         _wallJumpStartedTime = float.NegativeInfinity;
+        _wallJumpSuppressNormalJumpUntil = float.NegativeInfinity;
         _state = TraversalState.Normal;
         WallLog($"wall jump ended reason={reason}");
+    }
+
+    private bool ShouldEndWallJump(out string reason)
+    {
+        reason = string.Empty;
+
+        if (_state != TraversalState.WallJumping)
+            return false;
+
+        if (Time.time - _wallJumpStartedTime < Mathf.Max(0f, wallJumpCooldown))
+            return false;
+
+        if (Time.time >= _wallJumpSuppressNormalJumpUntil)
+        {
+            reason = "normal jump suppress elapsed";
+            return true;
+        }
+
+        if (holdJumpLockUntilWallJumpKeyRelease && !IsWallJumpKeyHeld())
+        {
+            reason = "wall jump key released";
+            return true;
+        }
+
+        return false;
     }
 
     private void ApplyWallMotorControl()
@@ -1184,17 +1251,53 @@ public sealed class HamsterMotorShellTraversalAdapter : MonoBehaviour
         return false;
     }
 
-    private bool TryFindWall(out RaycastHit wallHit, out string failureReason)
+    private bool TryFindWallForStart(out RaycastHit wallHit, out string failureReason)
     {
         wallHit = default;
         failureReason = string.Empty;
 
-        if (!TryGetWallCheckDirection(out Vector3 checkDirection))
+        int directionCount = BuildWallStartCheckDirections(_wallCheckDirections);
+        if (directionCount <= 0)
+            return Block("wall start direction missing", out failureReason);
+
+        string lastFailureReason = string.Empty;
+        for (int i = 0; i < directionCount; i++)
+        {
+            if (TryFindWallInDirection(_wallCheckDirections[i], true, out wallHit, out lastFailureReason))
+                return true;
+        }
+
+        return Block(string.IsNullOrEmpty(lastFailureReason) ? "wall start missing" : lastFailureReason, out failureReason);
+    }
+
+    private bool TryFindWallForMaintain(out RaycastHit wallHit, out string failureReason)
+    {
+        wallHit = default;
+        failureReason = string.Empty;
+
+        int directionCount = BuildWallCheckDirections(_wallCheckDirections);
+        if (directionCount <= 0)
             return Block("wall direction missing", out failureReason);
 
-        Vector3 origin = bodyRigidbody != null
-            ? bodyRigidbody.worldCenterOfMass
-            : (bodyTransform != null ? bodyTransform.position : transform.position);
+        string lastFailureReason = string.Empty;
+        for (int i = 0; i < directionCount; i++)
+        {
+            if (TryFindWallInDirection(_wallCheckDirections[i], false, out wallHit, out lastFailureReason))
+                return true;
+        }
+
+        return Block(string.IsNullOrEmpty(lastFailureReason) ? "wall missing" : lastFailureReason, out failureReason);
+    }
+
+    private bool TryFindWallInDirection(Vector3 checkDirection, bool forStart, out RaycastHit wallHit, out string failureReason)
+    {
+        wallHit = default;
+        failureReason = string.Empty;
+
+        if (!TryNormalizePlanar(checkDirection, out checkDirection))
+            return Block("wall direction missing", out failureReason);
+
+        Vector3 origin = GetWallCheckOrigin();
 
         int hitCount = Physics.SphereCastNonAlloc(
             origin,
@@ -1212,6 +1315,9 @@ public sealed class HamsterMotorShellTraversalAdapter : MonoBehaviour
         bool rejectedSelf = false;
         bool rejectedSlope = false;
         bool rejectedApproach = false;
+        bool rejectedLowStartHit = false;
+        float maxUpDot = Mathf.Clamp01(forStart ? wallStartMaxUpDot : wallMaxUpDot);
+        float minApproachDot = Mathf.Clamp(forStart ? wallStartMinApproachDot : wallMinApproachDot, -1f, 1f);
 
         for (int i = 0; i < hitCount; i++)
         {
@@ -1230,16 +1336,22 @@ public sealed class HamsterMotorShellTraversalAdapter : MonoBehaviour
 
             Vector3 hitNormal = hit.normal.normalized;
             float upDot = Mathf.Abs(Vector3.Dot(hitNormal, Vector3.up));
-            if (upDot > Mathf.Clamp01(wallMaxUpDot))
+            if (upDot > maxUpDot)
             {
                 rejectedSlope = true;
                 continue;
             }
 
             float approachDot = Vector3.Dot(checkDirection, -hitNormal);
-            if (approachDot < wallMinApproachDot)
+            if (approachDot < minApproachDot)
             {
                 rejectedApproach = true;
+                continue;
+            }
+
+            if (forStart && !IsWallStartHitHeightAllowed(hit))
+            {
+                rejectedLowStartHit = true;
                 continue;
             }
 
@@ -1262,13 +1374,107 @@ public sealed class HamsterMotorShellTraversalAdapter : MonoBehaviour
         if (rejectedApproach)
             return Block("approach dot rejected", out failureReason);
 
+        if (rejectedLowStartHit)
+            return Block("wall start low hit rejected", out failureReason);
+
         return Block("wall rejected", out failureReason);
+    }
+
+    private int BuildWallStartCheckDirections(Vector3[] directions)
+    {
+        if (directions == null || directions.Length == 0)
+            return 0;
+
+        int count = 0;
+
+        if (motor != null && TryNormalizePlanar(motor.DesiredFacingDirection, out Vector3 desiredFacingDirection))
+            AddUniqueWallCheckDirection(directions, ref count, desiredFacingDirection);
+
+        if (bodyTransform != null && TryNormalizePlanar(bodyTransform.forward, out Vector3 bodyForward))
+            AddUniqueWallCheckDirection(directions, ref count, bodyForward);
+
+        if (ownerCamera != null && TryNormalizePlanar(ownerCamera.transform.forward, out Vector3 cameraForward))
+            AddUniqueWallCheckDirection(directions, ref count, cameraForward);
+
+        if (motor != null && TryNormalizePlanar(motor.SmoothedMoveWorldDirection, out Vector3 moveDirection))
+            AddUniqueWallCheckDirection(directions, ref count, moveDirection);
+
+        return count;
+    }
+
+    private int BuildWallCheckDirections(Vector3[] directions)
+    {
+        if (directions == null || directions.Length == 0)
+            return 0;
+
+        int count = 0;
+
+        if (TryNormalizePlanar(-_currentWallNormal, out Vector3 currentWallDirection))
+            AddUniqueWallCheckDirection(directions, ref count, currentWallDirection);
+
+        if (useCachedWallNormalForReattach &&
+            HasUsableWallCache(Mathf.Max(0f, wallReattachGraceTime), Mathf.Max(0f, wallReattachMaxDistance)) &&
+            TryNormalizePlanar(-_cachedWallNormal, out Vector3 cachedWallDirection))
+        {
+            AddUniqueWallCheckDirection(directions, ref count, cachedWallDirection);
+        }
+
+        if (motor != null && TryNormalizePlanar(motor.DesiredFacingDirection, out Vector3 desiredFacingDirection))
+            AddUniqueWallCheckDirection(directions, ref count, desiredFacingDirection);
+
+        if (bodyTransform != null && TryNormalizePlanar(bodyTransform.forward, out Vector3 bodyForward))
+            AddUniqueWallCheckDirection(directions, ref count, bodyForward);
+
+        if (ownerCamera != null && TryNormalizePlanar(ownerCamera.transform.forward, out Vector3 cameraForward))
+            AddUniqueWallCheckDirection(directions, ref count, cameraForward);
+
+        if (motor != null && TryNormalizePlanar(motor.SmoothedMoveWorldDirection, out Vector3 moveDirection))
+            AddUniqueWallCheckDirection(directions, ref count, moveDirection);
+
+        return count;
+    }
+
+    private bool IsWallStartHitHeightAllowed(RaycastHit hit)
+    {
+        if (!rejectLowWallStartHitsWhenGrounded || motor == null || !motor.IsGrounded)
+            return true;
+
+        if (!IsFiniteVector(hit.point))
+            return false;
+
+        float yOffsetFromBody = hit.point.y - GetWallCheckOrigin().y;
+        return yOffsetFromBody >= wallStartMinHitPointYOffsetFromBody;
+    }
+
+    private static void AddUniqueWallCheckDirection(Vector3[] directions, ref int count, Vector3 direction)
+    {
+        if (directions == null || count >= directions.Length)
+            return;
+
+        if (!TryNormalizePlanar(direction, out direction))
+            return;
+
+        for (int i = 0; i < count; i++)
+        {
+            if (Vector3.Dot(directions[i], direction) > 0.98f)
+                return;
+        }
+
+        directions[count] = direction;
+        count++;
     }
 
     private bool TryGetWallCheckDirection(out Vector3 direction)
     {
         if (TryNormalizePlanar(-_currentWallNormal, out direction))
             return true;
+
+        if (useCachedWallNormalForReattach &&
+            HasUsableWallCache(Mathf.Max(0f, wallReattachGraceTime), Mathf.Max(0f, wallReattachMaxDistance)) &&
+            TryNormalizePlanar(-_cachedWallNormal, out direction))
+        {
+            return true;
+        }
 
         if (motor != null && TryNormalizePlanar(motor.DesiredFacingDirection, out direction))
             return true;
@@ -1284,6 +1490,38 @@ public sealed class HamsterMotorShellTraversalAdapter : MonoBehaviour
 
         direction = Vector3.zero;
         return false;
+    }
+
+    private bool IsWallJumpKeyHeld()
+    {
+        if (_legacyInputUnavailable)
+            return false;
+
+        try
+        {
+            return Input.GetKey(wallJumpKey);
+        }
+        catch (System.InvalidOperationException exception)
+        {
+            DisableLegacyInput(exception.Message);
+            return false;
+        }
+        catch (System.ArgumentException exception)
+        {
+            DisableLegacyInput(exception.Message);
+            return false;
+        }
+    }
+
+    private Vector3 GetWallCheckOrigin()
+    {
+        if (bodyRigidbody != null)
+            return bodyRigidbody.worldCenterOfMass;
+
+        if (bodyTransform != null)
+            return bodyTransform.position;
+
+        return transform.position;
     }
 
     private static bool TryGetWallRight(Vector3 wallNormal, out Vector3 wallRight)
@@ -1315,6 +1553,62 @@ public sealed class HamsterMotorShellTraversalAdapter : MonoBehaviour
         _currentWallNormal = IsFiniteVector(wallHit.normal) && wallHit.normal.sqrMagnitude > 0.0001f
             ? wallHit.normal.normalized
             : Vector3.zero;
+
+        CacheWallHit(wallHit);
+    }
+
+    private void CacheWallHit(RaycastHit wallHit)
+    {
+        if (wallHit.collider == null)
+            return;
+
+        if (IsFiniteVector(wallHit.normal) && wallHit.normal.sqrMagnitude > 0.0001f)
+            _cachedWallNormal = wallHit.normal.normalized;
+
+        _cachedWallPoint = IsFiniteVector(wallHit.point) ? wallHit.point : GetWallCheckOrigin();
+        _cachedWallCollider = wallHit.collider;
+        _lastWallSeenTime = Time.time;
+    }
+
+    private bool CanKeepWallTraversalDuringContactGrace(out string reason)
+    {
+        reason = string.Empty;
+
+        if (!keepWallTraversalDuringContactGrace)
+            return false;
+
+        if (!HasUsableWallCache(Mathf.Max(0f, wallContactGraceTime), 0f))
+            return false;
+
+        if (!TryNormalizePlanar(_currentWallNormal, out Vector3 currentWallPlanarNormal) &&
+            TryNormalizePlanar(_cachedWallNormal, out Vector3 cachedNormal))
+        {
+            _currentWallNormal = cachedNormal;
+        }
+
+        reason = $"wall contact grace {Time.time - _lastWallSeenTime:F2}s";
+        return true;
+    }
+
+    private bool HasUsableWallCache(float maxAge, float maxDistance)
+    {
+        if (_cachedWallCollider == null)
+            return false;
+
+        if (!IsFiniteVector(_cachedWallNormal) || _cachedWallNormal.sqrMagnitude <= 0.0001f)
+            return false;
+
+        if (maxAge >= 0f && Time.time - _lastWallSeenTime > maxAge)
+            return false;
+
+        if (maxDistance > 0f && IsFiniteVector(_cachedWallPoint))
+        {
+            Vector3 offset = GetWallCheckOrigin() - _cachedWallPoint;
+            if (!IsFiniteVector(offset) || offset.sqrMagnitude > maxDistance * maxDistance)
+                return false;
+        }
+
+        return true;
     }
 
     private void ClearWallState()
@@ -1475,6 +1769,11 @@ public sealed class HamsterMotorShellTraversalAdapter : MonoBehaviour
         wallClingMaxFallSpeed = Mathf.Max(0f, wallClingMaxFallSpeed);
         wallSlideSlowAcceleration = Mathf.Max(0f, wallSlideSlowAcceleration);
         maxWallSlideFallSpeed = Mathf.Max(0.01f, maxWallSlideFallSpeed);
+        wallContactGraceTime = Mathf.Max(0f, wallContactGraceTime);
+        wallReattachGraceTime = Mathf.Max(0f, wallReattachGraceTime);
+        wallReattachMaxDistance = Mathf.Max(0f, wallReattachMaxDistance);
+        wallStartMinApproachDot = Mathf.Clamp(wallStartMinApproachDot, -1f, 1f);
+        wallStartMaxUpDot = Mathf.Clamp01(wallStartMaxUpDot);
         maxWallVerticalControlAcceleration = Mathf.Max(0f, maxWallVerticalControlAcceleration);
         wallVerticalSpeedControlGain = Mathf.Max(0f, wallVerticalSpeedControlGain);
         wallVerticalGravityCompensation = Mathf.Max(0f, wallVerticalGravityCompensation);
@@ -1488,6 +1787,7 @@ public sealed class HamsterMotorShellTraversalAdapter : MonoBehaviour
         wallJumpUpVelocityChange = Mathf.Max(0f, wallJumpUpVelocityChange);
         wallJumpAwayVelocityChange = Mathf.Max(0f, wallJumpAwayVelocityChange);
         wallJumpCooldown = Mathf.Max(0f, wallJumpCooldown);
+        wallJumpSuppressNormalJumpDuration = Mathf.Max(0f, wallJumpSuppressNormalJumpDuration);
         glideDelayAfterWallJump = Mathf.Max(0f, glideDelayAfterWallJump);
         wallMovementControlScale = Mathf.Clamp01(wallMovementControlScale);
         wallUprightControlScale = Mathf.Clamp01(wallUprightControlScale);

@@ -548,7 +548,7 @@ MonoBehaviour:
   wallCheckRadius: 0.28
   wallMinApproachDot: 0.35
   wallMaxUpDot: 0.35
-  maxWallClimbDuration: 1.5
+  maxWallClimbDuration: 0
   wallStickAcceleration: 10
   wallClimbUpAcceleration: 12
   wallMoveDownAcceleration: 7
@@ -559,6 +559,16 @@ MonoBehaviour:
   wallClingMaxFallSpeed: 0.35
   wallSlideSlowAcceleration: 6
   maxWallSlideFallSpeed: 2.5
+  wallContactGraceTime: 0.22
+  wallReattachGraceTime: 0.6
+  wallReattachMaxDistance: 1
+  useCachedWallNormalForReattach: 1
+  keepWallTraversalDuringContactGrace: 1
+  requireWallClimbHoldForStart: 1
+  wallStartMinApproachDot: 0.55
+  wallStartMaxUpDot: 0.2
+  rejectLowWallStartHitsWhenGrounded: 1
+  wallStartMinHitPointYOffsetFromBody: -0.35
   useWallVerticalSpeedControl: 1
   wallUpTargetVerticalSpeed: 2.2
   wallDownTargetVerticalSpeed: -1.8
@@ -577,6 +587,9 @@ MonoBehaviour:
   wallJumpAwayVelocityChange: 4.5
   wallJumpCooldown: 0.25
   glideDelayAfterWallJump: 0.18
+  wallJumpSuppressNormalJumpDuration: 0.45
+  holdJumpLockUntilWallJumpKeyRelease: 1
+  clearTraversalJumpKeyOnWallJump: 1
   wallMovementControlScale: 0.2
   wallUprightControlScale: 0.4
   requireForwardInputForWallClimb: 1
