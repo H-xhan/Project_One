@@ -5,8 +5,8 @@ using UnityEngine;
 [RequireComponent(typeof(NetworkObject))]
 public class CoinSpawnManager : NetworkBehaviour
 {
-    [SerializeField, Tooltip("서버에서 생성할 코인 프리팹입니다. NetworkObject와 CoinPickup이 포함되어 있어야 합니다.")]
-    private CoinPickup coinPrefab;
+    [SerializeField, Tooltip("서버에서 생성할 코인 프리팹입니다. NetworkObject가 포함되어 있어야 합니다.")]
+    private NetworkObject coinPrefab;
 
     [SerializeField, Tooltip("코인이 생성될 위치 목록입니다. 비어 있으면 코인을 생성하지 않습니다.")]
     private Transform[] spawnPoints;
@@ -124,14 +124,7 @@ public class CoinSpawnManager : NetworkBehaviour
         PruneSpawnedCoins();
         if (_spawnedCoins.Count >= Mathf.Max(0, maximumActiveCoins)) return false;
 
-        CoinPickup spawnedCoin = Instantiate(coinPrefab, position, rotation);
-        NetworkObject spawnedNetworkObject = spawnedCoin.GetComponent<NetworkObject>();
-        if (spawnedNetworkObject == null)
-        {
-            Destroy(spawnedCoin.gameObject);
-            return false;
-        }
-
+        NetworkObject spawnedNetworkObject = Instantiate(coinPrefab, position, rotation);
         spawnedNetworkObject.Spawn(true);
         _spawnedCoins.Add(spawnedNetworkObject);
         return true;

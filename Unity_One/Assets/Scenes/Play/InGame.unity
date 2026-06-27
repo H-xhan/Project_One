@@ -11123,7 +11123,7 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: 
   ShowTopMostFoldoutHeaderGroup: 1
-  coinPrefab: {fileID: 2683486730253762313, guid: 1bb8890c3b329d44c9619d127974ebaa, type: 3}
+  coinPrefab: {fileID: 3085511673664598456, guid: 04de1ca77e6c1ea47a9bd5dbe0ef75ef, type: 3}
   spawnPoints: []
   spawnAreas:
   - {fileID: 57654295}
