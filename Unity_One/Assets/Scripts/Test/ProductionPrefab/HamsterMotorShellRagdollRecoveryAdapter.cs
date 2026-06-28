@@ -4,6 +4,7 @@ using UnityEngine;
 public sealed class HamsterMotorShellRagdollRecoveryAdapter : MonoBehaviour
 {
     private const string TargetRootName = "Hamster_JointFreeMotorShell_MainScenes";
+    private const string RecoveryControlReasonPrefix = "RagdollRecovery:";
     private const float MinLogInterval = 0.05f;
     private const float MinStateDuration = 0.01f;
 
@@ -193,7 +194,7 @@ public sealed class HamsterMotorShellRagdollRecoveryAdapter : MonoBehaviour
         SetRecoveryVisualSuppression(false, "Disable");
         RestoreOriginalBodyPhysicsState();
         RestoreOriginalConstraints();
-        RestoreNormalMotorControl();
+        CompleteRecoveryStateCleanup("Disable");
     }
 
     private void OnDestroy()
@@ -203,6 +204,7 @@ public sealed class HamsterMotorShellRagdollRecoveryAdapter : MonoBehaviour
         SetRecoveryVisualSuppression(false, "Destroy");
         RestoreOriginalBodyPhysicsState();
         RestoreOriginalConstraints();
+        CompleteRecoveryStateCleanup("Destroy");
     }
 
     private void FixedUpdate()
@@ -658,7 +660,7 @@ public sealed class HamsterMotorShellRagdollRecoveryAdapter : MonoBehaviour
         RestoreOriginalBodyPhysicsState();
         StabilizeAngularVelocityForNormal();
         RestoreOriginalConstraints();
-        RestoreNormalMotorControl();
+        CompleteRecoveryStateCleanup("EnterNormal");
     }
 
     private void SetState(RecoveryState nextState, string source)
@@ -878,11 +880,28 @@ public sealed class HamsterMotorShellRagdollRecoveryAdapter : MonoBehaviour
         if (motor == null)
             return;
 
-        motor.SetExternalControlLock(false, "RagdollRecovery:Normal");
-        motor.SetExternalJumpLock(false, "RagdollRecovery:Normal");
-        motor.SetExternalMovementControlScale(1f, "RagdollRecovery:Normal");
-        motor.SetExternalUprightControlScale(1f, "RagdollRecovery:Normal");
-        motor.SetExternalPoseControlScale(1f, "RagdollRecovery:Normal");
+        if (IsRecoveryControlReason(motor.ExternalControlLockReason))
+            motor.SetExternalControlLock(false, null);
+        if (IsRecoveryControlReason(motor.ExternalJumpLockReason))
+            motor.SetExternalJumpLock(false, null);
+        if (IsRecoveryControlReason(motor.ExternalMovementControlReason))
+            motor.SetExternalMovementControlScale(1f, null);
+        if (IsRecoveryControlReason(motor.ExternalUprightControlReason))
+            motor.SetExternalUprightControlScale(1f, null);
+        if (IsRecoveryControlReason(motor.ExternalPoseControlReason))
+            motor.SetExternalPoseControlScale(1f, null);
+    }
+
+    private void CompleteRecoveryStateCleanup(string reason)
+    {
+        RestoreNormalMotorControl();
+        motor?.ClearRecoveryJumpState(reason);
+    }
+
+    private static bool IsRecoveryControlReason(string reason)
+    {
+        return !string.IsNullOrEmpty(reason) &&
+               reason.StartsWith(RecoveryControlReasonPrefix, System.StringComparison.Ordinal);
     }
 
     private bool CanApplyStateChange()

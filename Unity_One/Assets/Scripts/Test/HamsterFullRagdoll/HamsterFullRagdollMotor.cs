@@ -138,6 +138,7 @@ public class HamsterFullRagdollMotor : MonoBehaviour
     private bool _wasGroundedForJump;
     private float _lastAirborneVerticalSpeed;
     private bool _jumpConsumedThisFixedStep;
+    private bool _suppressJumpUntilKeyRelease;
     private float _sprintLogTimer;
     private bool _lastSprintHeld;
     private float _lastSelectedMaxSpeed;
@@ -240,6 +241,26 @@ public class HamsterFullRagdollMotor : MonoBehaviour
         _externalJumpLockReason = string.IsNullOrEmpty(reason) ? "none" : reason;
         if (locked)
             _jumpBufferTimer = 0f;
+    }
+
+    public void ClearRecoveryJumpState(string reason)
+    {
+        _jumpBufferTimer = 0f;
+        _jumpConsumedThisFixedStep = false;
+        _lastGroundedTime = _isGrounded ? Time.time : float.NegativeInfinity;
+        _wasGroundedForJump = _isGrounded;
+
+        if (TryReadJumpHeld(out bool jumpHeld) && jumpHeld)
+            _suppressJumpUntilKeyRelease = true;
+        else
+            _suppressJumpUntilKeyRelease = false;
+
+        if (debugJumpLogs)
+        {
+            Debug.Log(
+                $"[HamsterFullRagdollMotor:{gameObject.name}] Recovery jump state cleared reason={reason} suppressUntilRelease={_suppressJumpUntilKeyRelease}",
+                this);
+        }
     }
 
     public void SetExternalControlScale(float scale, string reason)
@@ -486,12 +507,39 @@ public class HamsterFullRagdollMotor : MonoBehaviour
 
         try
         {
+            if (_suppressJumpUntilKeyRelease)
+            {
+                if (Input.GetKey(jumpKey))
+                    return;
+
+                _suppressJumpUntilKeyRelease = false;
+            }
+
             if (Input.GetKeyDown(jumpKey))
                 _jumpBufferTimer = Mathf.Max(0f, jumpBufferTime);
         }
         catch (System.InvalidOperationException exception)
         {
             DisableLegacyInput(exception.Message);
+        }
+    }
+
+    private bool TryReadJumpHeld(out bool jumpHeld)
+    {
+        jumpHeld = false;
+
+        if (_legacyInputUnavailable)
+            return false;
+
+        try
+        {
+            jumpHeld = Input.GetKey(jumpKey);
+            return true;
+        }
+        catch (System.InvalidOperationException exception)
+        {
+            DisableLegacyInput(exception.Message);
+            return false;
         }
     }
 
