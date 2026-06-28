@@ -11128,8 +11128,8 @@ MonoBehaviour:
   spawnAreas:
   - {fileID: 57654295}
   - {fileID: 1975267347}
-  initialSpawnCount: 30
-  maximumActiveCoins: 35
+  initialSpawnCount: 5
+  maximumActiveCoins: 8
   respawnInterval: 6
   spawnPositionRandomRadius: 0.25
   preferSpawnAreas: 1
