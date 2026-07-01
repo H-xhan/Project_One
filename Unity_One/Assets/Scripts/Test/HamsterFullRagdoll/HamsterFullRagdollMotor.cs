@@ -516,7 +516,12 @@ public class HamsterFullRagdollMotor : MonoBehaviour
             }
 
             if (Input.GetKeyDown(jumpKey))
-                _jumpBufferTimer = Mathf.Max(0f, jumpBufferTime);
+            {
+                if (CanBufferMotorJumpInputNow())
+                    _jumpBufferTimer = Mathf.Max(0f, jumpBufferTime);
+                else
+                    _jumpBufferTimer = 0f;
+            }
         }
         catch (System.InvalidOperationException exception)
         {
@@ -549,6 +554,20 @@ public class HamsterFullRagdollMotor : MonoBehaviour
 
         if (_jumpCooldownTimer > 0f)
             _jumpCooldownTimer = Mathf.Max(0f, _jumpCooldownTimer - deltaTime);
+    }
+
+    private bool CanBufferMotorJumpInputNow()
+    {
+        if (_jumpCooldownTimer > 0f)
+            return false;
+
+        if (!requireGroundedForJump)
+            return true;
+
+        if (_isGrounded)
+            return true;
+
+        return Time.time - _lastGroundedTime <= Mathf.Max(0f, jumpCoyoteTime);
     }
 
     private void TickJumpBuffer(float deltaTime)
@@ -584,8 +603,7 @@ public class HamsterFullRagdollMotor : MonoBehaviour
 
         if (_externalControlLocked || _externalJumpLocked)
         {
-            _jumpBufferTimer = 0f;
-            LogJumpSkip(_externalControlLocked
+            ClearJumpBufferAndLogSkip(_externalControlLocked
                 ? $"external control locked reason={_externalControlLockReason}"
                 : $"external jump locked reason={_externalJumpLockReason}");
             return;
@@ -593,46 +611,46 @@ public class HamsterFullRagdollMotor : MonoBehaviour
 
         if (!enableJump)
         {
-            LogJumpSkip("disabled");
+            ClearJumpBufferAndLogSkip("disabled");
             return;
         }
 
         Rigidbody jumpBody = hipsBody;
         if (jumpBody == null)
         {
-            LogJumpSkip("no body");
+            ClearJumpBufferAndLogSkip("no body");
             return;
         }
 
         if (jumpBody.isKinematic)
         {
-            LogJumpSkip("body kinematic");
+            ClearJumpBufferAndLogSkip("body kinematic");
             return;
         }
 
         if ((jumpBody.constraints & RigidbodyConstraints.FreezePositionY) != 0)
         {
-            LogJumpSkip("freeze position y");
+            ClearJumpBufferAndLogSkip("freeze position y");
             return;
         }
 
         if (_jumpCooldownTimer > 0f)
         {
-            LogJumpSkip($"cooldown remaining={_jumpCooldownTimer:F2}");
+            ClearJumpBufferAndLogSkip($"cooldown remaining={_jumpCooldownTimer:F2}");
             return;
         }
 
         bool canUseCoyote = Time.time - _lastGroundedTime <= Mathf.Max(0f, jumpCoyoteTime);
         if (requireGroundedForJump && !_isGrounded && !canUseCoyote)
         {
-            LogJumpSkip("not grounded");
+            ClearJumpBufferAndLogSkip("not grounded");
             return;
         }
 
         Vector3 velocityBefore = jumpBody.linearVelocity;
         if (velocityBefore.y > maxUpwardVelocityBeforeJump)
         {
-            LogJumpSkip($"upward velocity too high y={velocityBefore.y:F2}");
+            ClearJumpBufferAndLogSkip($"upward velocity too high y={velocityBefore.y:F2}");
             return;
         }
 
@@ -675,6 +693,12 @@ public class HamsterFullRagdollMotor : MonoBehaviour
             return;
 
         Debug.Log($"[HamsterFullRagdollMotor:{gameObject.name}] Jump skipped reason={reason}", this);
+    }
+
+    private void ClearJumpBufferAndLogSkip(string reason)
+    {
+        _jumpBufferTimer = 0f;
+        LogJumpSkip(reason);
     }
 
     private void NotifyJumpVisualReaction()
