@@ -196,7 +196,7 @@ public class RoundUI : MonoBehaviour
                 lobbyCode = lobby.LobbyCode;
         }
 
-        roomCodeText.text = $"ROOM CODE : {lobbyCode}";
+        roomCodeText.text = lobbyCode;
     }
 
     private void OnClickReady()

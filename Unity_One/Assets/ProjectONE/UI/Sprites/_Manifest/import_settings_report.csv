@@ -56,8 +56,6 @@ Assets/ProjectONE/UI/Sprites/HUD/076_stamina_bar_background.png,HUD,Sprite,Sprit
 Assets/ProjectONE/UI/Sprites/HUD/077_stamina_bar_fill_teal.png,HUD,Sprite,Sprite,4096,4096,Uncompressed,Uncompressed,already_ok,Already matches recommended UI sprite import settings.
 Assets/ProjectONE/UI/Sprites/HUD/083_reward_coin_box_blank.png,HUD,Sprite,Sprite,4096,4096,Uncompressed,Uncompressed,already_ok,Already matches recommended UI sprite import settings.
 Assets/ProjectONE/UI/Sprites/HUD/085_secret_mission_tag_mint.png,HUD,Sprite,Sprite,4096,4096,Uncompressed,Uncompressed,already_ok,Already matches recommended UI sprite import settings.
-Assets/ProjectONE/UI/Sprites/HUD/스태미나 게이지UI  배경 (1).png,HUD,Sprite,Sprite,1024,4096,Uncompressed,Uncompressed,changed,Applied recommended settings and reimported.
-Assets/ProjectONE/UI/Sprites/HUD/스태미나 게이지UI.png,HUD,Sprite,Sprite,1024,4096,Uncompressed,Uncompressed,changed,Applied recommended settings and reimported.
 Assets/ProjectONE/UI/Sprites/Icons/027_coin_gold_paw.png,Icons,Sprite,Sprite,2048,2048,Uncompressed,Uncompressed,already_ok,Already matches recommended UI sprite import settings.
 Assets/ProjectONE/UI/Sprites/Icons/028_crown_gold.png,Icons,Sprite,Sprite,2048,2048,Uncompressed,Uncompressed,already_ok,Already matches recommended UI sprite import settings.
 Assets/ProjectONE/UI/Sprites/Icons/029_coin_silver_paw.png,Icons,Sprite,Sprite,2048,2048,Uncompressed,Uncompressed,already_ok,Already matches recommended UI sprite import settings.
@@ -92,6 +90,11 @@ Assets/ProjectONE/UI/Sprites/MainMenu/012_left_menu_panel_blank.png,MainMenu,Spr
 Assets/ProjectONE/UI/Sprites/MainMenu/014_player_profile_card_alt.png,MainMenu,Sprite,Sprite,4096,4096,Uncompressed,Uncompressed,already_ok,Already matches recommended UI sprite import settings.
 Assets/ProjectONE/UI/Sprites/MainMenu/036_player_profile_card_hamster.png,MainMenu,Sprite,Sprite,4096,4096,Uncompressed,Uncompressed,already_ok,Already matches recommended UI sprite import settings.
 Assets/ProjectONE/UI/Sprites/MainMenu/065_todo_list_note.png,MainMenu,Sprite,Sprite,4096,4096,Uncompressed,Uncompressed,already_ok,Already matches recommended UI sprite import settings.
+Assets/ProjectONE/UI/Sprites/MainMenu/ChatGPT Image 2026년 7월 1일 오후 10_17_41 (1).png,MainMenu,Sprite,Sprite,4096,4096,Uncompressed,Uncompressed,already_ok,Already matches recommended UI sprite import settings.
+Assets/ProjectONE/UI/Sprites/MainMenu/ChatGPT Image 2026년 7월 1일 오후 10_17_42 (2).png,MainMenu,Sprite,Sprite,4096,4096,Uncompressed,Uncompressed,already_ok,Already matches recommended UI sprite import settings.
+Assets/ProjectONE/UI/Sprites/MainMenu/ChatGPT Image 2026년 7월 1일 오후 10_17_43 (4).png,MainMenu,Sprite,Sprite,4096,4096,Uncompressed,Uncompressed,already_ok,Already matches recommended UI sprite import settings.
+Assets/ProjectONE/UI/Sprites/MainMenu/ChatGPT Image 2026년 7월 1일 오후 10_18_12.png,MainMenu,Sprite,Sprite,4096,4096,Uncompressed,Uncompressed,already_ok,Already matches recommended UI sprite import settings.
+Assets/ProjectONE/UI/Sprites/MainMenu/yellow_button_only.png,MainMenu,Sprite,Sprite,4096,4096,Uncompressed,Uncompressed,already_ok,Already matches recommended UI sprite import settings.
 Assets/ProjectONE/UI/Sprites/Panels/026_note_card_large_blank.png,Panels,Sprite,Sprite,4096,4096,Uncompressed,Uncompressed,already_ok,Already matches recommended UI sprite import settings.
 Assets/ProjectONE/UI/Sprites/Panels/042_long_blank_paper_banner_tape.png,Panels,Sprite,Sprite,4096,4096,Uncompressed,Uncompressed,already_ok,Already matches recommended UI sprite import settings.
 Assets/ProjectONE/UI/Sprites/Panels/046_long_blank_pill_panel.png,Panels,Sprite,Sprite,4096,4096,Uncompressed,Uncompressed,already_ok,Already matches recommended UI sprite import settings.

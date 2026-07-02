@@ -6,6 +6,10 @@ public class HamsterFullRagdollMotor : MonoBehaviour
 {
     private const string InputRouteTargetName = "Hamster_JointFreeMotorShell_MainScenes";
     private const float InputRouteLogInterval = 0.5f;
+    private const float MotorJumpRearmStableGroundTime = 0.05f;
+    private const float MaxMotorJumpRearmGroundHitDistance = 0.5f;
+    private const float PostJumpSprintMovementSettleTime = 0.10f;
+    private const float PostJumpSprintMovementSettleMinScale = 0.35f;
     private const string CameraPivotName = "CameraPivot";
     private const string PlayerCameraName = "PlayerCamera";
     private const string VisualPreviewRootName = "VisualPreviewRoot";
@@ -135,6 +139,10 @@ public class HamsterFullRagdollMotor : MonoBehaviour
     private float _jumpCooldownTimer;
     private float _jumpBufferTimer;
     private float _lastGroundedTime = float.NegativeInfinity;
+    private bool _motorJumpConsumedSinceStableGround;
+    private bool _motorJumpNeedsAirborneBeforeRearm;
+    private float _motorJumpStableGroundTimer;
+    private float _postJumpSprintMovementSettleTimer;
     private bool _wasGroundedForJump;
     private float _lastAirborneVerticalSpeed;
     private bool _jumpConsumedThisFixedStep;
@@ -248,6 +256,10 @@ public class HamsterFullRagdollMotor : MonoBehaviour
         _jumpBufferTimer = 0f;
         _jumpConsumedThisFixedStep = false;
         _lastGroundedTime = _isGrounded ? Time.time : float.NegativeInfinity;
+        _motorJumpConsumedSinceStableGround = false;
+        _motorJumpNeedsAirborneBeforeRearm = false;
+        _motorJumpStableGroundTimer = 0f;
+        _postJumpSprintMovementSettleTimer = 0f;
         _wasGroundedForJump = _isGrounded;
 
         if (TryReadJumpHeld(out bool jumpHeld) && jumpHeld)
@@ -326,6 +338,7 @@ public class HamsterFullRagdollMotor : MonoBehaviour
 
         float fixedDeltaTime = Time.fixedDeltaTime;
         TickJumpCooldown(fixedDeltaTime);
+        TickPostJumpSprintMovementSettle(fixedDeltaTime);
         CaptureInputRoutePositionDelta();
 
         Vector2 rawMoveInput = ReadMoveInput();
@@ -353,6 +366,7 @@ public class HamsterFullRagdollMotor : MonoBehaviour
             effectiveControl *= Mathf.Clamp01(_externalMovementControlScale);
         bool hasMoveInput = _smoothedMoveInput.sqrMagnitude > InputDeadzone * InputDeadzone;
         acceleration = ApplySprintPivotAssist(_smoothedMoveWorldDirection, sprintHeld, hasMoveInput, acceleration);
+        acceleration = ApplyPostJumpSprintMovementSettle(sprintHeld, acceleration);
         _lastMaxSpeed = maxSpeed;
         _lastSelectedMaxSpeed = maxSpeed;
         _lastSelectedAcceleration = acceleration;
@@ -561,6 +575,9 @@ public class HamsterFullRagdollMotor : MonoBehaviour
         if (_jumpCooldownTimer > 0f)
             return false;
 
+        if (_motorJumpConsumedSinceStableGround)
+            return false;
+
         if (!requireGroundedForJump)
             return true;
 
@@ -579,6 +596,7 @@ public class HamsterFullRagdollMotor : MonoBehaviour
     private void UpdateJumpGroundedState()
     {
         float verticalVelocity = GetVerticalVelocity(hipsBody);
+
         if (_isGrounded)
         {
             _lastGroundedTime = Time.time;
@@ -594,6 +612,7 @@ public class HamsterFullRagdollMotor : MonoBehaviour
         }
 
         _wasGroundedForJump = _isGrounded;
+        UpdateMotorJumpRearmState();
     }
 
     private void TryConsumeJump()
@@ -640,6 +659,12 @@ public class HamsterFullRagdollMotor : MonoBehaviour
             return;
         }
 
+        if (_motorJumpConsumedSinceStableGround)
+        {
+            ClearJumpBufferAndLogSkip("jump not rearmed");
+            return;
+        }
+
         bool canUseCoyote = Time.time - _lastGroundedTime <= Mathf.Max(0f, jumpCoyoteTime);
         if (requireGroundedForJump && !_isGrounded && !canUseCoyote)
         {
@@ -664,6 +689,10 @@ public class HamsterFullRagdollMotor : MonoBehaviour
         NotifyJumpVisualReaction();
         _jumpCooldownTimer = Mathf.Max(0f, jumpCooldown);
         _jumpBufferTimer = 0f;
+        _motorJumpConsumedSinceStableGround = true;
+        _motorJumpNeedsAirborneBeforeRearm = true;
+        _motorJumpStableGroundTimer = 0f;
+        _postJumpSprintMovementSettleTimer = _lastSprintHeld ? PostJumpSprintMovementSettleTime : 0f;
         _jumpConsumedThisFixedStep = true;
 
         if (debugJumpLogs)
@@ -699,6 +728,65 @@ public class HamsterFullRagdollMotor : MonoBehaviour
     {
         _jumpBufferTimer = 0f;
         LogJumpSkip(reason);
+    }
+
+    private void TickPostJumpSprintMovementSettle(float deltaTime)
+    {
+        if (_postJumpSprintMovementSettleTimer <= 0f)
+            return;
+
+        _postJumpSprintMovementSettleTimer = Mathf.Max(0f, _postJumpSprintMovementSettleTimer - deltaTime);
+    }
+
+    private float ApplyPostJumpSprintMovementSettle(bool sprintHeld, float selectedAcceleration)
+    {
+        if (!sprintHeld || _postJumpSprintMovementSettleTimer <= 0f || selectedAcceleration <= 0f)
+            return selectedAcceleration;
+
+        float duration = Mathf.Max(0.0001f, PostJumpSprintMovementSettleTime);
+        float settle01 = 1f - Mathf.Clamp01(_postJumpSprintMovementSettleTimer / duration);
+        float scale = Mathf.Lerp(PostJumpSprintMovementSettleMinScale, 1f, settle01);
+        return selectedAcceleration * scale;
+    }
+
+    private void UpdateMotorJumpRearmState()
+    {
+        if (!_motorJumpConsumedSinceStableGround)
+            return;
+
+        bool stableGround = IsMotorJumpRearmGroundStableNow();
+        if (_motorJumpNeedsAirborneBeforeRearm)
+        {
+            if (stableGround)
+            {
+                _motorJumpStableGroundTimer = 0f;
+                return;
+            }
+
+            _motorJumpNeedsAirborneBeforeRearm = false;
+            _motorJumpStableGroundTimer = 0f;
+            return;
+        }
+
+        if (!stableGround)
+        {
+            _motorJumpStableGroundTimer = 0f;
+            return;
+        }
+
+        _motorJumpStableGroundTimer += Time.fixedDeltaTime;
+        if (_motorJumpStableGroundTimer < MotorJumpRearmStableGroundTime)
+            return;
+
+        _motorJumpConsumedSinceStableGround = false;
+        _motorJumpStableGroundTimer = 0f;
+    }
+
+    private bool IsMotorJumpRearmGroundStableNow()
+    {
+        return _isGrounded &&
+               !float.IsNaN(_lastGroundHitDistance) &&
+               _lastGroundHitDistance <= MaxMotorJumpRearmGroundHitDistance;
     }
 
     private void NotifyJumpVisualReaction()

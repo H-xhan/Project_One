@@ -1,0 +1,57 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 0a569f39f4205cf4db37a232c41ef26e, type: 3}
+  m_Name: ProjectOneUIStylePreset
+  m_EditorClassIdentifier: 
+  mainFont: {fileID: 11400000, guid: 2e63988809475cc429c8e442afd48bd7, type: 2}
+  paperPanelLarge: {fileID: 21300000, guid: 8e32d90ff96036449bb5f674baab4a03, type: 3}
+  paperPanelSmall: {fileID: 21300000, guid: ba4f6e4e3543635498ef451c24c77fa5, type: 3}
+  paperButton: {fileID: 21300000, guid: 782a65c7721f58b44ba48d443cf75a82, type: 3}
+  yellowButton: {fileID: 21300000, guid: f17248bb8133ba34f83681d984a038f6, type: 3}
+  bluePillPanel: {fileID: 21300000, guid: c192b1abc4cd61d48bc680ec41996fd1, type: 3}
+  noteTag: {fileID: 0}
+  blueTape: {fileID: 21300000, guid: c192b1abc4cd61d48bc680ec41996fd1, type: 3}
+  yellowTape: {fileID: 21300000, guid: 50cbb2965a9d6c6448b762cf268ebe14, type: 3}
+  paperClip: {fileID: 21300000, guid: ae49c5dc74575e647a1af06e1353b50a, type: 3}
+  pin: {fileID: 21300000, guid: 50183231fe763f843a71904870d7dfe7, type: 3}
+  cornerFold: {fileID: 21300000, guid: 7a0568d5e3330b84687e307992be3030, type: 3}
+  pawIcon: {fileID: 21300000, guid: 4532f08e97dd33c4eada9c0b0e2497d0, type: 3}
+  coinIcon: {fileID: 21300000, guid: 4532f08e97dd33c4eada9c0b0e2497d0, type: 3}
+  clockIcon: {fileID: 21300000, guid: b90b2b057863f1f4bbfc9792ba1cd0b9, type: 3}
+  peopleIcon: {fileID: 21300000, guid: f5f8f976957da2e49b09a2a3b68d6693, type: 3}
+  missionIcon: {fileID: 21300000, guid: eeb35f4f37326254fa4bd37443bbac85, type: 3}
+  playIcon: {fileID: 21300000, guid: 1af2afd3bbf22934db1acae604c1e75f, type: 3}
+  homeIcon: {fileID: 21300000, guid: 99805c65a637c984983db4f199b26214, type: 3}
+  exitIcon: {fileID: 21300000, guid: fff8bf00d9c79b144b8861ce10fb176b, type: 3}
+  defaultCharacterPortrait: {fileID: 21300000, guid: 26642520c125f4248aad40779fa91958, type: 3}
+  crownIcon: {fileID: 21300000, guid: d2d71afea1d97f7499938b0e449947d0, type: 3}
+  successStamp: {fileID: 21300000, guid: 354ee64dcf1f65049b989f97fbd712f4, type: 3}
+  paperColor: {r: 1, g: 0.94, b: 0.82, a: 1}
+  paperSoftColor: {r: 1, g: 0.97, b: 0.9, a: 1}
+  navyColor: {r: 0.1, g: 0.16, b: 0.35, a: 1}
+  mutedNavyColor: {r: 0.32, g: 0.38, b: 0.55, a: 1}
+  yellowColor: {r: 1, g: 0.78, b: 0.24, a: 1}
+  blueColor: {r: 0.32, g: 0.62, b: 0.95, a: 1}
+  mintColor: {r: 0.43, g: 0.82, b: 0.72, a: 1}
+  redColor: {r: 0.95, g: 0.38, b: 0.34, a: 1}
+  lineColor: {r: 0.72, g: 0.65, b: 0.55, a: 0.55}
+  shadowColor: {r: 0.1, g: 0.08, b: 0.06, a: 0.25}
+  titleSize: 58
+  subtitleSize: 30
+  bodySize: 28
+  smallSize: 22
+  buttonSize: 34
+  bigButtonSize: 66
+  hoverScale: 1.045
+  pressScale: 0.955
+  scaleDuration: 0.09
+  introDuration: 0.18
