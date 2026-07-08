@@ -21,9 +21,6 @@ public class GameStateManager : NetworkBehaviour
     [SerializeField, Tooltip("로비/게임 존 텔레포트를 담당하는 매니저(없으면 자동 탐색)")]
     private InGameMatchManager inGameMatchManager;
 
-    [SerializeField, Tooltip("라운드 미션 배정/판정/보상/최종 코인 승자 계산을 담당하는 매니저입니다. 비워두면 씬에서 자동 탐색합니다.")]
-    private RoundMissionManager roundMissionManager;
-
     [Header("시간 설정")]
     [SerializeField, Tooltip("카운트다운 시간(초)")]
     private float countdownSeconds = 3f;
@@ -84,9 +81,6 @@ public class GameStateManager : NetworkBehaviour
 
     [SerializeField, Tooltip("승자가 없을 때 사용할 winner client id 값입니다.")]
     private ulong invalidWinnerClientId = ulong.MaxValue;
-
-    [SerializeField, Tooltip("RoundMissionManager 결과가 있을 때 최종 코인 기준 승자 판정을 사용할지 여부입니다.")]
-    private bool useMissionResultWinnerWhenAvailable = true;
 
     [Header("Debug")]
     [SerializeField, Tooltip("디버그 로그 출력 여부입니다.")]
@@ -184,8 +178,6 @@ public class GameStateManager : NetworkBehaviour
         if (inGameMatchManager == null)
             inGameMatchManager = FindFirstObjectByType<InGameMatchManager>();
 
-        if (roundMissionManager == null)
-            roundMissionManager = FindFirstObjectByType<RoundMissionManager>();
     }
 
     private void Update()
@@ -247,7 +239,6 @@ public class GameStateManager : NetworkBehaviour
         ApplyCursorStateForCurrentGameState("enter-lobby");
         StateTimer.Value = 0f;
         ResetRoundResultServer();
-        ClearRoundMissionsServer();
         _roundParticipantClientIds.Clear();
 
         if (readySystem != null)
@@ -279,7 +270,6 @@ public class GameStateManager : NetworkBehaviour
         HandleEnteredPlayingForCursor("enter-playing");
         StateTimer.Value = playSeconds;
         _nextSurvivorCheckTime = Time.unscaledTime + Mathf.Max(0f, survivorCheckInterval);
-        BeginRoundMissionsServer();
 
         if (teleportPlayersOnEnterPlaying && inGameMatchManager != null && inGameMatchManager.IsSpawned)
         {
@@ -333,23 +323,6 @@ public class GameStateManager : NetworkBehaviour
         RoundIsDrawValue.Value = false;
         _roundResultResolved = false;
         _nextSurvivorCheckTime = 0f;
-    }
-
-    private void BeginRoundMissionsServer()
-    {
-        if (!IsServer) return;
-        if (roundMissionManager == null) return;
-        if (_roundParticipantClientIds.Count == 0) return;
-
-        roundMissionManager.ServerBeginRoundMissions(_roundParticipantClientIds);
-    }
-
-    private void ClearRoundMissionsServer()
-    {
-        if (!IsServer) return;
-        if (roundMissionManager == null) return;
-
-        roundMissionManager.ServerClearRoundMissions();
     }
 
     private void TickRoundEndCheckServer()
@@ -414,11 +387,10 @@ public class GameStateManager : NetworkBehaviour
         return aliveCount;
     }
 
-    private void ResolveRoundWinnerServer(ulong winnerClientId, bool allowMissionResultOverride = true)
+    private void ResolveRoundWinnerServer(ulong winnerClientId)
     {
         if (!IsServer) return;
         if (_roundResultResolved) return;
-        if (allowMissionResultOverride && TryResolveMissionResultWinnerServer()) return;
 
         WinnerClientIdValue.Value = winnerClientId;
         RoundHasWinnerValue.Value = true;
@@ -428,11 +400,10 @@ public class GameStateManager : NetworkBehaviour
         EnterResults();
     }
 
-    private void ResolveRoundDrawServer(bool allowMissionResultOverride = true)
+    private void ResolveRoundDrawServer()
     {
         if (!IsServer) return;
         if (_roundResultResolved) return;
-        if (allowMissionResultOverride && TryResolveMissionResultWinnerServer()) return;
 
         WinnerClientIdValue.Value = invalidWinnerClientId;
         RoundHasWinnerValue.Value = false;
@@ -446,16 +417,15 @@ public class GameStateManager : NetworkBehaviour
     {
         if (!IsServer) return;
         if (_roundResultResolved) return;
-        if (TryResolveMissionResultWinnerServer()) return;
 
         int aliveCount = CountAliveParticipantsServer(out ulong lastAliveClientId);
         if (aliveCount == 1)
         {
-            ResolveRoundWinnerServer(lastAliveClientId, false);
+            ResolveRoundWinnerServer(lastAliveClientId);
             return;
         }
 
-        ResolveRoundDrawServer(false);
+        ResolveRoundDrawServer();
     }
 
     private bool CanUseLastSurvivorWinCheck()
@@ -466,28 +436,6 @@ public class GameStateManager : NetworkBehaviour
         if (GetState() != GameState.Playing) return false;
 
         return _roundParticipantClientIds.Count >= Mathf.Max(1, minimumParticipantsForLastSurvivorWin);
-    }
-
-    private bool TryResolveMissionResultWinnerServer()
-    {
-        if (!IsServer) return false;
-        if (!useMissionResultWinnerWhenAvailable) return false;
-        if (roundMissionManager == null) return false;
-        if (_roundParticipantClientIds.Count == 0) return false;
-        if (!roundMissionManager.IsMissionRoundActive && !roundMissionManager.HasEvaluatedResults) return false;
-
-        bool hasEvaluatedMissionResults = roundMissionManager.HasEvaluatedResults ||
-            roundMissionManager.ServerEvaluateMissionsAndApplyRewards();
-        if (!hasEvaluatedMissionResults) return false;
-
-        if (!roundMissionManager.ServerResolveFinalCoinWinner(out ulong winnerClientId, out bool isDraw)) return false;
-
-        if (isDraw)
-            ResolveRoundDrawServer(false);
-        else
-            ResolveRoundWinnerServer(winnerClientId, false);
-
-        return true;
     }
 
     private void SubscribeGameStateCursorEvents()

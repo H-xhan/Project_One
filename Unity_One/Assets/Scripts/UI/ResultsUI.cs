@@ -1,4 +1,3 @@
-using System.Text;
 using TMPro;
 using UnityEngine;
 using UnityEngine.UI;
@@ -20,9 +19,6 @@ public class ResultsUI : MonoBehaviour
     [SerializeField, Tooltip("결과 상태와 승자 정보를 제공하는 GameStateManager입니다. 비워두면 씬에서 자동 탐색합니다.")]
     private GameStateManager gameStateManager;
 
-    [SerializeField, Tooltip("미션 결과 스냅샷을 제공하는 RoundMissionManager입니다. 비워두면 씬에서 자동 탐색합니다.")]
-    private RoundMissionManager roundMissionManager;
-
     [SerializeField, Tooltip("플레이어별 미션 결과를 표시할 TMP 텍스트입니다.")]
     private TMP_Text missionResultsText;
 
@@ -41,6 +37,7 @@ public class ResultsUI : MonoBehaviour
     [SerializeField, Tooltip("Results UI를 갱신하는 간격입니다.")]
     private float refreshInterval = 0.1f;
 
+#pragma warning disable 0414 // Legacy serialized Mission fields are intentionally retained but hidden at runtime.
     [SerializeField, Tooltip("Results 상태에서 미션 결과 상세를 표시할지 여부입니다.")]
     private bool showMissionResults = true;
 
@@ -57,7 +54,7 @@ public class ResultsUI : MonoBehaviour
     private string missionFailedText = "실패";
 
     [SerializeField, Tooltip("Results 상태지만 아직 미션 결과를 읽지 못했을 때 표시할 문구입니다.")]
-    private string noMissionResultsText = "미션 결과를 확인 중...";
+    private string noMissionResultsText = string.Empty;
 
     [SerializeField, Tooltip("미션 이름을 알 수 없을 때 표시할 문구입니다.")]
     private string unknownMissionNameText = "알 수 없는 미션";
@@ -67,6 +64,7 @@ public class ResultsUI : MonoBehaviour
 
     [SerializeField, Tooltip("미션 결과가 없을 때 missionResultsText를 숨길지 여부입니다.")]
     private bool hideMissionResultsWhenEmpty = false;
+#pragma warning restore 0414
 
     private CanvasGroup targetCanvasGroup;
     private GraphicRaycaster targetGraphicRaycaster;
@@ -77,14 +75,12 @@ public class ResultsUI : MonoBehaviour
     {
         ResolvePanelReferences();
         ResolveGameStateManager();
-        ResolveRoundMissionManager();
     }
 
     private void OnEnable()
     {
         ResolvePanelReferences();
         ResolveGameStateManager();
-        ResolveRoundMissionManager();
         SubscribeToStateChanges();
         ForceRefresh();
         nextRefreshTime = Time.unscaledTime + Mathf.Max(0f, refreshInterval);
@@ -121,8 +117,6 @@ public class ResultsUI : MonoBehaviour
     {
         if (gameStateManager == null)
             ResolveGameStateManager();
-
-        ResolveRoundMissionManager();
 
         bool shouldShow = gameStateManager != null &&
             gameStateManager.GetState() == GameStateManager.GameState.Results;
@@ -178,12 +172,6 @@ public class ResultsUI : MonoBehaviour
     {
         if (gameStateManager == null)
             gameStateManager = FindFirstObjectByType<GameStateManager>();
-    }
-
-    private void ResolveRoundMissionManager()
-    {
-        if (roundMissionManager == null)
-            roundMissionManager = FindFirstObjectByType<RoundMissionManager>();
     }
 
     private void SubscribeToStateChanges()
@@ -245,160 +233,7 @@ public class ResultsUI : MonoBehaviour
 
     private void RefreshMissionResults()
     {
-        if (missionResultsText == null)
-            return;
-
-        if (!showMissionResults)
-        {
-            missionResultsText.text = string.Empty;
-            SetMissionResultsVisible(false);
-            return;
-        }
-
-        string resultsText = BuildMissionResultsText();
-        if (string.IsNullOrWhiteSpace(resultsText))
-        {
-            missionResultsText.text = string.Empty;
-            SetMissionResultsVisible(false);
-            return;
-        }
-
-        missionResultsText.text = resultsText;
-        SetMissionResultsVisible(true);
-    }
-
-    private string BuildMissionResultsText()
-    {
-        if (roundMissionManager == null)
-            return GetEmptyMissionResultsText();
-
-        var resultsSnapshot = roundMissionManager.GetResultsSnapshot();
-        if (resultsSnapshot == null || resultsSnapshot.Count == 0)
-            return GetEmptyMissionResultsText();
-
-        StringBuilder builder = new StringBuilder();
-        if (!string.IsNullOrWhiteSpace(missionResultsHeaderText))
-        {
-            builder.AppendLine(missionResultsHeaderText);
-        }
-
-        for (int i = 0; i < resultsSnapshot.Count; i++)
-        {
-            if (i > 0)
-                builder.AppendLine();
-
-            builder.AppendLine(FormatMissionResult(resultsSnapshot[i]));
-        }
-
-        return builder.ToString().TrimEnd();
-    }
-
-    private string GetEmptyMissionResultsText()
-    {
-        return hideMissionResultsWhenEmpty ? string.Empty : noMissionResultsText;
-    }
-
-    private string FormatMissionResult(MissionResult result)
-    {
-        string missionName = GetMissionDisplayName(result);
-        string resultStateText = GetMissionResultStateText(result);
-        string reason = CleanupMissionReason(result.reason);
-
-        return FormatMissionResultLine(
-            result.clientId,
-            missionName,
-            resultStateText,
-            result.rewardCoins,
-            result.finalCoins,
-            reason);
-    }
-
-    private string GetMissionDisplayName(MissionResult result)
-    {
-        string familyDisplayName = GetMissionFamilyDisplayName(result.family);
-        if (!string.IsNullOrWhiteSpace(familyDisplayName))
-            return familyDisplayName;
-
-        if (!string.IsNullOrWhiteSpace(result.missionId))
-            return result.missionId;
-
-        return unknownMissionNameText;
-    }
-
-    private string GetMissionFamilyDisplayName(MissionFamily family)
-    {
-        switch (family)
-        {
-            case MissionFamily.LastLocation:
-                return "마지막 위치";
-            case MissionFamily.LastHeldItem:
-                return "마지막 소지품";
-            case MissionFamily.CarryToZone:
-                return "몰래 운반";
-            case MissionFamily.RichInDangerZone:
-                return "위험한 부자";
-            case MissionFamily.KnockOff:
-                return "떨어트리기";
-            case MissionFamily.GuessMission:
-                return "상대 미션 맞추기";
-            default:
-                return string.Empty;
-        }
-    }
-
-    private string CleanupMissionReason(string reason)
-    {
-        if (string.IsNullOrWhiteSpace(reason))
-            return emptyReasonText;
-
-        string cleanedReason = reason.Trim();
-        switch (cleanedReason)
-        {
-            case "종료 순간 지정 구역 안에 있었습니다.":
-                return "종료 순간 목표 구역 안에 있었습니다.";
-            case "종료 순간 지정 구역 안에 있지 않았습니다.":
-                return "종료 순간 목표 구역 안에 있지 않았습니다.";
-            case "보유 코인이 조건보다 부족합니다.":
-                return "보유 코인이 조건보다 부족했습니다.";
-            default:
-                return cleanedReason.Replace("보유 코인이 조건보다 부족합니다.", "보유 코인이 조건보다 부족했습니다.");
-        }
-    }
-
-    private string GetMissionResultStateText(MissionResult result)
-    {
-        bool succeeded = result.succeeded || result.resultState == MissionResultState.Success;
-        return succeeded ? missionSuccessText : missionFailedText;
-    }
-
-    private string FormatMissionResultLine(
-        ulong clientId,
-        string missionName,
-        string resultStateText,
-        int rewardCoins,
-        int finalCoins,
-        string reason)
-    {
-        string format = GetMissionResultLineFormat();
-
-        try
-        {
-            return string.Format(format, clientId, missionName, resultStateText, rewardCoins, finalCoins, reason);
-        }
-        catch (System.FormatException)
-        {
-            return $"플레이어 {clientId} · {missionName} · {resultStateText}\n보상 +{rewardCoins}코인 / 최종 코인 {finalCoins}\n{reason}";
-        }
-    }
-
-    private string GetMissionResultLineFormat()
-    {
-        if (string.IsNullOrWhiteSpace(missionResultLineFormat))
-            return DefaultMissionResultLineFormat;
-
-        return missionResultLineFormat == LegacyMissionResultLineFormat
-            ? DefaultMissionResultLineFormat
-            : missionResultLineFormat;
+        ClearMissionResults();
     }
 
     private void ClearMissionResults()
@@ -468,9 +303,6 @@ public class ResultsUI : MonoBehaviour
 
         if (string.IsNullOrWhiteSpace(missionFailedText))
             missionFailedText = "실패";
-
-        if (string.IsNullOrWhiteSpace(noMissionResultsText))
-            noMissionResultsText = "미션 결과를 확인 중...";
 
         if (string.IsNullOrWhiteSpace(unknownMissionNameText))
             unknownMissionNameText = "알 수 없는 미션";
