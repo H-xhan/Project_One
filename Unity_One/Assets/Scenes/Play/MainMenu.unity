@@ -2806,6 +2806,7 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: 
   url: https://discord.gg/WzFSYqsrhp
+  autoBindButtonOnSameObject: 1
   logOpenUrl: 1
 --- !u!1 &618991009
 GameObject:

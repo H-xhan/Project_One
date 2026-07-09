@@ -5133,13 +5133,14 @@ MonoBehaviour:
   returnCountdownFormat: "\uB85C\uBE44 \uBCF5\uADC0\uAE4C\uC9C0 {0}\uCD08"
   refreshInterval: 0.1
   showMissionResults: 0
-  missionResultsHeaderText: ""
-  missionResultLineFormat: ""
-  missionSuccessText: ""
-  missionFailedText: ""
-  noMissionResultsText: ""
-  unknownMissionNameText: ""
-  emptyReasonText: ""
+  missionResultsHeaderText: "\uBBF8\uC158 \uACB0\uACFC"
+  missionResultLineFormat: "\uD50C\uB808\uC774\uC5B4 {0} \xB7 {1} \xB7 {2}\n\uBCF4\uC0C1
+    +{3}\uCF54\uC778 / \uCD5C\uC885 \uCF54\uC778 {4}\n{5}"
+  missionSuccessText: "\uC131\uACF5"
+  missionFailedText: "\uC2E4\uD328"
+  noMissionResultsText: 
+  unknownMissionNameText: "\uC54C \uC218 \uC5C6\uB294 \uBBF8\uC158"
+  emptyReasonText: "\uACB0\uACFC \uC0AC\uC720 \uC5C6\uC74C"
   hideMissionResultsWhenEmpty: 1
 --- !u!1 &509254353
 GameObject:
@@ -10795,7 +10796,7 @@ GameObject:
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
   m_StaticEditorFlags: 0
-  m_IsActive: 1
+  m_IsActive: 0
 --- !u!4 &1243381392
 Transform:
   m_ObjectHideFlags: 0

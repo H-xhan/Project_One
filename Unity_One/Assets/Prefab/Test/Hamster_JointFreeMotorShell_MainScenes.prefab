@@ -82,8 +82,8 @@ MonoBehaviour:
   m_Enabled: 1
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: e96cb6065543e43c4a752faaa1468eb1, type: 3}
-  m_Name: ""
-  m_EditorClassIdentifier: ""
+  m_Name: 
+  m_EditorClassIdentifier: 
   ShowTopMostFoldoutHeaderGroup: 1
   NetworkTransformExpanded: 0
   AutoOwnerAuthorityTickOffset: 1
@@ -278,6 +278,12 @@ MonoBehaviour:
   throwForceMultiplier: 1.5
   throwUpwardBonus: 0.4
   throwTorqueMultiplier: 1.1
+  enableThrowCollisionGrace: 1
+  throwCollisionGraceDuration: 0.25
+  throwReleaseCarrierClearance: 0.25
+  throwReleaseMaxForwardCorrection: 0.75
+  throwInitialOverlapRadius: 0.45
+  debugThrowCollisionGraceLogs: 0
   debugLogs: 0
   debugHeldPoseLogs: 0
 --- !u!114 &6100000000000000102
@@ -668,10 +674,11 @@ MonoBehaviour:
   m_Enabled: 1
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: 3853c70aebf888c49b0e09b08b20d0e7, type: 3}
-  m_Name: ""
-  m_EditorClassIdentifier: ""
+  m_Name: 
+  m_EditorClassIdentifier: 
+  ShowTopMostFoldoutHeaderGroup: 1
   maxPostItSlots: 6
-  debugLogs: 0
+  debugLogs: 1
 --- !u!1 &1594514674284813732
 GameObject:
   m_ObjectHideFlags: 0
@@ -2178,10 +2185,6 @@ MonoBehaviour:
   maxCoinDropSpawnAttempts: 16
   preferCoinSpawnManagerRandomDrop: 1
   enableCoinRespawnDebugLogs: 0
-  enableCombatFallContributionTracking: 1
-  recentCombatContributorValidSeconds: 4
-  countCoinRespawnFallAsKnockOff: 1
-  enableCombatFallContributionDebugLogs: 0
   enableDebugLogs: 0
   enableTemporaryControlLockDebugLogs: 0
   enableStandUpControlLockDebugLogs: 0
