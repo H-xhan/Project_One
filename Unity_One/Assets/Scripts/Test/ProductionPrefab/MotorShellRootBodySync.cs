@@ -1,4 +1,5 @@
 using System.Reflection;
+using Unity.Netcode;
 using UnityEngine;
 
 public sealed class MotorShellRootBodySync : MonoBehaviour
@@ -22,6 +23,7 @@ public sealed class MotorShellRootBodySync : MonoBehaviour
     private int _initialAlignRemaining;
     private float _nextDebugLogTime;
     private bool _missingReferenceWarningLogged;
+    private NetworkObject _networkObject;
 
     private void OnEnable()
     {
@@ -47,9 +49,25 @@ public sealed class MotorShellRootBodySync : MonoBehaviour
         bool didInitialAlignThisFrame = TickInitialAlign();
 
         if (_initialAlignRemaining <= 0 && followBodyAfterInitialAlign)
-            FollowBodyPosition();
+        {
+            if (CanWriteRootFromBody())
+                FollowBodyPosition();
+            else if (ShouldAlignPresentationBodyToRoot())
+                AlignBodyToRoot(clearVelocity: false);
+        }
 
         LogDebugState(didInitialAlignThisFrame);
+    }
+
+    public void AlignBodyToRootForTeleport(bool clearVelocity = true)
+    {
+        ResolveReferences();
+
+        if (!HasRequiredReferences())
+            return;
+
+        AlignBodyToRoot(clearVelocity);
+        _initialAlignRemaining = 0;
     }
 
     private void ResolveReferences()
@@ -63,6 +81,9 @@ public sealed class MotorShellRootBodySync : MonoBehaviour
 
         if (bodyTransform == null && bodyRigidbody != null)
             bodyTransform = bodyRigidbody.transform;
+
+        if (_networkObject == null)
+            _networkObject = GetComponentInParent<NetworkObject>();
     }
 
     private bool HasRequiredReferences()
@@ -81,11 +102,11 @@ public sealed class MotorShellRootBodySync : MonoBehaviour
         if (distance <= Mathf.Max(0f, initialAlignDistanceThreshold))
             return false;
 
-        AlignBodyToRoot();
+        AlignBodyToRoot(clearVelocityOnInitialAlign);
         return true;
     }
 
-    private void AlignBodyToRoot()
+    private void AlignBodyToRoot(bool clearVelocity)
     {
         Vector3 rootPosition = transform.position;
         Quaternion bodyRotation = bodyRigidbody.rotation;
@@ -95,7 +116,7 @@ public sealed class MotorShellRootBodySync : MonoBehaviour
         bodyRigidbody.rotation = bodyRotation;
         bodyTransform.localPosition = Vector3.zero;
 
-        if (clearVelocityOnInitialAlign)
+        if (clearVelocity)
             ClearBodyVelocity();
     }
 
@@ -113,6 +134,33 @@ public sealed class MotorShellRootBodySync : MonoBehaviour
 
         if (resetBodyLocalPositionAfterRootFollow)
             bodyTransform.localPosition = Vector3.zero;
+    }
+
+    private bool CanWriteRootFromBody()
+    {
+        NetworkManager networkManager = NetworkManager.Singleton;
+        NetworkObject networkObject = ResolveNetworkObject();
+
+        if (networkManager == null || !networkManager.IsListening || networkObject == null || !networkObject.IsSpawned)
+            return true;
+
+        return networkManager.IsServer;
+    }
+
+    private bool ShouldAlignPresentationBodyToRoot()
+    {
+        NetworkManager networkManager = NetworkManager.Singleton;
+        NetworkObject networkObject = ResolveNetworkObject();
+
+        return networkManager != null && networkManager.IsListening && networkObject != null && networkObject.IsSpawned && !networkManager.IsServer;
+    }
+
+    private NetworkObject ResolveNetworkObject()
+    {
+        if (_networkObject == null)
+            _networkObject = GetComponentInParent<NetworkObject>();
+
+        return _networkObject;
     }
 
     private void ClearBodyVelocity()
