@@ -115,6 +115,9 @@ public class HamsterFullRagdollMotor : MonoBehaviour
     private NetworkObject _ownerNetworkObject;
     private Vector2 _networkMoveInput;
     private bool _networkSprintHeld;
+    private Vector3 _networkCameraPlanarForward = Vector3.forward;
+    private Vector3 _networkCameraPlanarRight = Vector3.right;
+    private bool _hasNetworkCameraBasis;
     private bool _hasNetworkInput;
     private string _lastInputSource = "Legacy";
     private bool _missingRequiredReferenceLogged;
@@ -308,8 +311,19 @@ public class HamsterFullRagdollMotor : MonoBehaviour
 
     public void SetNetworkInput(Vector2 moveInput, bool sprintHeld, bool jumpPressed)
     {
+        SetNetworkInput(moveInput, sprintHeld, jumpPressed, Vector3.zero, Vector3.zero);
+    }
+
+    public void SetNetworkInput(
+        Vector2 moveInput,
+        bool sprintHeld,
+        bool jumpPressed,
+        Vector3 cameraPlanarForward,
+        Vector3 cameraPlanarRight)
+    {
         _networkMoveInput = Vector2.ClampMagnitude(moveInput, 1f);
         _networkSprintHeld = sprintHeld;
+        _hasNetworkCameraBasis = TryStoreNetworkCameraBasis(cameraPlanarForward, cameraPlanarRight);
         _hasNetworkInput = true;
 
         if (jumpPressed)
@@ -933,6 +947,23 @@ public class HamsterFullRagdollMotor : MonoBehaviour
         return ownerNetworkObject.OwnerClientId == networkManager.LocalClientId;
     }
 
+    private bool TryStoreNetworkCameraBasis(Vector3 cameraPlanarForward, Vector3 cameraPlanarRight)
+    {
+        cameraPlanarForward = Vector3.ProjectOnPlane(cameraPlanarForward, Vector3.up);
+        cameraPlanarRight = Vector3.ProjectOnPlane(cameraPlanarRight, Vector3.up);
+
+        if (!NormalizePlanarBasis(ref cameraPlanarForward, ref cameraPlanarRight))
+        {
+            _networkCameraPlanarForward = Vector3.forward;
+            _networkCameraPlanarRight = Vector3.right;
+            return false;
+        }
+
+        _networkCameraPlanarForward = cameraPlanarForward;
+        _networkCameraPlanarRight = cameraPlanarRight;
+        return true;
+    }
+
     private NetworkObject ResolveOwnerNetworkObject()
     {
         if (_ownerNetworkObject != null)
@@ -950,6 +981,23 @@ public class HamsterFullRagdollMotor : MonoBehaviour
 
         if (!IsInputRouteTarget())
             return legacyDirection;
+
+        if (ShouldUseNetworkInput() && _hasNetworkCameraBasis)
+        {
+            _lastCameraBasisSource = "NetworkOwnerCamera";
+            _lastCameraBasisForward = _networkCameraPlanarForward;
+            _lastCameraBasisRight = _networkCameraPlanarRight;
+            _lastPlanarBasisForward = _networkCameraPlanarForward;
+            _lastPlanarBasisRight = _networkCameraPlanarRight;
+
+            Vector3 networkDirection = BuildMoveDirectionFromBasis(
+                moveInput,
+                _networkCameraPlanarForward,
+                _networkCameraPlanarRight);
+            _lastMoveWorldDirectionAfter = networkDirection;
+            UpdateLastPlanarFacingForward(networkDirection);
+            return networkDirection;
+        }
 
         if (!TryResolveCameraRelativeMoveBasis(out MoveBasis moveBasis))
         {

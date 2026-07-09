@@ -232,6 +232,9 @@ public class PlayerHub : NetworkBehaviour
     private float _pitchDelta;
     private bool _jumpPressed;
     private bool _sprintHeld;
+    private Vector3 _ownerCameraPlanarForward;
+    private Vector3 _ownerCameraPlanarRight;
+    private bool _hasOwnerCameraPlanarBasis;
     private float _nextInputRouteOwnerLogTime;
     private float _nextInputRouteServerLogTime;
     private float _nextMotorShellCameraLogTime;
@@ -520,6 +523,8 @@ public class PlayerHub : NetworkBehaviour
             HandleCameraRotation(0f);
         }
 
+        CaptureOwnerCameraPlanarBasis();
+
         bool canMoveNow = CanMoveNow();
         if (!canMoveNow)
         {
@@ -528,7 +533,12 @@ public class PlayerHub : NetworkBehaviour
             _sprintHeld = false;
         }
 
-        SubmitInputServerRpc(_moveInput, _yawDelta, _sprintHeld);
+        SubmitInputServerRpc(
+            _moveInput,
+            _yawDelta,
+            _sprintHeld,
+            _hasOwnerCameraPlanarBasis ? _ownerCameraPlanarForward : Vector3.zero,
+            _hasOwnerCameraPlanarBasis ? _ownerCameraPlanarRight : Vector3.zero);
         LogInputRouteOwner(rawMove, _moveInput, jumpPressed, rawSprintHeld, _sprintHeld, allowLook, canMoveNow ? "submitted" : "CanMoveNow false");
         Camera playerCameraAfter = PlayerCamera;
         LogMotorShellCameraInput(
@@ -1351,6 +1361,68 @@ public class PlayerHub : NetworkBehaviour
         return characterController == null || !characterController.enabled;
     }
 
+    private void CaptureOwnerCameraPlanarBasis()
+    {
+        _hasOwnerCameraPlanarBasis = TryResolveOwnerCameraPlanarBasis(
+            out _ownerCameraPlanarForward,
+            out _ownerCameraPlanarRight);
+    }
+
+    private bool TryResolveOwnerCameraPlanarBasis(out Vector3 planarForward, out Vector3 planarRight)
+    {
+        Camera ownerCamera = PlayerCamera;
+        if (ownerCamera != null && TryCreatePlanarBasis(ownerCamera.transform, out planarForward, out planarRight))
+            return true;
+
+        if (cameraRoot != null && TryCreatePlanarBasis(cameraRoot.transform, out planarForward, out planarRight))
+            return true;
+
+        return TryCreatePlanarBasis(transform, out planarForward, out planarRight);
+    }
+
+    private bool TryCreatePlanarBasis(Transform source, out Vector3 planarForward, out Vector3 planarRight)
+    {
+        planarForward = Vector3.zero;
+        planarRight = Vector3.zero;
+
+        if (source == null)
+            return false;
+
+        return TryNormalizePlanarBasis(source.forward, source.right, out planarForward, out planarRight);
+    }
+
+    private static bool TryNormalizePlanarBasis(
+        Vector3 forward,
+        Vector3 right,
+        out Vector3 planarForward,
+        out Vector3 planarRight)
+    {
+        planarForward = Vector3.ProjectOnPlane(forward, Vector3.up);
+        planarRight = Vector3.ProjectOnPlane(right, Vector3.up);
+
+        if (!IsFiniteVector3(planarForward) || planarForward.sqrMagnitude <= 0.0001f)
+        {
+            planarForward = Vector3.zero;
+            planarRight = Vector3.zero;
+            return false;
+        }
+
+        planarForward.Normalize();
+
+        if (!IsFiniteVector3(planarRight) || planarRight.sqrMagnitude <= 0.0001f)
+            planarRight = Vector3.Cross(Vector3.up, planarForward);
+
+        if (!IsFiniteVector3(planarRight) || planarRight.sqrMagnitude <= 0.0001f)
+        {
+            planarForward = Vector3.zero;
+            planarRight = Vector3.zero;
+            return false;
+        }
+
+        planarRight.Normalize();
+        return true;
+    }
+
     private void ApplyInputRouteOwnerCameraHandoff()
     {
         if (!IsInputRouteTarget())
@@ -1559,7 +1631,12 @@ public class PlayerHub : NetworkBehaviour
         if (motorShellMotor == null || !motorShellMotor.IsMainScenesInputRouteTarget)
             return false;
 
-        motorShellMotor.SetNetworkInput(_moveInput, _sprintHeld, _jumpPressed);
+        motorShellMotor.SetNetworkInput(
+            _moveInput,
+            _sprintHeld,
+            _jumpPressed,
+            _hasOwnerCameraPlanarBasis ? _ownerCameraPlanarForward : Vector3.zero,
+            _hasOwnerCameraPlanarBasis ? _ownerCameraPlanarRight : Vector3.zero);
         LogInputRouteServer(false, 0f, motorShellMotor.isActiveAndEnabled ? "motor shell input routed" : "motor shell disabled");
 
         _jumpPressed = false;
@@ -1577,11 +1654,21 @@ public class PlayerHub : NetworkBehaviour
     }
 
     [ServerRpc(Delivery = RpcDelivery.Unreliable)]
-    private void SubmitInputServerRpc(Vector2 move, float yawDelta, bool sprintHeld)
+    private void SubmitInputServerRpc(
+        Vector2 move,
+        float yawDelta,
+        bool sprintHeld,
+        Vector3 cameraPlanarForward,
+        Vector3 cameraPlanarRight)
     {
         _moveInput = move;
         _yawDelta = yawDelta;
         _sprintHeld = sprintHeld;
+        _hasOwnerCameraPlanarBasis = TryNormalizePlanarBasis(
+            cameraPlanarForward,
+            cameraPlanarRight,
+            out _ownerCameraPlanarForward,
+            out _ownerCameraPlanarRight);
     }
 
     private void LogInputRouteOwner(
