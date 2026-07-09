@@ -547,6 +547,7 @@ public class InGameMatchManager : NetworkBehaviour
         NetworkTransform nt = go.GetComponent<NetworkTransform>();
         Rigidbody rb = go.GetComponent<Rigidbody>();
         PlayerLocomotionModule locomotion = go.GetComponentInChildren<PlayerLocomotionModule>(true);
+        MotorShellRootBodySync motorShellRootBodySync = go.GetComponentInChildren<MotorShellRootBodySync>(true);
 
         bool hadCC = cc != null && cc.enabled;
         if (hadCC)
@@ -559,12 +560,14 @@ public class InGameMatchManager : NetworkBehaviour
         Vector3 exactSpawnPos = ResolveExactSpawnPosition(pos, cc);
 
         ForceSetTransform(tf, nt, exactSpawnPos, uprightRot);
+        AlignMotorShellBodyToRoot(motorShellRootBodySync);
         yield return null;
 
         // 호스트 입력/모션 잔여값이 다음 프레임에 한 번 더 들어오는 경우를 막기 위해
         // CC를 끈 상태로 한 프레임 더 대기하며 모션을 다시 0으로 정리합니다.
         ResetMotion(locomotion, rb);
         ForceSetTransform(tf, nt, exactSpawnPos, uprightRot);
+        AlignMotorShellBodyToRoot(motorShellRootBodySync);
         yield return null;
 
         if (hadCC)
@@ -586,6 +589,7 @@ public class InGameMatchManager : NetworkBehaviour
 
             ResetMotion(locomotion, rb);
             ForceSetTransform(tf, nt, exactSpawnPos, uprightRot);
+            AlignMotorShellBodyToRoot(motorShellRootBodySync);
             Physics.SyncTransforms();
             yield return null;
 
@@ -617,6 +621,15 @@ public class InGameMatchManager : NetworkBehaviour
 
         if (nt != null)
             nt.Teleport(pos, rot, tf.localScale);
+    }
+
+    private void AlignMotorShellBodyToRoot(MotorShellRootBodySync motorShellRootBodySync)
+    {
+        if (motorShellRootBodySync == null)
+            return;
+
+        motorShellRootBodySync.AlignBodyToRootForTeleport(clearVelocity: true);
+        Physics.SyncTransforms();
     }
 
     private Vector3 ResolveExactSpawnPosition(Vector3 requestedPos, CharacterController cc)
