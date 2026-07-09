@@ -1,4 +1,6 @@
 using System;
+using System.Collections;
+using System.Collections.Generic;
 using System.Reflection;
 using Unity.Netcode;
 using UnityEngine;
@@ -12,6 +14,9 @@ public sealed class HamsterMotorShellItemAdapter : MonoBehaviour
     private const string VisualPreviewRootName = "VisualPreviewRoot";
     private const string RuntimeRightHandSocketName = "MotorShellRightHandHeldSocket";
     private const float HeldPoseLogInterval = 0.5f;
+    private const int ThrowOverlapBufferSize = 64;
+    private const float MinThrowCollisionGraceDuration = 0.01f;
+    private const float MinThrowReleaseStep = 0.02f;
 
     private static readonly string[] WeaponPointSocketNameCandidates =
     {
@@ -107,6 +112,14 @@ public sealed class HamsterMotorShellItemAdapter : MonoBehaviour
     [SerializeField] private float throwUpwardBonus = 0.4f;
     [SerializeField] private float throwTorqueMultiplier = 1.1f;
 
+    [Header("Throw Collision Grace")]
+    [SerializeField] private bool enableThrowCollisionGrace = true;
+    [SerializeField] private float throwCollisionGraceDuration = 0.25f;
+    [SerializeField] private float throwReleaseCarrierClearance = 0.25f;
+    [SerializeField] private float throwReleaseMaxForwardCorrection = 0.75f;
+    [SerializeField] private float throwInitialOverlapRadius = 0.45f;
+    [SerializeField] private bool debugThrowCollisionGraceLogs = false;
+
     [Header("Debug")]
     [SerializeField] private bool debugLogs = false;
     [SerializeField] private bool debugHeldPoseLogs = false;
@@ -141,6 +154,20 @@ public sealed class HamsterMotorShellItemAdapter : MonoBehaviour
     private string _lastWeaponDataName = "<none>";
     private bool _usingLocalHeldVisual;
     private float _lastHeldPoseLogTime = -HeldPoseLogInterval;
+    private readonly Collider[] _throwOverlapHits = new Collider[ThrowOverlapBufferSize];
+    private readonly List<CollisionIgnorePair> _activeThrowCollisionIgnorePairs = new List<CollisionIgnorePair>();
+
+    private readonly struct CollisionIgnorePair
+    {
+        public readonly Collider ItemCollider;
+        public readonly Collider OtherCollider;
+
+        public CollisionIgnorePair(Collider itemCollider, Collider otherCollider)
+        {
+            ItemCollider = itemCollider;
+            OtherCollider = otherCollider;
+        }
+    }
 
     public bool HasHeldItem => _heldPickup != null;
     public string CurrentHeldItemName => _heldPickup != null ? _heldPickup.name : "<none>";
@@ -165,6 +192,7 @@ public sealed class HamsterMotorShellItemAdapter : MonoBehaviour
 
     private void OnDisable()
     {
+        RestoreAllActiveThrowCollisionGrace();
         DestroyLocalHeldVisual();
     }
 
@@ -432,6 +460,10 @@ public sealed class HamsterMotorShellItemAdapter : MonoBehaviour
         Quaternion releaseRotation = ResolveReleaseRotation();
         Vector3 carrierVelocity = GetCarrierVelocity();
         Vector3 impulse = throwItem ? ResolveThrowImpulse() : Vector3.zero;
+        Collider[] itemColliders = GetItemCollisionGraceColliders(pickup);
+        Collider[] holderColliders = GetHolderCollisionGraceColliders();
+        releasePosition = ResolveCollisionSafeReleasePosition(releasePosition, holderColliders, out bool releaseAdjusted);
+        List<Collider> initialOverlapPlayerColliders = CollectInitialOverlapPlayerColliders(releasePosition, holderColliders);
 
         bool restored = pickup.TryRestoreDroppedStateServer(
             releasePosition,
@@ -451,6 +483,8 @@ public sealed class HamsterMotorShellItemAdapter : MonoBehaviour
 
         if (throwItem)
             ApplyThrowTorque(pickup, impulse);
+
+        BeginThrowCollisionGrace(itemColliders, holderColliders, initialOverlapPlayerColliders, throwItem, releaseAdjusted);
 
         Log(throwItem ? "[MSItem/Throw]" : "[MSItem/Drop]", $"item={pickup.name} restored={restored} reason={reason}");
         pickup.SetWorldVisualVisibleServer(true);
@@ -529,6 +563,316 @@ public sealed class HamsterMotorShellItemAdapter : MonoBehaviour
     private Vector3 GetCarrierVelocity()
     {
         return carrierBody != null ? carrierBody.linearVelocity : Vector3.zero;
+    }
+
+    private Collider[] GetItemCollisionGraceColliders(ItemPickupNetwork pickup)
+    {
+        return pickup != null ? pickup.GetComponentsInChildren<Collider>(true) : Array.Empty<Collider>();
+    }
+
+    private Collider[] GetHolderCollisionGraceColliders()
+    {
+        Transform holderRoot = _targetRoot != null ? _targetRoot : transform.root;
+        return holderRoot != null ? holderRoot.GetComponentsInChildren<Collider>(true) : Array.Empty<Collider>();
+    }
+
+    private Vector3 ResolveCollisionSafeReleasePosition(Vector3 releasePosition, Collider[] holderColliders, out bool adjusted)
+    {
+        adjusted = false;
+        if (!IsThrowCollisionGraceEnabled() || holderColliders == null || holderColliders.Length == 0)
+            return releasePosition;
+
+        float clearance = Mathf.Max(0f, throwReleaseCarrierClearance);
+        float maxCorrection = Mathf.Max(0f, throwReleaseMaxForwardCorrection);
+        if (clearance <= 0f || maxCorrection <= 0f)
+            return releasePosition;
+
+        Vector3 forward = ResolveCarrierPlanarForward();
+        if (forward.sqrMagnitude <= 0.0001f)
+            return releasePosition;
+
+        Vector3 candidate = releasePosition;
+        float moved = 0f;
+        float step = Mathf.Max(MinThrowReleaseStep, clearance * 0.5f);
+        const int maxIterations = 24;
+
+        for (int i = 0; i < maxIterations && moved < maxCorrection; i++)
+        {
+            if (!IsPointTooCloseToSolidHolderCollider(candidate, holderColliders, clearance))
+                break;
+
+            float delta = Mathf.Min(step, maxCorrection - moved);
+            candidate += forward * delta;
+            moved += delta;
+        }
+
+        adjusted = (candidate - releasePosition).sqrMagnitude > 0.000001f;
+        if (adjusted)
+            LogThrowCollisionGrace($"releaseAdjusted from={FormatVector(releasePosition)} to={FormatVector(candidate)} moved={moved:F3}");
+
+        return candidate;
+    }
+
+    private bool IsPointTooCloseToSolidHolderCollider(Vector3 point, Collider[] holderColliders, float clearance)
+    {
+        float clearanceSqr = clearance * clearance;
+        for (int i = 0; i < holderColliders.Length; i++)
+        {
+            Collider holderCollider = holderColliders[i];
+            if (!IsUsableCollisionGraceCollider(holderCollider) || holderCollider.isTrigger)
+                continue;
+
+            Vector3 closestPoint = holderCollider.ClosestPoint(point);
+            if (!IsFiniteVector(closestPoint))
+                continue;
+
+            if ((closestPoint - point).sqrMagnitude <= clearanceSqr)
+                return true;
+        }
+
+        return false;
+    }
+
+    private Vector3 ResolveCarrierPlanarForward()
+    {
+        Vector3 forward = Vector3.zero;
+        if (carrierBody != null)
+            forward = carrierBody.transform.forward;
+        else if (_targetRoot != null)
+            forward = _targetRoot.forward;
+        else
+            forward = transform.forward;
+
+        forward = Vector3.ProjectOnPlane(forward, Vector3.up);
+        return forward.sqrMagnitude > 0.0001f ? forward.normalized : Vector3.zero;
+    }
+
+    private List<Collider> CollectInitialOverlapPlayerColliders(Vector3 releasePosition, Collider[] holderColliders)
+    {
+        List<Collider> result = new List<Collider>();
+        if (!IsThrowCollisionGraceEnabled())
+            return result;
+
+        float radius = Mathf.Max(0f, throwInitialOverlapRadius);
+        if (radius <= 0f)
+            return result;
+
+        int hitCount = Physics.OverlapSphereNonAlloc(
+            releasePosition,
+            radius,
+            _throwOverlapHits,
+            ~0,
+            QueryTriggerInteraction.Ignore);
+
+        for (int i = 0; i < hitCount; i++)
+        {
+            Collider candidate = _throwOverlapHits[i];
+            _throwOverlapHits[i] = null;
+
+            if (!IsUsableCollisionGraceCollider(candidate))
+                continue;
+
+            if (ContainsCollider(holderColliders, candidate))
+                continue;
+
+            if (!IsOtherPlayerCollider(candidate))
+                continue;
+
+            if (ContainsCollider(result, candidate))
+                continue;
+
+            result.Add(candidate);
+        }
+
+        if (result.Count > 0)
+            LogThrowCollisionGrace($"nearbyInitialOverlap count={result.Count} radius={radius:F3} pos={FormatVector(releasePosition)}");
+
+        return result;
+    }
+
+    private void BeginThrowCollisionGrace(
+        Collider[] itemColliders,
+        Collider[] holderColliders,
+        List<Collider> initialOverlapPlayerColliders,
+        bool throwItem,
+        bool releaseAdjusted)
+    {
+        if (!IsThrowCollisionGraceEnabled() || itemColliders == null || itemColliders.Length == 0)
+            return;
+
+        List<CollisionIgnorePair> pairs = new List<CollisionIgnorePair>();
+        AddCollisionIgnorePairs(itemColliders, holderColliders, pairs);
+        AddCollisionIgnorePairs(itemColliders, initialOverlapPlayerColliders, pairs);
+
+        if (pairs.Count == 0)
+            return;
+
+        for (int i = 0; i < pairs.Count; i++)
+        {
+            CollisionIgnorePair pair = pairs[i];
+            if (!IsValidCollisionIgnorePair(pair))
+                continue;
+
+            Physics.IgnoreCollision(pair.ItemCollider, pair.OtherCollider, true);
+            _activeThrowCollisionIgnorePairs.Add(pair);
+        }
+
+        float duration = Mathf.Max(MinThrowCollisionGraceDuration, throwCollisionGraceDuration);
+        StartCoroutine(RestoreThrowCollisionGraceAfterDelay(pairs, duration));
+        LogThrowCollisionGrace($"begin mode={(throwItem ? "Throw" : "Drop")} pairs={pairs.Count} duration={duration:F3} releaseAdjusted={releaseAdjusted}");
+    }
+
+    private void AddCollisionIgnorePairs(Collider[] itemColliders, Collider[] otherColliders, List<CollisionIgnorePair> pairs)
+    {
+        if (otherColliders == null)
+            return;
+
+        for (int i = 0; i < otherColliders.Length; i++)
+            AddCollisionIgnorePairs(itemColliders, otherColliders[i], pairs);
+    }
+
+    private void AddCollisionIgnorePairs(Collider[] itemColliders, List<Collider> otherColliders, List<CollisionIgnorePair> pairs)
+    {
+        if (otherColliders == null)
+            return;
+
+        for (int i = 0; i < otherColliders.Count; i++)
+            AddCollisionIgnorePairs(itemColliders, otherColliders[i], pairs);
+    }
+
+    private void AddCollisionIgnorePairs(Collider[] itemColliders, Collider otherCollider, List<CollisionIgnorePair> pairs)
+    {
+        if (!IsUsableCollisionGraceCollider(otherCollider))
+            return;
+
+        for (int i = 0; i < itemColliders.Length; i++)
+        {
+            Collider itemCollider = itemColliders[i];
+            if (!IsUsableCollisionGraceCollider(itemCollider) || itemCollider == otherCollider)
+                continue;
+
+            CollisionIgnorePair pair = new CollisionIgnorePair(itemCollider, otherCollider);
+            if (!ContainsPair(pairs, pair))
+                pairs.Add(pair);
+        }
+    }
+
+    private IEnumerator RestoreThrowCollisionGraceAfterDelay(List<CollisionIgnorePair> pairs, float delay)
+    {
+        yield return new WaitForSeconds(delay);
+        RestoreThrowCollisionGracePairs(pairs);
+    }
+
+    private void RestoreThrowCollisionGracePairs(List<CollisionIgnorePair> pairs)
+    {
+        if (pairs == null)
+            return;
+
+        for (int i = 0; i < pairs.Count; i++)
+        {
+            CollisionIgnorePair pair = pairs[i];
+            if (IsValidCollisionIgnorePair(pair))
+                Physics.IgnoreCollision(pair.ItemCollider, pair.OtherCollider, false);
+
+            _activeThrowCollisionIgnorePairs.Remove(pair);
+        }
+
+        LogThrowCollisionGrace($"restore pairs={pairs.Count}");
+    }
+
+    private void RestoreAllActiveThrowCollisionGrace()
+    {
+        if (_activeThrowCollisionIgnorePairs.Count == 0)
+            return;
+
+        for (int i = _activeThrowCollisionIgnorePairs.Count - 1; i >= 0; i--)
+        {
+            CollisionIgnorePair pair = _activeThrowCollisionIgnorePairs[i];
+            if (IsValidCollisionIgnorePair(pair))
+                Physics.IgnoreCollision(pair.ItemCollider, pair.OtherCollider, false);
+        }
+
+        LogThrowCollisionGrace($"restoreAll pairs={_activeThrowCollisionIgnorePairs.Count}");
+        _activeThrowCollisionIgnorePairs.Clear();
+    }
+
+    private bool IsThrowCollisionGraceEnabled()
+    {
+        return enableThrowCollisionGrace && throwCollisionGraceDuration > 0f;
+    }
+
+    private bool IsOtherPlayerCollider(Collider candidate)
+    {
+        if (candidate == null)
+            return false;
+
+        Transform holderRoot = _targetRoot != null ? _targetRoot : transform.root;
+        Transform candidateRoot = candidate.transform.root;
+        if (holderRoot != null && candidateRoot == holderRoot)
+            return false;
+
+        return candidate.GetComponentInParent<PlayerHub>() != null ||
+               candidate.GetComponentInParent<HamsterFullRagdollMotor>() != null ||
+               candidate.GetComponentInParent<HamsterMotorShellImpactTarget>() != null ||
+               candidate.GetComponentInParent<PlayerStatusModule>() != null;
+    }
+
+    private static bool IsUsableCollisionGraceCollider(Collider collider)
+    {
+        return collider != null && collider.gameObject != null;
+    }
+
+    private static bool IsValidCollisionIgnorePair(CollisionIgnorePair pair)
+    {
+        return IsUsableCollisionGraceCollider(pair.ItemCollider) &&
+               IsUsableCollisionGraceCollider(pair.OtherCollider) &&
+               pair.ItemCollider != pair.OtherCollider;
+    }
+
+    private static bool ContainsCollider(Collider[] colliders, Collider candidate)
+    {
+        if (colliders == null || candidate == null)
+            return false;
+
+        for (int i = 0; i < colliders.Length; i++)
+        {
+            if (colliders[i] == candidate)
+                return true;
+        }
+
+        return false;
+    }
+
+    private static bool ContainsCollider(List<Collider> colliders, Collider candidate)
+    {
+        if (colliders == null || candidate == null)
+            return false;
+
+        for (int i = 0; i < colliders.Count; i++)
+        {
+            if (colliders[i] == candidate)
+                return true;
+        }
+
+        return false;
+    }
+
+    private static bool ContainsPair(List<CollisionIgnorePair> pairs, CollisionIgnorePair candidate)
+    {
+        if (pairs == null)
+            return false;
+
+        for (int i = 0; i < pairs.Count; i++)
+        {
+            CollisionIgnorePair existing = pairs[i];
+            if (existing.ItemCollider == candidate.ItemCollider &&
+                existing.OtherCollider == candidate.OtherCollider)
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private void SetHeldRenderersVisible(bool visible)
@@ -1077,6 +1421,11 @@ public sealed class HamsterMotorShellItemAdapter : MonoBehaviour
         return !float.IsNaN(value) && !float.IsInfinity(value);
     }
 
+    private static bool IsFiniteVector(Vector3 value)
+    {
+        return IsFinite(value.x) && IsFinite(value.y) && IsFinite(value.z);
+    }
+
     private static bool NameMatchesAny(string name, string[] candidates)
     {
         if (string.IsNullOrEmpty(name) || candidates == null)
@@ -1125,6 +1474,14 @@ public sealed class HamsterMotorShellItemAdapter : MonoBehaviour
             return;
 
         Debug.Log($"{prefix} {name} {message}", this);
+    }
+
+    private void LogThrowCollisionGrace(string message)
+    {
+        if (!debugThrowCollisionGraceLogs)
+            return;
+
+        Debug.Log($"[MSItem/ThrowCollisionGrace] {name} {message}", this);
     }
 
     private void LogHeldPose(Transform socket, Vector3 socketPosition, Quaternion socketRotation, Vector3 itemPosition, Quaternion itemRotation)
