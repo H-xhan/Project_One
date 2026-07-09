@@ -3,10 +3,11 @@ using System;
 [Serializable]
 public enum PostItType
 {
-    Drawing = 0,
-    Message = 1,
-    Bonus = 2,
-    Penalty = 3
+    None = 0,
+    Drawing = 1,
+    Message = 2,
+    Bonus = 3,
+    Penalty = 4
 }
 
 [Serializable]
@@ -31,11 +32,11 @@ public struct PostItRuntimeData
     public ulong HolderClientId;
     public int SlotIndex;
 
-    public bool IsValid => PostItId >= 0;
+    public bool IsValid => PostItId >= 0 && Type != PostItType.None;
 
     public static PostItRuntimeData Invalid => new PostItRuntimeData(
         -1,
-        PostItType.Drawing,
+        PostItType.None,
         PostItTopicId.None,
         -1,
         ulong.MaxValue,
