@@ -1,4 +1,5 @@
 using System.Reflection;
+using Unity.Netcode;
 using UnityEngine;
 using UnityEngine.SceneManagement;
 
@@ -111,6 +112,11 @@ public class HamsterFullRagdollMotor : MonoBehaviour
     private Vector3 _smoothedMoveWorldDirection;
     private bool _isGrounded;
     private bool _legacyInputUnavailable;
+    private NetworkObject _ownerNetworkObject;
+    private Vector2 _networkMoveInput;
+    private bool _networkSprintHeld;
+    private bool _hasNetworkInput;
+    private string _lastInputSource = "Legacy";
     private bool _missingRequiredReferenceLogged;
     private bool _hasInitialPose;
     private Quaternion _initialMotorRotation = Quaternion.identity;
@@ -300,6 +306,16 @@ public class HamsterFullRagdollMotor : MonoBehaviour
         _externalPoseControlReason = string.IsNullOrEmpty(reason) ? "none" : reason;
     }
 
+    public void SetNetworkInput(Vector2 moveInput, bool sprintHeld, bool jumpPressed)
+    {
+        _networkMoveInput = Vector2.ClampMagnitude(moveInput, 1f);
+        _networkSprintHeld = sprintHeld;
+        _hasNetworkInput = true;
+
+        if (jumpPressed)
+            BufferJumpPressedInput();
+    }
+
     private void Awake()
     {
         if (!HasRequiredReferences())
@@ -441,6 +457,18 @@ public class HamsterFullRagdollMotor : MonoBehaviour
 
     private Vector2 ReadMoveInput()
     {
+        if (ShouldUseNetworkInput())
+        {
+            _lastInputSource = _hasNetworkInput ? "NetworkRouted" : "NetworkRoutedPending";
+            return _networkMoveInput;
+        }
+
+        if (!CanReadDirectLocalInput())
+        {
+            _lastInputSource = "BlockedNonOwner";
+            return Vector2.zero;
+        }
+
         if (_legacyInputUnavailable)
             return Vector2.zero;
 
@@ -448,6 +476,7 @@ public class HamsterFullRagdollMotor : MonoBehaviour
         {
             float horizontal = Input.GetAxisRaw("Horizontal");
             float vertical = Input.GetAxisRaw("Vertical");
+            _lastInputSource = "LegacyDirect";
             return Vector2.ClampMagnitude(new Vector2(horizontal, vertical), 1f);
         }
         catch (System.InvalidOperationException exception)
@@ -464,6 +493,12 @@ public class HamsterFullRagdollMotor : MonoBehaviour
 
     private bool ReadSprintHeld()
     {
+        if (ShouldUseNetworkInput())
+            return _networkSprintHeld;
+
+        if (!CanReadDirectLocalInput())
+            return false;
+
         if (_legacyInputUnavailable)
             return false;
 
@@ -513,6 +548,9 @@ public class HamsterFullRagdollMotor : MonoBehaviour
 
     private void CaptureJumpInput()
     {
+        if (ShouldUseNetworkInput() || !CanReadDirectLocalInput())
+            return;
+
         if (!enableJump || _legacyInputUnavailable)
             return;
 
@@ -530,12 +568,7 @@ public class HamsterFullRagdollMotor : MonoBehaviour
             }
 
             if (Input.GetKeyDown(jumpKey))
-            {
-                if (CanBufferMotorJumpInputNow())
-                    _jumpBufferTimer = Mathf.Max(0f, jumpBufferTime);
-                else
-                    _jumpBufferTimer = 0f;
-            }
+                BufferJumpPressedInput();
         }
         catch (System.InvalidOperationException exception)
         {
@@ -546,6 +579,9 @@ public class HamsterFullRagdollMotor : MonoBehaviour
     private bool TryReadJumpHeld(out bool jumpHeld)
     {
         jumpHeld = false;
+
+        if (ShouldUseNetworkInput() || !CanReadDirectLocalInput())
+            return false;
 
         if (_legacyInputUnavailable)
             return false;
@@ -560,6 +596,17 @@ public class HamsterFullRagdollMotor : MonoBehaviour
             DisableLegacyInput(exception.Message);
             return false;
         }
+    }
+
+    private void BufferJumpPressedInput()
+    {
+        if (!enableJump || _externalControlLocked || _externalJumpLocked)
+            return;
+
+        if (CanBufferMotorJumpInputNow())
+            _jumpBufferTimer = Mathf.Max(0f, jumpBufferTime);
+        else
+            _jumpBufferTimer = 0f;
     }
 
     private void TickJumpCooldown(float deltaTime)
@@ -858,6 +905,41 @@ public class HamsterFullRagdollMotor : MonoBehaviour
         }
 
         Log($"Legacy Input Manager unavailable. Movement input disabled. Reason={reason}");
+    }
+
+    private bool ShouldUseNetworkInput()
+    {
+        if (!IsInputRouteTarget())
+            return false;
+
+        NetworkObject ownerNetworkObject = ResolveOwnerNetworkObject();
+        NetworkManager networkManager = NetworkManager.Singleton;
+        return ownerNetworkObject != null &&
+               ownerNetworkObject.IsSpawned &&
+               networkManager != null &&
+               networkManager.IsListening;
+    }
+
+    private bool CanReadDirectLocalInput()
+    {
+        NetworkManager networkManager = NetworkManager.Singleton;
+        if (networkManager == null || !networkManager.IsListening)
+            return true;
+
+        NetworkObject ownerNetworkObject = ResolveOwnerNetworkObject();
+        if (ownerNetworkObject == null || !ownerNetworkObject.IsSpawned)
+            return true;
+
+        return ownerNetworkObject.OwnerClientId == networkManager.LocalClientId;
+    }
+
+    private NetworkObject ResolveOwnerNetworkObject()
+    {
+        if (_ownerNetworkObject != null)
+            return _ownerNetworkObject;
+
+        _ownerNetworkObject = GetComponentInParent<NetworkObject>();
+        return _ownerNetworkObject;
     }
 
     private Vector3 BuildMoveDirection(Vector2 moveInput)
@@ -1585,7 +1667,7 @@ public class HamsterFullRagdollMotor : MonoBehaviour
             _smoothedMoveWorldDirection.sqrMagnitude > 0.0001f;
 
         Debug.Log(
-            $"[InputRoute/Motor:{GetInputRouteObjectName()}] enabled={enabled} active={gameObject.activeInHierarchy} scene={SceneManager.GetActiveScene().name} legacyInputUnavailable={_legacyInputUnavailable} rawInput={FormatVector2(_lastRawMoveInput)} smoothedInput={FormatVector2(_smoothedMoveInput)} hasMoveInput={hasMoveInput} moveWorldDirection={FormatVector3(_smoothedMoveWorldDirection)} grounded={_isGrounded} sprintHeld={_lastSprintHeld} canApplyMoveForce={canApplyMoveForce} controlStrength={controlStrength:F2} effectiveControl={_lastEffectiveControl:F2} planarSpeed={CurrentPlanarSpeed:F2} selectedMaxSpeed={_lastSelectedMaxSpeed:F2} addForceApplied={_lastMoveForceApplied} force={FormatVector3(_lastAppliedMoveForce)} skipReason='{_lastMoveForceSkipReason}' jumpBuffer={_jumpBufferTimer:F2} jumpConsumed={_jumpConsumedThisFixedStep} {hipsState}",
+            $"[InputRoute/Motor:{GetInputRouteObjectName()}] enabled={enabled} active={gameObject.activeInHierarchy} scene={SceneManager.GetActiveScene().name} inputSource={_lastInputSource} legacyInputUnavailable={_legacyInputUnavailable} rawInput={FormatVector2(_lastRawMoveInput)} smoothedInput={FormatVector2(_smoothedMoveInput)} hasMoveInput={hasMoveInput} moveWorldDirection={FormatVector3(_smoothedMoveWorldDirection)} grounded={_isGrounded} sprintHeld={_lastSprintHeld} canApplyMoveForce={canApplyMoveForce} controlStrength={controlStrength:F2} effectiveControl={_lastEffectiveControl:F2} planarSpeed={CurrentPlanarSpeed:F2} selectedMaxSpeed={_lastSelectedMaxSpeed:F2} addForceApplied={_lastMoveForceApplied} force={FormatVector3(_lastAppliedMoveForce)} skipReason='{_lastMoveForceSkipReason}' jumpBuffer={_jumpBufferTimer:F2} jumpConsumed={_jumpConsumedThisFixedStep} {hipsState}",
             this);
         LogInputRouteGround();
         LogInputRouteForce();

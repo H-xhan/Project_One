@@ -1,3 +1,4 @@
+using Unity.Netcode;
 using UnityEngine;
 using UnityEngine.EventSystems;
 
@@ -164,6 +165,7 @@ public sealed class HamsterMotorShellTraversalAdapter : MonoBehaviour
     private float _glideBlockedUntil = float.NegativeInfinity;
     private float _cooldownUntil;
     private bool _legacyInputUnavailable;
+    private NetworkObject _ownerNetworkObject;
     private bool _appliedMovementScale;
     private bool _appliedUprightScale;
     private bool _appliedWallMovementScale;
@@ -341,6 +343,11 @@ public sealed class HamsterMotorShellTraversalAdapter : MonoBehaviour
         if (motor == null && _targetRoot != null)
             motor = _targetRoot.GetComponentInChildren<HamsterFullRagdollMotor>(true);
 
+        if (_ownerNetworkObject == null && _targetRoot != null)
+            _ownerNetworkObject = _targetRoot.GetComponent<NetworkObject>();
+        if (_ownerNetworkObject == null)
+            _ownerNetworkObject = GetComponentInParent<NetworkObject>();
+
         if (bodyRigidbody == null && motor != null)
             bodyRigidbody = motor.GetComponent<Rigidbody>();
 
@@ -371,9 +378,38 @@ public sealed class HamsterMotorShellTraversalAdapter : MonoBehaviour
             visualClipStateDriver = _targetRoot.GetComponentInChildren<HamsterVisualClipStateDriver>(true);
     }
 
+    private bool CanReadDirectLocalInput()
+    {
+        NetworkManager networkManager = NetworkManager.Singleton;
+        if (networkManager == null || !networkManager.IsListening)
+            return true;
+
+        NetworkObject ownerNetworkObject = ResolveOwnerNetworkObject();
+        if (ownerNetworkObject == null || !ownerNetworkObject.IsSpawned)
+            return true;
+
+        return ownerNetworkObject.OwnerClientId == networkManager.LocalClientId;
+    }
+
+    private NetworkObject ResolveOwnerNetworkObject()
+    {
+        if (_ownerNetworkObject != null)
+            return _ownerNetworkObject;
+
+        if (_targetRoot == null)
+            _targetRoot = transform.root != null ? transform.root : transform;
+
+        if (_targetRoot != null)
+            _ownerNetworkObject = _targetRoot.GetComponent<NetworkObject>();
+        if (_ownerNetworkObject == null)
+            _ownerNetworkObject = GetComponentInParent<NetworkObject>();
+
+        return _ownerNetworkObject;
+    }
+
     private void CaptureGlideKeyDown()
     {
-        if (_legacyInputUnavailable || IsUiInputBlocked())
+        if (_legacyInputUnavailable || IsUiInputBlocked() || !CanReadDirectLocalInput())
             return;
 
         try
@@ -393,7 +429,7 @@ public sealed class HamsterMotorShellTraversalAdapter : MonoBehaviour
 
     private void CaptureWallJumpKeyDown()
     {
-        if (_legacyInputUnavailable || IsUiInputBlocked())
+        if (_legacyInputUnavailable || IsUiInputBlocked() || !CanReadDirectLocalInput())
             return;
 
         try
@@ -1152,6 +1188,9 @@ public sealed class HamsterMotorShellTraversalAdapter : MonoBehaviour
 
     private bool ReadGlideHeld()
     {
+        if (!CanReadDirectLocalInput())
+            return false;
+
         if (_legacyInputUnavailable)
             return false;
 
@@ -1173,6 +1212,9 @@ public sealed class HamsterMotorShellTraversalAdapter : MonoBehaviour
 
     private bool ReadWallClimbHeld()
     {
+        if (!CanReadDirectLocalInput())
+            return false;
+
         if (_legacyInputUnavailable)
             return false;
 
@@ -1195,6 +1237,9 @@ public sealed class HamsterMotorShellTraversalAdapter : MonoBehaviour
     private bool TryReadWallMoveInput(out Vector2 input)
     {
         input = Vector2.zero;
+
+        if (!CanReadDirectLocalInput())
+            return false;
 
         if (_legacyInputUnavailable)
             return false;
@@ -1494,6 +1539,9 @@ public sealed class HamsterMotorShellTraversalAdapter : MonoBehaviour
 
     private bool IsWallJumpKeyHeld()
     {
+        if (!CanReadDirectLocalInput())
+            return false;
+
         if (_legacyInputUnavailable)
             return false;
 

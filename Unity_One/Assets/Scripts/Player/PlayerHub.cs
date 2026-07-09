@@ -235,6 +235,7 @@ public class PlayerHub : NetworkBehaviour
     private float _nextInputRouteOwnerLogTime;
     private float _nextInputRouteServerLogTime;
     private float _nextMotorShellCameraLogTime;
+    private HamsterFullRagdollMotor _motorShellMotor;
 
     private bool _attackLockedServer;
     private bool _attackBufferedServer;
@@ -348,6 +349,7 @@ public class PlayerHub : NetworkBehaviour
         if (statusModule == null) statusModule = GetComponentInChildren<PlayerStatusModule>(true);
         if (coinWalletModule == null) coinWalletModule = GetComponentInChildren<PlayerCoinWalletModule>(true);
         if (staminaModule == null) staminaModule = GetComponentInChildren<PlayerStaminaModule>(true);
+        if (_motorShellMotor == null) _motorShellMotor = GetComponentInChildren<HamsterFullRagdollMotor>(true);
         if (gameStateManager == null) gameStateManager = FindFirstObjectByType<GameStateManager>();
         if (_readySystem == null) _readySystem = FindFirstObjectByType<ReadySystem>();
     }
@@ -1524,6 +1526,9 @@ public class PlayerHub : NetworkBehaviour
 
     private void TickServer()
     {
+        if (TryTickMotorShellServer())
+            return;
+
         CharacterController characterController = CharacterController;
         if (characterController == null || !characterController.enabled)
         {
@@ -1546,6 +1551,29 @@ public class PlayerHub : NetworkBehaviour
 
         _jumpPressed = false;
         _yawDelta = 0f;
+    }
+
+    private bool TryTickMotorShellServer()
+    {
+        HamsterFullRagdollMotor motorShellMotor = ResolveMotorShellMotor();
+        if (motorShellMotor == null || !motorShellMotor.IsMainScenesInputRouteTarget)
+            return false;
+
+        motorShellMotor.SetNetworkInput(_moveInput, _sprintHeld, _jumpPressed);
+        LogInputRouteServer(false, 0f, motorShellMotor.isActiveAndEnabled ? "motor shell input routed" : "motor shell disabled");
+
+        _jumpPressed = false;
+        _yawDelta = 0f;
+        return true;
+    }
+
+    private HamsterFullRagdollMotor ResolveMotorShellMotor()
+    {
+        if (_motorShellMotor != null)
+            return _motorShellMotor;
+
+        _motorShellMotor = GetComponentInChildren<HamsterFullRagdollMotor>(true);
+        return _motorShellMotor;
     }
 
     [ServerRpc(Delivery = RpcDelivery.Unreliable)]
