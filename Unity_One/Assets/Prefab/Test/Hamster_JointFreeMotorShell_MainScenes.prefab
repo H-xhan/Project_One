@@ -21,6 +21,7 @@ GameObject:
   - component: {fileID: 6100000000000000106}
   - component: {fileID: 6100000000000000107}
   - component: {fileID: 6100000000000000108}
+  - component: {fileID: 6100000000000000110}
   m_Layer: 6
   m_Name: Hamster_JointFreeMotorShell_MainScenes
   m_TagString: Player
@@ -657,6 +658,20 @@ MonoBehaviour:
   wallAnimationCrossFade: 0.08
   requireWallAnimationMotion: 1
   debugTraversalLogs: 0
+--- !u!114 &6100000000000000110
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 692270962315936511}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 3853c70aebf888c49b0e09b08b20d0e7, type: 3}
+  m_Name: ""
+  m_EditorClassIdentifier: ""
+  maxPostItSlots: 6
+  debugLogs: 0
 --- !u!1 &1594514674284813732
 GameObject:
   m_ObjectHideFlags: 0
