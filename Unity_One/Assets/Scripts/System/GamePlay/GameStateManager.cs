@@ -123,6 +123,7 @@ public class GameStateManager : NetworkBehaviour
     private int _lastPlayingCursorLockRetryStartFrame = -1;
     private bool _roundResultResolved;
     private bool _isStateValueChangeSubscribed;
+    private bool _postItAssignedThisRound;
 
     public bool HasRoundWinner => RoundHasWinnerValue.Value;
     public bool IsRoundDraw => RoundIsDrawValue.Value;
@@ -239,6 +240,7 @@ public class GameStateManager : NetworkBehaviour
         ApplyCursorStateForCurrentGameState("enter-lobby");
         StateTimer.Value = 0f;
         ResetRoundResultServer();
+        _postItAssignedThisRound = false;
         _roundParticipantClientIds.Clear();
 
         if (readySystem != null)
@@ -257,6 +259,7 @@ public class GameStateManager : NetworkBehaviour
         StateValue.Value = (int)GameState.Countdown;
         ApplyCursorStateForCurrentGameState("enter-countdown");
         StateTimer.Value = countdownSeconds;
+        _postItAssignedThisRound = false;
 
         Log("[GameStateManager] EnterCountdown");
     }
@@ -276,7 +279,31 @@ public class GameStateManager : NetworkBehaviour
             inGameMatchManager.TeleportPlayersToGameServer();
         }
 
+        AssignInitialPostItsForCurrentRoundServer();
+
         Log("[GameStateManager] EnterPlaying");
+    }
+
+    private void AssignInitialPostItsForCurrentRoundServer()
+    {
+        if (!IsServer) return;
+        if (_postItAssignedThisRound) return;
+
+        PostItRoundManager postItRoundManager = FindFirstObjectByType<PostItRoundManager>();
+        if (postItRoundManager == null)
+        {
+            Log("[GameStateManager] PostItRoundManager not found. Initial post-it assignment skipped.");
+            return;
+        }
+
+        if (!postItRoundManager.ServerAssignInitialPostItsFromScene())
+        {
+            Log("[GameStateManager] Initial post-it assignment failed.");
+            return;
+        }
+
+        _postItAssignedThisRound = true;
+        Log("[GameStateManager] Initial post-it assignment completed.");
     }
 
     private void EnterResults()

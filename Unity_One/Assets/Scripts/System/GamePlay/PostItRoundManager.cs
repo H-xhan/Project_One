@@ -37,6 +37,8 @@ public class PostItRoundManager : NetworkBehaviour
 
         bool allAddsSucceeded = true;
         int postItCount = Mathf.Max(0, initialPostItCountPerPlayer);
+        int validInventoryCount = 0;
+        int totalAssignedPostIts = 0;
 
         foreach (PlayerPostItInventory inventory in inventories)
         {
@@ -45,6 +47,7 @@ public class PostItRoundManager : NetworkBehaviour
                 continue;
             }
 
+            validInventoryCount++;
             inventory.ServerClearPostIts();
 
             ulong ownerClientId = ResolveInventoryOwnerClientId(inventory);
@@ -63,8 +66,23 @@ public class PostItRoundManager : NetworkBehaviour
                 {
                     allAddsSucceeded = false;
                     LogWarning($"Failed to assign initial post-it. postItId={data.PostItId}, slot={slotIndex}");
+                    continue;
                 }
+
+                totalAssignedPostIts++;
             }
+        }
+
+        if (validInventoryCount <= 0)
+        {
+            LogWarning("Rejected initial post-it assignment because no valid inventories were found.");
+            return false;
+        }
+
+        if (allAddsSucceeded)
+        {
+            Log(
+                $"Assigned Initial PostIts\nPlayers={validInventoryCount}\nTotalPostIts={totalAssignedPostIts}");
         }
 
         return allAddsSucceeded;
@@ -139,6 +157,14 @@ public class PostItRoundManager : NetworkBehaviour
         if (debugLogs)
         {
             Debug.LogWarning($"[{nameof(PostItRoundManager)}] {message}", this);
+        }
+    }
+
+    private void Log(string message)
+    {
+        if (debugLogs)
+        {
+            Debug.Log($"[{nameof(PostItRoundManager)}]\n{message}", this);
         }
     }
 }
