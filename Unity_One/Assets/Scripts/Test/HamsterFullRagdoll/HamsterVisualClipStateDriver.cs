@@ -78,6 +78,12 @@ public sealed class HamsterVisualClipStateDriver : MonoBehaviour
     [SerializeField] private float clientNetworkTeleportDistanceThreshold = 1.0f;
     [SerializeField] private float clientNetworkAirborneVerticalSpeedThreshold = 0.5f;
     [SerializeField] private float clientNetworkMaxVisualSpeed = 8.0f;
+    [SerializeField] private float clientNetworkWalkEnterSpeed = 0.18f;
+    [SerializeField] private float clientNetworkIdleEnterSpeed = 0.06f;
+    [SerializeField] private float clientNetworkRunEnterSpeed = 1.9f;
+    [SerializeField] private float clientNetworkRunExitSpeed = 1.4f;
+    [SerializeField] private float clientNetworkStateStableTime = 0.12f;
+    [SerializeField] private float clientNetworkMinimumLocomotionHoldTime = 0.15f;
 
     [Header("Jump")]
     [SerializeField] private float minVerticalVelocityForJump = 0.15f;
@@ -183,6 +189,15 @@ public sealed class HamsterVisualClipStateDriver : MonoBehaviour
     private string _clientNetworkFallbackBlockedReason = "tracking reset";
     private string _clientNetworkMotionSampleSourceBefore = string.Empty;
     private string _clientNetworkMotionSampleSourceAfter = string.Empty;
+    private ClipState _clientNetworkRawSelectedLocomotionState = ClipState.Idle;
+    private ClipState _clientNetworkStableLocomotionState = ClipState.Idle;
+    private bool _clientNetworkPendingLocomotionStateActive;
+    private ClipState _clientNetworkPendingLocomotionState = ClipState.Idle;
+    private float _clientNetworkPendingLocomotionDuration;
+    private float _clientNetworkLocomotionHoldRemaining;
+    private int _clientNetworkLocomotionEvaluationFrame = -1;
+    private bool _clientNetworkTransitionSuppressed;
+    private string _clientNetworkTransitionSuppressionReason = "none";
     private NetworkObject _clientDiagnosticsNetworkObject;
     private HamsterMotorShellRagdollRecoveryAdapter _clientDiagnosticsRecoveryStateSource;
     private Transform _clientDiagnosticsRoot;
@@ -296,6 +311,8 @@ public sealed class HamsterVisualClipStateDriver : MonoBehaviour
     private void Update()
     {
         float deltaTime = Time.deltaTime;
+        _clientNetworkTransitionSuppressed = false;
+        _clientNetworkTransitionSuppressionReason = "none";
         _stateTimer += deltaTime;
 
         if (debugClientLocomotionDiagnostics)
@@ -407,6 +424,12 @@ public sealed class HamsterVisualClipStateDriver : MonoBehaviour
         clientNetworkTeleportDistanceThreshold = Mathf.Max(0f, clientNetworkTeleportDistanceThreshold);
         clientNetworkAirborneVerticalSpeedThreshold = Mathf.Max(0f, clientNetworkAirborneVerticalSpeedThreshold);
         clientNetworkMaxVisualSpeed = Mathf.Max(0f, clientNetworkMaxVisualSpeed);
+        clientNetworkWalkEnterSpeed = Mathf.Max(0f, clientNetworkWalkEnterSpeed);
+        clientNetworkIdleEnterSpeed = Mathf.Max(0f, clientNetworkIdleEnterSpeed);
+        clientNetworkRunEnterSpeed = Mathf.Max(0f, clientNetworkRunEnterSpeed);
+        clientNetworkRunExitSpeed = Mathf.Max(0f, clientNetworkRunExitSpeed);
+        clientNetworkStateStableTime = Mathf.Max(0f, clientNetworkStateStableTime);
+        clientNetworkMinimumLocomotionHoldTime = Mathf.Max(0f, clientNetworkMinimumLocomotionHoldTime);
         minVerticalVelocityForJump = Mathf.Max(0f, minVerticalVelocityForJump);
         jumpCrossFadeDuration = Mathf.Max(0f, jumpCrossFadeDuration);
         minJumpStateTime = Mathf.Max(0f, minJumpStateTime);
@@ -1208,6 +1231,18 @@ public sealed class HamsterVisualClipStateDriver : MonoBehaviour
         _clientNetworkSpeedSmoothVelocity = 0f;
         _clientNetworkVerticalSpeed = 0f;
         _clientNetworkLargeDelta = false;
+        ResetClientNetworkLocomotionStabilityState();
+    }
+
+    private void ResetClientNetworkLocomotionStabilityState()
+    {
+        _clientNetworkRawSelectedLocomotionState = ClipState.Idle;
+        _clientNetworkStableLocomotionState = ClipState.Idle;
+        ClearClientNetworkPendingLocomotionState();
+        _clientNetworkLocomotionHoldRemaining = 0f;
+        _clientNetworkLocomotionEvaluationFrame = -1;
+        _clientNetworkTransitionSuppressed = false;
+        _clientNetworkTransitionSuppressionReason = "none";
     }
 
     private void TickStateDriver(MotionSample sample, float deltaTime)
@@ -1246,7 +1281,215 @@ public sealed class HamsterVisualClipStateDriver : MonoBehaviour
         if (sample.HasGroundedState && !grounded)
             return;
 
-        TryCrossFade(SelectLocomotionState(sample, out string reason), locomotionCrossFadeDuration, sample, reason);
+        ClipState rawSelectedState = SelectLocomotionState(sample, out string rawSelectionReason);
+        if (TryResolveClientNetworkStableLocomotionState(
+                sample,
+                rawSelectedState,
+                deltaTime,
+                out ClipState stableSelectedState,
+                out string stableSelectionReason))
+        {
+            TryCrossFadeClientNetworkLocomotion(
+                stableSelectedState,
+                locomotionCrossFadeDuration,
+                sample,
+                stableSelectionReason);
+            return;
+        }
+
+        TryCrossFade(rawSelectedState, locomotionCrossFadeDuration, sample, rawSelectionReason);
+    }
+
+    private bool TryResolveClientNetworkStableLocomotionState(
+        MotionSample sample,
+        ClipState rawSelectedState,
+        float deltaTime,
+        out ClipState stableSelectedState,
+        out string reason)
+    {
+        stableSelectedState = rawSelectedState;
+        reason = null;
+        if (sample.Source != "Motor+ClientNetworkRoot")
+            return false;
+
+        if (_clientNetworkLocomotionEvaluationFrame >= 0 &&
+            _clientNetworkLocomotionEvaluationFrame != Time.frameCount - 1)
+        {
+            RebaseClientNetworkStableLocomotionStateFromDriver();
+        }
+
+        _clientNetworkLocomotionEvaluationFrame = Time.frameCount;
+        _clientNetworkRawSelectedLocomotionState = rawSelectedState;
+
+        float safeDeltaTime = IsFinite(deltaTime) ? Mathf.Max(0f, deltaTime) : 0f;
+        _clientNetworkLocomotionHoldRemaining = Mathf.Max(
+            0f,
+            _clientNetworkLocomotionHoldRemaining - safeDeltaTime);
+
+        ClipState candidateState = SelectClientNetworkLocomotionCandidate(
+            _clientNetworkStableLocomotionState,
+            sample.PlanarSpeed);
+        if (candidateState == _clientNetworkStableLocomotionState)
+        {
+            ClearClientNetworkPendingLocomotionState();
+            stableSelectedState = _clientNetworkStableLocomotionState;
+            reason = "client network hysteresis stable";
+            return true;
+        }
+
+        if (!_clientNetworkPendingLocomotionStateActive ||
+            _clientNetworkPendingLocomotionState != candidateState)
+        {
+            _clientNetworkPendingLocomotionStateActive = true;
+            _clientNetworkPendingLocomotionState = candidateState;
+            _clientNetworkPendingLocomotionDuration = 0f;
+        }
+        else
+        {
+            _clientNetworkPendingLocomotionDuration += safeDeltaTime;
+        }
+
+        stableSelectedState = _clientNetworkStableLocomotionState;
+        if (_clientNetworkPendingLocomotionDuration < clientNetworkStateStableTime)
+        {
+            reason = "client network pending stable time";
+            return true;
+        }
+
+        if (_clientNetworkLocomotionHoldRemaining > 0f)
+        {
+            reason = "client network minimum hold";
+            return true;
+        }
+
+        if (TryGetClientNetworkLocomotionTransition(out _))
+        {
+            reason = "client network transition settling";
+            return true;
+        }
+
+        _clientNetworkStableLocomotionState = candidateState;
+        _clientNetworkLocomotionHoldRemaining = candidateState == ClipState.Idle
+            ? 0f
+            : clientNetworkMinimumLocomotionHoldTime;
+        ClearClientNetworkPendingLocomotionState();
+        stableSelectedState = _clientNetworkStableLocomotionState;
+        reason = "client network stable state committed";
+        return true;
+    }
+
+    private ClipState SelectClientNetworkLocomotionCandidate(
+        ClipState stableState,
+        float planarSpeed)
+    {
+        float speed = Mathf.Max(0f, planarSpeed);
+        switch (stableState)
+        {
+            case ClipState.Idle:
+                return speed >= clientNetworkWalkEnterSpeed
+                    ? ClipState.Walk
+                    : ClipState.Idle;
+
+            case ClipState.Walk:
+                if (speed < clientNetworkIdleEnterSpeed)
+                    return ClipState.Idle;
+
+                return speed >= clientNetworkRunEnterSpeed
+                    ? ClipState.Run
+                    : ClipState.Walk;
+
+            case ClipState.Run:
+                return speed < clientNetworkRunExitSpeed
+                    ? ClipState.Walk
+                    : ClipState.Run;
+
+            default:
+                return ClipState.Idle;
+        }
+    }
+
+    private void RebaseClientNetworkStableLocomotionStateFromDriver()
+    {
+        if (_hasRunState && _currentStateHash == _runStateHash)
+            _clientNetworkStableLocomotionState = ClipState.Run;
+        else if (_hasWalkState && _currentStateHash == _walkStateHash)
+            _clientNetworkStableLocomotionState = ClipState.Walk;
+        else
+            _clientNetworkStableLocomotionState = ClipState.Idle;
+
+        ClearClientNetworkPendingLocomotionState();
+        _clientNetworkLocomotionHoldRemaining = _clientNetworkStableLocomotionState == ClipState.Idle
+            ? 0f
+            : clientNetworkMinimumLocomotionHoldTime;
+    }
+
+    private void ClearClientNetworkPendingLocomotionState()
+    {
+        _clientNetworkPendingLocomotionStateActive = false;
+        _clientNetworkPendingLocomotionState = ClipState.Idle;
+        _clientNetworkPendingLocomotionDuration = 0f;
+    }
+
+    private bool TryCrossFadeClientNetworkLocomotion(
+        ClipState desiredState,
+        float crossFadeDuration,
+        MotionSample sample,
+        string reason)
+    {
+        PlayableState playableState = ResolvePlayableState(desiredState);
+        if (!playableState.IsValid ||
+            !TryGetClientNetworkLocomotionTransition(out AnimatorStateInfo nextState))
+        {
+            return TryCrossFade(playableState, crossFadeDuration, sample, reason);
+        }
+
+        bool nextMatchesStableTarget = AnimatorStateMatchesHash(nextState, playableState.Hash);
+        _clientNetworkTransitionSuppressed = true;
+        _clientNetworkTransitionSuppressionReason = nextMatchesStableTarget
+            ? "transition already targets stable locomotion"
+            : "locomotion transition in progress";
+
+        if (debugClientLocomotionDiagnostics)
+        {
+            _clientDiagnosticsLastRequestedStateName = playableState.Name ?? string.Empty;
+            _clientDiagnosticsLastRequestedStateHash = playableState.Hash;
+            _clientDiagnosticsLastRestartIfCurrent = false;
+            _clientDiagnosticsLastCallerReason = reason ?? string.Empty;
+            LogClientLocomotionCrossFade(
+                playableState,
+                crossFadeDuration,
+                sample,
+                reason,
+                false,
+                false,
+                _clientNetworkTransitionSuppressionReason,
+                _currentStateName,
+                _currentStateHash);
+        }
+
+        return false;
+    }
+
+    private bool TryGetClientNetworkLocomotionTransition(out AnimatorStateInfo nextState)
+    {
+        nextState = default;
+        if (visualAnimator == null ||
+            visualAnimator.layerCount <= BaseLayerIndex ||
+            !visualAnimator.IsInTransition(BaseLayerIndex))
+        {
+            return false;
+        }
+
+        nextState = visualAnimator.GetNextAnimatorStateInfo(BaseLayerIndex);
+        return (_hasIdleState && AnimatorStateMatchesHash(nextState, _idleStateHash)) ||
+               (_hasWalkState && AnimatorStateMatchesHash(nextState, _walkStateHash)) ||
+               (_hasRunState && AnimatorStateMatchesHash(nextState, _runStateHash));
+    }
+
+    private static bool AnimatorStateMatchesHash(AnimatorStateInfo stateInfo, int stateHash)
+    {
+        return stateHash != 0 &&
+               (stateInfo.shortNameHash == stateHash || stateInfo.fullPathHash == stateHash);
     }
 
     private bool TickInteractionDriver(MotionSample sample, float deltaTime)
@@ -2149,6 +2392,9 @@ public sealed class HamsterVisualClipStateDriver : MonoBehaviour
         string recoveryState = _clientDiagnosticsRecoveryStateSource != null
             ? _clientDiagnosticsRecoveryStateSource.CurrentRecoveryState.ToString()
             : "<none>";
+        string pendingState = _clientNetworkPendingLocomotionStateActive
+            ? _clientNetworkPendingLocomotionState.ToString()
+            : "<none>";
 
         Debug.Log(
             $"[HamsterVisualDiag/Decision] role={ResolveClientDiagnosticsRole()} selectedState={selectedState} " +
@@ -2159,7 +2405,12 @@ public sealed class HamsterVisualClipStateDriver : MonoBehaviour
             $"interactionStateActive={_interactionStateActive} recoveryStateExists={_clientDiagnosticsRecoveryStateSource != null} " +
             $"recoveryState={recoveryState} canDriveAnimator={canDriveAnimator} updateResult={FormatReason(updateResult)} " +
             $"sampleSource={FormatReason(sample.Source)} speed={sample.PlanarSpeed:F3} move={FormatMoveInput(sample)} " +
-            $"grounded={FormatGrounded(sample)} sprint={sample.IsSprintHeld}",
+            $"grounded={FormatGrounded(sample)} sprint={sample.IsSprintHeld} " +
+            $"rawSelectedState={selectedState} stableSelectedState={_clientNetworkStableLocomotionState} " +
+            $"pendingState={pendingState} pendingDuration={_clientNetworkPendingLocomotionDuration:F3} " +
+            $"locomotionHoldRemaining={_clientNetworkLocomotionHoldRemaining:F3} " +
+            $"transitionSuppressed={_clientNetworkTransitionSuppressed} " +
+            $"suppressionReason={FormatReason(_clientNetworkTransitionSuppressionReason)}",
             this);
     }
 
@@ -2226,6 +2477,10 @@ public sealed class HamsterVisualClipStateDriver : MonoBehaviour
             $"crossFadeDuration={crossFadeDuration:F3} sampleSource={FormatReason(sample.Source)} " +
             $"speed={sample.PlanarSpeed:F3} move={FormatMoveInput(sample)} grounded={FormatGrounded(sample)} " +
             $"sprint={sample.IsSprintHeld} callerReason={FormatReason(callerReason)} " +
+            $"rawSelectedState={_clientNetworkRawSelectedLocomotionState} " +
+            $"stableSelectedState={_clientNetworkStableLocomotionState} " +
+            $"transitionSuppressed={_clientNetworkTransitionSuppressed} " +
+            $"suppressionReason={FormatReason(_clientNetworkTransitionSuppressionReason)} " +
             $"animator={FormatAnimatorSnapshot(animatorSnapshot)}",
             this);
     }
