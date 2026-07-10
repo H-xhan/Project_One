@@ -6,7 +6,6 @@ public sealed class HamsterVisualFollower : MonoBehaviour
     private const float ClipHeightBoostDuration = 0.16f;
     private const float ClipHeightLogInterval = 0.75f;
     private const float TargetVisualFacingLogInterval = 0.5f;
-    private const float ClientNetworkMotionFallbackMinMove01 = 0.2f;
 
     [Header("References")]
     [SerializeField] private Rigidbody targetBody;
@@ -248,9 +247,6 @@ public sealed class HamsterVisualFollower : MonoBehaviour
     private bool _hasGroundedParameter;
     private bool _hasVerticalVelocityParameter;
     private bool _hasSprint01Parameter;
-    private bool _clientNetworkMotionFallbackActive;
-    private float _clientNetworkMotionFallbackPlanarSpeed;
-    private bool _clientNetworkMotionFallbackSprintHeld;
     private bool _missingVisualRootLogged;
     private bool _missingTargetBodyLogged;
     private float _nextTargetVisualFacingLogTime;
@@ -296,7 +292,6 @@ public sealed class HamsterVisualFollower : MonoBehaviour
 
         ConfigureAnimator();
         ResetSmoothingState();
-        ClearClientNetworkMotionFallback();
     }
 
     private void LateUpdate()
@@ -353,20 +348,6 @@ public sealed class HamsterVisualFollower : MonoBehaviour
             ResetRecoveryVisualDynamics();
 
         LogRecoveryVisualSuppression(suppress, _recoveryVisualSuppressionReason);
-    }
-
-    internal void SetClientNetworkMotionFallback(float planarSpeed, bool sprintHeld)
-    {
-        _clientNetworkMotionFallbackActive = true;
-        _clientNetworkMotionFallbackPlanarSpeed = Mathf.Max(0f, planarSpeed);
-        _clientNetworkMotionFallbackSprintHeld = sprintHeld;
-    }
-
-    internal void ClearClientNetworkMotionFallback()
-    {
-        _clientNetworkMotionFallbackActive = false;
-        _clientNetworkMotionFallbackPlanarSpeed = 0f;
-        _clientNetworkMotionFallbackSprintHeld = false;
     }
 
     public void ResetRecoveryVisualDynamics()
@@ -1847,19 +1828,12 @@ public sealed class HamsterVisualFollower : MonoBehaviour
 
         CacheAnimatorParameters();
 
-        float animatorPlanarSpeed = _clientNetworkMotionFallbackActive
-            ? _clientNetworkMotionFallbackPlanarSpeed
-            : planarSpeed;
-
         if (_hasSpeedParameter)
-            visualAnimator.SetFloat(_speedParameterHash, animatorPlanarSpeed, animatorDampTime, Time.deltaTime);
+            visualAnimator.SetFloat(_speedParameterHash, planarSpeed, animatorDampTime, Time.deltaTime);
 
         if (_hasMove01Parameter)
         {
-            float move01 = Mathf.Clamp01(animatorPlanarSpeed / Mathf.Max(0.01f, speedForMove01));
-            if (_clientNetworkMotionFallbackActive)
-                move01 = Mathf.Max(move01, ClientNetworkMotionFallbackMinMove01);
-
+            float move01 = Mathf.Clamp01(planarSpeed / Mathf.Max(0.01f, speedForMove01));
             visualAnimator.SetFloat(_move01ParameterHash, move01, animatorDampTime, Time.deltaTime);
         }
 
@@ -1871,11 +1845,9 @@ public sealed class HamsterVisualFollower : MonoBehaviour
 
         if (updateSprintParameter && _hasSprint01Parameter)
         {
-            float sprint01 = _clientNetworkMotionFallbackActive
-                ? (_clientNetworkMotionFallbackSprintHeld ? 1f : 0f)
-                : motorStateSource != null
-                    ? (motorStateSource.IsSprintHeld ? 1f : 0f)
-                    : Mathf.Clamp01(animatorPlanarSpeed / Mathf.Max(0.01f, speedForMove01));
+            float sprint01 = motorStateSource != null
+                ? (motorStateSource.IsSprintHeld ? 1f : 0f)
+                : Mathf.Clamp01(planarSpeed / Mathf.Max(0.01f, speedForMove01));
             visualAnimator.SetFloat(_sprint01ParameterHash, sprint01, sprint01DampTime, Time.deltaTime);
         }
     }

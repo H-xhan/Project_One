@@ -1,4 +1,3 @@
-using Unity.Netcode;
 using UnityEngine;
 
 public sealed class HamsterVisualClipStateDriver : MonoBehaviour
@@ -70,13 +69,6 @@ public sealed class HamsterVisualClipStateDriver : MonoBehaviour
     [SerializeField] private bool requireMoveInputForRun = true;
     [SerializeField] private bool preventRunAtNearZeroSpeed = true;
 
-    [Header("Client Network Motion Fallback")]
-    [SerializeField] private bool enableClientNetworkMotionFallback = true;
-    [SerializeField] private float clientMotionSpeedSmoothing = 0.10f;
-    [SerializeField] private float clientWalkSpeedThreshold = 0.12f;
-    [SerializeField] private float clientRunSpeedThreshold = 1.7f;
-    [SerializeField] private float clientTeleportDistanceThreshold = 1.0f;
-
     [Header("Jump")]
     [SerializeField] private float minVerticalVelocityForJump = 0.15f;
     [SerializeField] private float jumpCrossFadeDuration = 0.04f;
@@ -109,16 +101,6 @@ public sealed class HamsterVisualClipStateDriver : MonoBehaviour
     private float _carryDebugLogTimer;
     private int _lastCarryDecisionLoggedHash;
     private string _lastCarryDecisionLoggedReason;
-    private HamsterVisualFollower _visualFollower;
-    private HamsterMotorShellRagdollRecoveryAdapter _recoveryStateSource;
-    private NetworkObject _clientMotionNetworkObject;
-    private Transform _clientMotionRoot;
-    private Vector3 _clientMotionPreviousPosition;
-    private bool _clientMotionPositionInitialized;
-    private bool _clientMotionSampleValid;
-    private float _clientMotionRawSpeed;
-    private float _clientMotionSmoothedSpeed;
-    private float _clientMotionSpeedSmoothVelocity;
 
     private int _idleStateHash;
     private int _walkStateHash;
@@ -226,11 +208,6 @@ public sealed class HamsterVisualClipStateDriver : MonoBehaviour
         }
     }
 
-    private void OnDisable()
-    {
-        ResetClientNetworkMotionFallback();
-    }
-
     private void Start()
     {
         if (autoFindReferences)
@@ -245,16 +222,10 @@ public sealed class HamsterVisualClipStateDriver : MonoBehaviour
         _stateTimer += deltaTime;
 
         if (!enableClipStateDriver)
-        {
-            ResetClientNetworkMotionFallback();
             return;
-        }
 
-        if (autoFindReferences && (visualAnimator == null || motorStateSource == null || targetBody == null || _visualFollower == null || (autoFindGrabStateSource && grabStateSource == null)))
+        if (autoFindReferences && (visualAnimator == null || motorStateSource == null || targetBody == null || (autoFindGrabStateSource && grabStateSource == null)))
             ResolveReferences();
-
-        UpdateClientNetworkMotionFallback(deltaTime);
-        ClearClientNetworkMotionAnimatorOverride();
 
         if (!CanDriveAnimator())
             return;
@@ -267,9 +238,7 @@ public sealed class HamsterVisualClipStateDriver : MonoBehaviour
 
         MotionSample sample = ReadMotionSample();
         bool interactionHandled = TickInteractionDriver(sample, deltaTime);
-        if (interactionHandled)
-            ClearClientNetworkMotionAnimatorOverride();
-        else
+        if (!interactionHandled)
             TickStateDriver(sample, deltaTime);
 
         TickDebugLog(sample, deltaTime);
@@ -285,10 +254,6 @@ public sealed class HamsterVisualClipStateDriver : MonoBehaviour
         minSpeedForRun = Mathf.Max(0f, minSpeedForRun);
         locomotionCrossFadeDuration = Mathf.Max(0f, locomotionCrossFadeDuration);
         minPlanarSpeedForSprintRunState = Mathf.Max(0f, minPlanarSpeedForSprintRunState);
-        clientMotionSpeedSmoothing = Mathf.Max(0f, clientMotionSpeedSmoothing);
-        clientWalkSpeedThreshold = Mathf.Max(0f, clientWalkSpeedThreshold);
-        clientRunSpeedThreshold = Mathf.Max(clientWalkSpeedThreshold, clientRunSpeedThreshold);
-        clientTeleportDistanceThreshold = Mathf.Max(0f, clientTeleportDistanceThreshold);
         minVerticalVelocityForJump = Mathf.Max(0f, minVerticalVelocityForJump);
         jumpCrossFadeDuration = Mathf.Max(0f, jumpCrossFadeDuration);
         minJumpStateTime = Mathf.Max(0f, minJumpStateTime);
@@ -322,20 +287,6 @@ public sealed class HamsterVisualClipStateDriver : MonoBehaviour
 
         if (visualAnimator == null)
             visualAnimator = FindVisualPreviewAnimator();
-
-        if (_visualFollower == null)
-        {
-            _visualFollower = GetComponent<HamsterVisualFollower>();
-            if (_visualFollower == null)
-                _visualFollower = GetComponentInParent<HamsterVisualFollower>();
-        }
-
-        if (_recoveryStateSource == null)
-        {
-            _recoveryStateSource = GetComponent<HamsterMotorShellRagdollRecoveryAdapter>();
-            if (_recoveryStateSource == null)
-                _recoveryStateSource = GetComponentInParent<HamsterMotorShellRagdollRecoveryAdapter>();
-        }
 
         if (autoFindGrabStateSource)
             ResolveGrabStateSource();
@@ -734,7 +685,6 @@ public sealed class HamsterVisualClipStateDriver : MonoBehaviour
 
     private void ResetRuntimeState()
     {
-        ResetClientNetworkMotionFallback();
         _currentStateHash = 0;
         _currentStateName = string.Empty;
         _stateTimer = 0f;
@@ -806,7 +756,7 @@ public sealed class HamsterVisualClipStateDriver : MonoBehaviour
 
         if (motorStateSource != null)
         {
-            MotionSample motorSample = new MotionSample
+            return new MotionSample
             {
                 HasGroundedState = true,
                 IsGrounded = motorStateSource.IsGrounded,
@@ -819,8 +769,6 @@ public sealed class HamsterVisualClipStateDriver : MonoBehaviour
                 VerticalVelocity = motorStateSource.CurrentVerticalVelocity,
                 Source = "Motor"
             };
-
-            return ApplyClientNetworkMotionFallback(motorSample);
         }
 
         if (targetBody != null)
@@ -857,193 +805,6 @@ public sealed class HamsterVisualClipStateDriver : MonoBehaviour
             VerticalVelocity = 0f,
             Source = "None"
         };
-    }
-
-    private MotionSample ApplyClientNetworkMotionFallback(MotionSample motorSample)
-    {
-        ClearClientNetworkMotionAnimatorOverride();
-
-        if (!CanApplyClientNetworkMotionFallback(motorSample))
-            return motorSample;
-
-        motorSample.HasMoveInputState = true;
-        motorSample.HasMoveInput = true;
-        motorSample.IsSprintHeld = _clientMotionSmoothedSpeed >= Mathf.Max(0f, clientRunSpeedThreshold);
-        motorSample.PlanarSpeed = _clientMotionSmoothedSpeed;
-        motorSample.Source = "Motor+ClientNetworkRoot";
-
-        if (_visualFollower != null)
-            _visualFollower.SetClientNetworkMotionFallback(motorSample.PlanarSpeed, motorSample.IsSprintHeld);
-
-        return motorSample;
-    }
-
-    private bool CanApplyClientNetworkMotionFallback(MotionSample motorSample)
-    {
-        if (!IsNonServerClientNetworkMotionFallbackEnabled())
-            return false;
-
-        if (!_clientMotionSampleValid)
-            return false;
-
-        if (_externalOneShotActive || _externalSustainedStateActive || _interactionStateActive)
-            return false;
-
-        if (motorSample.HasGroundedState && !motorSample.IsGrounded)
-            return false;
-
-        if (motorStateSource != null &&
-            (motorStateSource.IsExternalControlLocked || motorStateSource.ExternalMovementControlScale < 0.999f))
-            return false;
-
-        if (_recoveryStateSource != null &&
-            (_recoveryStateSource.IsKnockedOrRecovering || _recoveryStateSource.IsLiquidSwept))
-            return false;
-
-        float walkThreshold = Mathf.Max(0f, clientWalkSpeedThreshold);
-        bool motorMotionValid = motorSample.HasMoveInput && motorSample.PlanarSpeed >= walkThreshold;
-        if (motorMotionValid)
-            return false;
-
-        return _clientMotionSmoothedSpeed >= walkThreshold;
-    }
-
-    private void UpdateClientNetworkMotionFallback(float deltaTime)
-    {
-        if (!TryGetClientNetworkMotionRoot(out Transform motionRoot))
-        {
-            ResetClientNetworkMotionTracking();
-            return;
-        }
-
-        Vector3 currentPosition = motionRoot.position;
-        if (!IsFiniteVector(currentPosition))
-        {
-            ResetClientNetworkMotionTracking();
-            return;
-        }
-
-        if (!_clientMotionPositionInitialized || _clientMotionRoot != motionRoot)
-        {
-            InitializeClientNetworkMotionTracking(motionRoot, currentPosition);
-            return;
-        }
-
-        Vector3 worldDelta = currentPosition - _clientMotionPreviousPosition;
-        _clientMotionPreviousPosition = currentPosition;
-
-        float teleportThreshold = Mathf.Max(0f, clientTeleportDistanceThreshold);
-        if ((teleportThreshold > 0f && worldDelta.sqrMagnitude > teleportThreshold * teleportThreshold) ||
-            !IsFiniteFloat(deltaTime) || deltaTime <= 0f)
-        {
-            InitializeClientNetworkMotionTracking(motionRoot, currentPosition);
-            return;
-        }
-
-        Vector3 planarDelta = Vector3.ProjectOnPlane(worldDelta, Vector3.up);
-        float rawSpeed = planarDelta.magnitude / deltaTime;
-        if (!IsFiniteFloat(rawSpeed))
-        {
-            InitializeClientNetworkMotionTracking(motionRoot, currentPosition);
-            return;
-        }
-
-        _clientMotionRawSpeed = Mathf.Max(0f, rawSpeed);
-        float smoothTime = Mathf.Max(0f, clientMotionSpeedSmoothing);
-        if (smoothTime <= 0f)
-        {
-            _clientMotionSmoothedSpeed = _clientMotionRawSpeed;
-            _clientMotionSpeedSmoothVelocity = 0f;
-        }
-        else
-        {
-            _clientMotionSmoothedSpeed = Mathf.SmoothDamp(
-                _clientMotionSmoothedSpeed,
-                _clientMotionRawSpeed,
-                ref _clientMotionSpeedSmoothVelocity,
-                smoothTime,
-                Mathf.Infinity,
-                deltaTime);
-        }
-
-        if (!IsFiniteFloat(_clientMotionSmoothedSpeed))
-        {
-            InitializeClientNetworkMotionTracking(motionRoot, currentPosition);
-            return;
-        }
-
-        _clientMotionSampleValid = true;
-    }
-
-    private bool TryGetClientNetworkMotionRoot(out Transform motionRoot)
-    {
-        motionRoot = null;
-        if (!IsNonServerClientNetworkMotionFallbackEnabled())
-            return false;
-
-        if (_clientMotionNetworkObject == null)
-            _clientMotionNetworkObject = GetComponentInParent<NetworkObject>();
-
-        if (_clientMotionNetworkObject == null || !_clientMotionNetworkObject.IsSpawned)
-            return false;
-
-        motionRoot = _clientMotionNetworkObject.transform;
-        return motionRoot != null;
-    }
-
-    private bool IsNonServerClientNetworkMotionFallbackEnabled()
-    {
-        NetworkManager networkManager = NetworkManager.Singleton;
-        return enableClientNetworkMotionFallback &&
-               networkManager != null &&
-               networkManager.IsListening &&
-               networkManager.IsClient &&
-               !networkManager.IsServer;
-    }
-
-    private void InitializeClientNetworkMotionTracking(Transform motionRoot, Vector3 position)
-    {
-        _clientMotionRoot = motionRoot;
-        _clientMotionPreviousPosition = position;
-        _clientMotionPositionInitialized = true;
-        _clientMotionSampleValid = false;
-        _clientMotionRawSpeed = 0f;
-        _clientMotionSmoothedSpeed = 0f;
-        _clientMotionSpeedSmoothVelocity = 0f;
-    }
-
-    private void ResetClientNetworkMotionFallback()
-    {
-        ClearClientNetworkMotionAnimatorOverride();
-        ResetClientNetworkMotionTracking();
-        _clientMotionNetworkObject = null;
-    }
-
-    private void ResetClientNetworkMotionTracking()
-    {
-        _clientMotionRoot = null;
-        _clientMotionPreviousPosition = Vector3.zero;
-        _clientMotionPositionInitialized = false;
-        _clientMotionSampleValid = false;
-        _clientMotionRawSpeed = 0f;
-        _clientMotionSmoothedSpeed = 0f;
-        _clientMotionSpeedSmoothVelocity = 0f;
-    }
-
-    private void ClearClientNetworkMotionAnimatorOverride()
-    {
-        if (_visualFollower != null)
-            _visualFollower.ClearClientNetworkMotionFallback();
-    }
-
-    private static bool IsFiniteVector(Vector3 value)
-    {
-        return IsFiniteFloat(value.x) && IsFiniteFloat(value.y) && IsFiniteFloat(value.z);
-    }
-
-    private static bool IsFiniteFloat(float value)
-    {
-        return !float.IsNaN(value) && !float.IsInfinity(value);
     }
 
     private void TickStateDriver(MotionSample sample, float deltaTime)
