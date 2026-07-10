@@ -1559,12 +1559,29 @@ public class PlayerHub : NetworkBehaviour
         if (motorShellMotor == null || !motorShellMotor.IsMainScenesInputRouteTarget)
             return false;
 
+        float serverYawDelta = MirrorInputRouteCameraYawOnServer();
         motorShellMotor.SetNetworkInput(_moveInput, _sprintHeld, _jumpPressed);
-        LogInputRouteServer(false, 0f, motorShellMotor.isActiveAndEnabled ? "motor shell input routed" : "motor shell disabled");
+        LogInputRouteServer(false, serverYawDelta, motorShellMotor.isActiveAndEnabled ? "motor shell input routed" : "motor shell disabled");
 
         _jumpPressed = false;
         _yawDelta = 0f;
         return true;
+    }
+
+    private float MirrorInputRouteCameraYawOnServer()
+    {
+        if (!IsServer ||
+            !IsInputRouteTarget() ||
+            IsOwner ||
+            !AllowServerLookInput() ||
+            Mathf.Abs(_yawDelta) <= 0.0001f)
+        {
+            return 0f;
+        }
+
+        ApplyInputRouteCameraYawOffset(_yawDelta);
+        ApplyStableCameraWorldRotation();
+        return _yawDelta;
     }
 
     private HamsterFullRagdollMotor ResolveMotorShellMotor()
