@@ -71,6 +71,14 @@ public sealed class HamsterVisualClipStateDriver : MonoBehaviour
     [SerializeField] private bool requireMoveInputForRun = true;
     [SerializeField] private bool preventRunAtNearZeroSpeed = true;
 
+    [Header("Client Network Locomotion")]
+    [SerializeField] private bool enableClientNetworkLocomotion = true;
+    [SerializeField] private float clientNetworkSpeedSmoothTime = 0.10f;
+    [SerializeField] private float clientNetworkStopSpeedThreshold = 0.06f;
+    [SerializeField] private float clientNetworkTeleportDistanceThreshold = 1.0f;
+    [SerializeField] private float clientNetworkAirborneVerticalSpeedThreshold = 0.5f;
+    [SerializeField] private float clientNetworkMaxVisualSpeed = 8.0f;
+
     [Header("Jump")]
     [SerializeField] private float minVerticalVelocityForJump = 0.15f;
     [SerializeField] private float jumpCrossFadeDuration = 0.04f;
@@ -159,6 +167,22 @@ public sealed class HamsterVisualClipStateDriver : MonoBehaviour
     private bool _warnedAnimatorDisabled;
     private bool _warnedMissingController;
     private bool _warnedRootMotion;
+    private NetworkObject _clientNetworkLocomotionObject;
+    private HamsterMotorShellRagdollRecoveryAdapter _clientNetworkLocomotionRecoveryStateSource;
+    private Transform _clientNetworkLocomotionRoot;
+    private Vector3 _clientNetworkPreviousRootPosition;
+    private bool _clientNetworkPositionInitialized;
+    private bool _clientNetworkSampleValid;
+    private bool _clientNetworkMotionActive;
+    private float _clientNetworkRawPlanarSpeed;
+    private float _clientNetworkSmoothedPlanarSpeed;
+    private float _clientNetworkSpeedSmoothVelocity;
+    private float _clientNetworkVerticalSpeed;
+    private bool _clientNetworkLargeDelta;
+    private bool _clientNetworkFallbackApplied;
+    private string _clientNetworkFallbackBlockedReason = "tracking reset";
+    private string _clientNetworkMotionSampleSourceBefore = string.Empty;
+    private string _clientNetworkMotionSampleSourceAfter = string.Empty;
     private NetworkObject _clientDiagnosticsNetworkObject;
     private HamsterMotorShellRagdollRecoveryAdapter _clientDiagnosticsRecoveryStateSource;
     private Transform _clientDiagnosticsRoot;
@@ -250,6 +274,7 @@ public sealed class HamsterVisualClipStateDriver : MonoBehaviour
             ResolveReferences();
 
         CacheStateAvailability();
+        ResetClientNetworkLocomotionState();
         ResetRuntimeState();
         ResetClientLocomotionDiagnosticsState();
 
@@ -329,8 +354,15 @@ public sealed class HamsterVisualClipStateDriver : MonoBehaviour
         }
     }
 
+    private void OnDisable()
+    {
+        ResetClientNetworkLocomotionState();
+    }
+
     private void LateUpdate()
     {
+        UpdateClientNetworkLocomotionSample(Time.deltaTime);
+
         if (!debugClientLocomotionDiagnostics ||
             !_clientDiagnosticsAnimatorLogThisFrame ||
             _clientDiagnosticsUpdateFrame != Time.frameCount)
@@ -370,6 +402,11 @@ public sealed class HamsterVisualClipStateDriver : MonoBehaviour
         minSpeedForRun = Mathf.Max(0f, minSpeedForRun);
         locomotionCrossFadeDuration = Mathf.Max(0f, locomotionCrossFadeDuration);
         minPlanarSpeedForSprintRunState = Mathf.Max(0f, minPlanarSpeedForSprintRunState);
+        clientNetworkSpeedSmoothTime = Mathf.Max(0f, clientNetworkSpeedSmoothTime);
+        clientNetworkStopSpeedThreshold = Mathf.Max(0f, clientNetworkStopSpeedThreshold);
+        clientNetworkTeleportDistanceThreshold = Mathf.Max(0f, clientNetworkTeleportDistanceThreshold);
+        clientNetworkAirborneVerticalSpeedThreshold = Mathf.Max(0f, clientNetworkAirborneVerticalSpeedThreshold);
+        clientNetworkMaxVisualSpeed = Mathf.Max(0f, clientNetworkMaxVisualSpeed);
         minVerticalVelocityForJump = Mathf.Max(0f, minVerticalVelocityForJump);
         jumpCrossFadeDuration = Mathf.Max(0f, jumpCrossFadeDuration);
         minJumpStateTime = Mathf.Max(0f, minJumpStateTime);
@@ -873,7 +910,7 @@ public sealed class HamsterVisualClipStateDriver : MonoBehaviour
 
         if (motorStateSource != null)
         {
-            return new MotionSample
+            MotionSample sample = new MotionSample
             {
                 HasGroundedState = true,
                 IsGrounded = motorStateSource.IsGrounded,
@@ -886,6 +923,8 @@ public sealed class HamsterVisualClipStateDriver : MonoBehaviour
                 VerticalVelocity = motorStateSource.CurrentVerticalVelocity,
                 Source = "Motor"
             };
+
+            return ApplyClientNetworkLocomotionSample(sample);
         }
 
         if (targetBody != null)
@@ -894,7 +933,7 @@ public sealed class HamsterVisualClipStateDriver : MonoBehaviour
             Vector3 planarVelocity = velocity;
             planarVelocity.y = 0f;
 
-            return new MotionSample
+            MotionSample sample = new MotionSample
             {
                 HasGroundedState = false,
                 IsGrounded = false,
@@ -907,9 +946,11 @@ public sealed class HamsterVisualClipStateDriver : MonoBehaviour
                 VerticalVelocity = velocity.y,
                 Source = "Rigidbody"
             };
+
+            return ApplyClientNetworkLocomotionSample(sample);
         }
 
-        return new MotionSample
+        MotionSample fallbackSample = new MotionSample
         {
             HasGroundedState = false,
             IsGrounded = false,
@@ -922,6 +963,251 @@ public sealed class HamsterVisualClipStateDriver : MonoBehaviour
             VerticalVelocity = 0f,
             Source = "None"
         };
+
+        return ApplyClientNetworkLocomotionSample(fallbackSample);
+    }
+
+    private void UpdateClientNetworkLocomotionSample(float deltaTime)
+    {
+        NetworkManager networkManager = NetworkManager.Singleton;
+        if (!enableClientNetworkLocomotion ||
+            networkManager == null ||
+            !networkManager.IsListening ||
+            !networkManager.IsClient ||
+            networkManager.IsServer)
+        {
+            ResetClientNetworkLocomotionState();
+            return;
+        }
+
+        NetworkObject resolvedNetworkObject = GetComponentInParent<NetworkObject>();
+        Transform resolvedRoot = resolvedNetworkObject != null
+            ? resolvedNetworkObject.transform
+            : null;
+        if (resolvedNetworkObject == null || !resolvedNetworkObject.IsSpawned || resolvedRoot == null)
+        {
+            ResetClientNetworkLocomotionState();
+            return;
+        }
+
+        bool referenceChanged = _clientNetworkLocomotionObject != resolvedNetworkObject ||
+                                _clientNetworkLocomotionRoot != resolvedRoot;
+        if (referenceChanged)
+        {
+            ResetClientNetworkLocomotionState();
+            _clientNetworkLocomotionObject = resolvedNetworkObject;
+            _clientNetworkLocomotionRoot = resolvedRoot;
+        }
+
+        Vector3 currentPosition = resolvedRoot.position;
+        if (!IsFinite(currentPosition))
+        {
+            ResetClientNetworkLocomotionSampleState();
+            _clientNetworkPreviousRootPosition = Vector3.zero;
+            _clientNetworkPositionInitialized = false;
+            return;
+        }
+
+        if (referenceChanged || !_clientNetworkPositionInitialized)
+        {
+            _clientNetworkPreviousRootPosition = currentPosition;
+            _clientNetworkPositionInitialized = true;
+            ResetClientNetworkLocomotionSampleState();
+            return;
+        }
+
+        Vector3 worldDelta = currentPosition - _clientNetworkPreviousRootPosition;
+        _clientNetworkPreviousRootPosition = currentPosition;
+        if (!IsFinite(deltaTime) || deltaTime <= 0f || !IsFinite(worldDelta))
+        {
+            ResetClientNetworkLocomotionSampleState();
+            return;
+        }
+
+        float worldDistance = worldDelta.magnitude;
+        if (!IsFinite(worldDistance) || !IsFinite(clientNetworkTeleportDistanceThreshold))
+        {
+            ResetClientNetworkLocomotionSampleState();
+            return;
+        }
+
+        if (worldDistance > clientNetworkTeleportDistanceThreshold)
+        {
+            ResetClientNetworkLocomotionSampleState();
+            _clientNetworkLargeDelta = true;
+            return;
+        }
+
+        Vector3 planarDelta = Vector3.ProjectOnPlane(worldDelta, Vector3.up);
+        float planarSpeed = planarDelta.magnitude / deltaTime;
+        float verticalSpeed = worldDelta.y / deltaTime;
+        if (!IsFinite(planarDelta) || !IsFinite(planarSpeed) || !IsFinite(verticalSpeed) ||
+            !IsFinite(clientNetworkMaxVisualSpeed))
+        {
+            ResetClientNetworkLocomotionSampleState();
+            return;
+        }
+
+        float rawPlanarSpeed = Mathf.Clamp(planarSpeed, 0f, clientNetworkMaxVisualSpeed);
+        float smoothedPlanarSpeed;
+        if (clientNetworkSpeedSmoothTime > 0f)
+        {
+            smoothedPlanarSpeed = Mathf.SmoothDamp(
+                _clientNetworkSmoothedPlanarSpeed,
+                rawPlanarSpeed,
+                ref _clientNetworkSpeedSmoothVelocity,
+                clientNetworkSpeedSmoothTime,
+                float.PositiveInfinity,
+                deltaTime);
+        }
+        else
+        {
+            smoothedPlanarSpeed = rawPlanarSpeed;
+            _clientNetworkSpeedSmoothVelocity = 0f;
+        }
+
+        if (!IsFinite(smoothedPlanarSpeed) || !IsFinite(_clientNetworkSpeedSmoothVelocity))
+        {
+            ResetClientNetworkLocomotionSampleState();
+            return;
+        }
+
+        _clientNetworkRawPlanarSpeed = rawPlanarSpeed;
+        _clientNetworkSmoothedPlanarSpeed = Mathf.Clamp(
+            smoothedPlanarSpeed,
+            0f,
+            clientNetworkMaxVisualSpeed);
+        _clientNetworkVerticalSpeed = verticalSpeed;
+        _clientNetworkSampleValid = true;
+        _clientNetworkLargeDelta = false;
+
+        if (!_clientNetworkMotionActive)
+        {
+            if (_clientNetworkSmoothedPlanarSpeed >= minMoveSpeedForWalk)
+                _clientNetworkMotionActive = true;
+        }
+        else if (_clientNetworkSmoothedPlanarSpeed < clientNetworkStopSpeedThreshold)
+        {
+            _clientNetworkMotionActive = false;
+        }
+    }
+
+    private MotionSample ApplyClientNetworkLocomotionSample(MotionSample sample)
+    {
+        _clientNetworkFallbackApplied = false;
+        _clientNetworkMotionSampleSourceBefore = sample.Source ?? string.Empty;
+        _clientNetworkMotionSampleSourceAfter = _clientNetworkMotionSampleSourceBefore;
+
+        if (!enableClientNetworkLocomotion)
+            return KeepOriginalClientNetworkMotionSample(sample, "fallback disabled");
+
+        NetworkManager networkManager = NetworkManager.Singleton;
+        if (networkManager == null ||
+            !networkManager.IsListening ||
+            !networkManager.IsClient ||
+            networkManager.IsServer)
+        {
+            return KeepOriginalClientNetworkMotionSample(sample, "not non-server client");
+        }
+
+        NetworkObject currentNetworkObject = GetComponentInParent<NetworkObject>();
+        if (_clientNetworkLocomotionObject == null ||
+            currentNetworkObject != _clientNetworkLocomotionObject ||
+            !_clientNetworkLocomotionObject.IsSpawned ||
+            _clientNetworkLocomotionRoot == null ||
+            _clientNetworkLocomotionObject.transform != _clientNetworkLocomotionRoot)
+        {
+            return KeepOriginalClientNetworkMotionSample(sample, "network root unavailable");
+        }
+
+        if (!_clientNetworkSampleValid)
+            return KeepOriginalClientNetworkMotionSample(sample, "network sample invalid");
+
+        if (_externalOneShotActive)
+            return KeepOriginalClientNetworkMotionSample(sample, "external one-shot active");
+
+        if (_externalSustainedStateActive)
+            return KeepOriginalClientNetworkMotionSample(sample, "external sustained state active");
+
+        if (_interactionStateActive)
+            return KeepOriginalClientNetworkMotionSample(sample, "interaction state active");
+
+        if (_clientNetworkLocomotionRecoveryStateSource == null)
+        {
+            _clientNetworkLocomotionRecoveryStateSource =
+                GetComponentInParent<HamsterMotorShellRagdollRecoveryAdapter>();
+        }
+
+        if (_clientNetworkLocomotionRecoveryStateSource != null &&
+            _clientNetworkLocomotionRecoveryStateSource.IsKnockedOrRecovering)
+        {
+            return KeepOriginalClientNetworkMotionSample(sample, "knocked or recovering");
+        }
+
+        if (_clientNetworkLocomotionRecoveryStateSource != null &&
+            _clientNetworkLocomotionRecoveryStateSource.IsLiquidSwept)
+        {
+            return KeepOriginalClientNetworkMotionSample(sample, "liquid sweep active");
+        }
+
+        if (motorStateSource != null && motorStateSource.IsExternalControlLocked)
+            return KeepOriginalClientNetworkMotionSample(sample, "external control locked");
+
+        if (motorStateSource != null && motorStateSource.ExternalMovementControlScale < 0.999f)
+            return KeepOriginalClientNetworkMotionSample(sample, "external movement limited");
+
+        if (sample.HasGroundedState && !sample.IsGrounded)
+            return KeepOriginalClientNetworkMotionSample(sample, "motor sample airborne");
+
+        if (Mathf.Abs(_clientNetworkVerticalSpeed) >= clientNetworkAirborneVerticalSpeedThreshold)
+            return KeepOriginalClientNetworkMotionSample(sample, "network root vertical motion");
+
+        sample.HasMoveInputState = true;
+        sample.HasMoveInput = _clientNetworkMotionActive;
+        sample.PlanarSpeed = _clientNetworkMotionActive
+            ? _clientNetworkSmoothedPlanarSpeed
+            : 0f;
+        sample.IsSprintHeld = _clientNetworkMotionActive &&
+                              _clientNetworkSmoothedPlanarSpeed >= minSpeedForRun;
+        sample.Source = "Motor+ClientNetworkRoot";
+
+        _clientNetworkFallbackApplied = true;
+        _clientNetworkFallbackBlockedReason = "none";
+        _clientNetworkMotionSampleSourceAfter = sample.Source;
+        return sample;
+    }
+
+    private MotionSample KeepOriginalClientNetworkMotionSample(MotionSample sample, string blockedReason)
+    {
+        _clientNetworkFallbackApplied = false;
+        _clientNetworkFallbackBlockedReason = blockedReason;
+        _clientNetworkMotionSampleSourceAfter = sample.Source ?? string.Empty;
+        return sample;
+    }
+
+    private void ResetClientNetworkLocomotionState()
+    {
+        _clientNetworkLocomotionObject = null;
+        _clientNetworkLocomotionRecoveryStateSource = null;
+        _clientNetworkLocomotionRoot = null;
+        _clientNetworkPreviousRootPosition = Vector3.zero;
+        _clientNetworkPositionInitialized = false;
+        ResetClientNetworkLocomotionSampleState();
+        _clientNetworkFallbackApplied = false;
+        _clientNetworkFallbackBlockedReason = "tracking reset";
+        _clientNetworkMotionSampleSourceBefore = string.Empty;
+        _clientNetworkMotionSampleSourceAfter = string.Empty;
+    }
+
+    private void ResetClientNetworkLocomotionSampleState()
+    {
+        _clientNetworkSampleValid = false;
+        _clientNetworkMotionActive = false;
+        _clientNetworkRawPlanarSpeed = 0f;
+        _clientNetworkSmoothedPlanarSpeed = 0f;
+        _clientNetworkSpeedSmoothVelocity = 0f;
+        _clientNetworkVerticalSpeed = 0f;
+        _clientNetworkLargeDelta = false;
     }
 
     private void TickStateDriver(MotionSample sample, float deltaTime)
@@ -1838,7 +2124,17 @@ public sealed class HamsterVisualClipStateDriver : MonoBehaviour
             $"isSprintHeld={sample.IsSprintHeld} hasMoveInputState={sample.HasMoveInputState} " +
             $"hasMoveInput={sample.HasMoveInput} planarSpeed={sample.PlanarSpeed:F3} " +
             $"verticalVelocity={sample.VerticalVelocity:F3} hasHoldingState={sample.HasHoldingState} " +
-            $"isHolding={sample.IsHolding} {motorDetails}",
+            $"isHolding={sample.IsHolding} {motorDetails} " +
+            $"clientNetworkSampleValid={_clientNetworkSampleValid} " +
+            $"clientNetworkMotionActive={_clientNetworkMotionActive} " +
+            $"clientNetworkRawPlanarSpeed={_clientNetworkRawPlanarSpeed:F3} " +
+            $"clientNetworkSmoothedPlanarSpeed={_clientNetworkSmoothedPlanarSpeed:F3} " +
+            $"clientNetworkVerticalSpeed={_clientNetworkVerticalSpeed:F3} " +
+            $"clientNetworkLargeDelta={_clientNetworkLargeDelta} " +
+            $"fallbackApplied={_clientNetworkFallbackApplied} " +
+            $"fallbackBlockedReason={FormatReason(_clientNetworkFallbackBlockedReason)} " +
+            $"sampleSourceBefore={FormatReason(_clientNetworkMotionSampleSourceBefore)} " +
+            $"sampleSourceAfter={FormatReason(_clientNetworkMotionSampleSourceAfter)}",
             this);
     }
 
