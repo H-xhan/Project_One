@@ -1,8 +1,10 @@
+using Unity.Netcode;
 using UnityEngine;
 
 public sealed class HamsterVisualClipStateDriver : MonoBehaviour
 {
     private const int BaseLayerIndex = 0;
+    private const float ClientDiagnosticsLargeDeltaDistance = 1f;
 
     [Header("References")]
     [SerializeField] private Animator visualAnimator;
@@ -91,6 +93,10 @@ public sealed class HamsterVisualClipStateDriver : MonoBehaviour
     [SerializeField] private bool debugLogs = false;
     [SerializeField] private float debugLogInterval = 0.5f;
 
+    [Header("Client Locomotion Diagnostics")]
+    [SerializeField] private bool debugClientLocomotionDiagnostics = false;
+    [SerializeField] private float clientLocomotionDiagnosticsInterval = 0.25f;
+
     private int _currentStateHash;
     private string _currentStateName;
     private float _stateTimer;
@@ -153,6 +159,39 @@ public sealed class HamsterVisualClipStateDriver : MonoBehaviour
     private bool _warnedAnimatorDisabled;
     private bool _warnedMissingController;
     private bool _warnedRootMotion;
+    private NetworkObject _clientDiagnosticsNetworkObject;
+    private HamsterMotorShellRagdollRecoveryAdapter _clientDiagnosticsRecoveryStateSource;
+    private Transform _clientDiagnosticsRoot;
+    private Transform _clientDiagnosticsVisualPreviewRoot;
+    private Vector3 _clientDiagnosticsPreviousRootPosition;
+    private Vector3 _clientDiagnosticsPreviousRootPositionForLog;
+    private Vector3 _clientDiagnosticsCurrentRootPosition;
+    private Vector3 _clientDiagnosticsWorldDelta;
+    private Vector3 _clientDiagnosticsPlanarDelta;
+    private bool _clientDiagnosticsRootTrackingInitialized;
+    private bool _clientDiagnosticsRootInitializedThisFrame;
+    private bool _clientDiagnosticsRootPositionValid;
+    private bool _clientDiagnosticsDeltaTimeValid;
+    private bool _clientDiagnosticsLargeDelta;
+    private float _clientDiagnosticsInferredPlanarSpeed;
+    private float _clientDiagnosticsDeltaTime;
+    private float _clientDiagnosticsNextPeriodicLogTime;
+    private float _clientDiagnosticsNextCrossFadeLogTime;
+    private bool _clientDiagnosticsWasEnabled;
+    private bool _clientDiagnosticsPeriodicLogThisFrame;
+    private bool _clientDiagnosticsAnimatorLogThisFrame;
+    private int _clientDiagnosticsUpdateFrame = -1;
+    private bool _clientDiagnosticsLastDecisionInitialized;
+    private ClipState _clientDiagnosticsLastDecisionState;
+    private string _clientDiagnosticsLastDecisionReason = string.Empty;
+    private string _clientDiagnosticsLastRequestedStateName = string.Empty;
+    private int _clientDiagnosticsLastRequestedStateHash;
+    private bool _clientDiagnosticsLastRestartIfCurrent;
+    private string _clientDiagnosticsLastCallerReason = string.Empty;
+    private int _clientDiagnosticsLastCrossFadeCalledFrame = -1;
+    private int _clientDiagnosticsLastCrossFadeFingerprint;
+    private AnimatorDiagnosticSnapshot _clientDiagnosticsAnimatorUpdateBefore;
+    private AnimatorDiagnosticSnapshot _clientDiagnosticsAnimatorUpdateAfter;
 
     private enum ClipState
     {
@@ -178,6 +217,18 @@ public sealed class HamsterVisualClipStateDriver : MonoBehaviour
         public string Source;
     }
 
+    private struct AnimatorDiagnosticSnapshot
+    {
+        public bool Available;
+        public int ShortNameHash;
+        public int FullPathHash;
+        public float NormalizedTime;
+        public bool InTransition;
+        public int NextShortNameHash;
+        public int NextFullPathHash;
+        public float NextNormalizedTime;
+    }
+
     private struct PlayableState
     {
         public int Hash;
@@ -200,6 +251,7 @@ public sealed class HamsterVisualClipStateDriver : MonoBehaviour
 
         CacheStateAvailability();
         ResetRuntimeState();
+        ResetClientLocomotionDiagnosticsState();
 
         if (requireAnimatorController && visualAnimator != null && visualAnimator.runtimeAnimatorController == null)
         {
@@ -221,20 +273,41 @@ public sealed class HamsterVisualClipStateDriver : MonoBehaviour
         float deltaTime = Time.deltaTime;
         _stateTimer += deltaTime;
 
+        if (debugClientLocomotionDiagnostics)
+            BeginClientLocomotionDiagnosticsUpdate(deltaTime);
+        else
+            _clientDiagnosticsWasEnabled = false;
+
         if (!enableClipStateDriver)
+        {
+            if (debugClientLocomotionDiagnostics)
+                CompleteClientLocomotionDiagnosticsUpdate(default, false, false, "enableClipStateDriver=false");
             return;
+        }
 
         if (autoFindReferences && (visualAnimator == null || motorStateSource == null || targetBody == null || (autoFindGrabStateSource && grabStateSource == null)))
             ResolveReferences();
 
         if (!CanDriveAnimator())
+        {
+            if (debugClientLocomotionDiagnostics)
+                CompleteClientLocomotionDiagnosticsUpdate(default, false, false, "CanDriveAnimator=false");
             return;
+        }
 
         if (TickExternalOneShot(deltaTime))
+        {
+            if (debugClientLocomotionDiagnostics)
+                CompleteClientLocomotionDiagnosticsUpdate(default, false, true, "external one-shot active");
             return;
+        }
 
         if (TickExternalSustainedState(deltaTime))
+        {
+            if (debugClientLocomotionDiagnostics)
+                CompleteClientLocomotionDiagnosticsUpdate(default, false, true, "external sustained state active");
             return;
+        }
 
         MotionSample sample = ReadMotionSample();
         bool interactionHandled = TickInteractionDriver(sample, deltaTime);
@@ -245,6 +318,49 @@ public sealed class HamsterVisualClipStateDriver : MonoBehaviour
 
         if (sample.HasGroundedState)
             _wasGrounded = sample.IsGrounded;
+
+        if (debugClientLocomotionDiagnostics)
+        {
+            CompleteClientLocomotionDiagnosticsUpdate(
+                sample,
+                true,
+                true,
+                interactionHandled ? "interaction handled" : "state driver ticked");
+        }
+    }
+
+    private void LateUpdate()
+    {
+        if (!debugClientLocomotionDiagnostics ||
+            !_clientDiagnosticsAnimatorLogThisFrame ||
+            _clientDiagnosticsUpdateFrame != Time.frameCount)
+        {
+            return;
+        }
+
+        AnimatorDiagnosticSnapshot lateSnapshot = CaptureAnimatorDiagnosticSnapshot();
+        bool updateMatchedRequest = AnimatorSnapshotMatchesHash(
+            _clientDiagnosticsAnimatorUpdateAfter,
+            _clientDiagnosticsLastRequestedStateHash);
+        bool lateMatchedRequest = AnimatorSnapshotMatchesHash(
+            lateSnapshot,
+            _clientDiagnosticsLastRequestedStateHash);
+        bool stateChangedAfterUpdate = !AnimatorSnapshotsHaveSameState(
+            _clientDiagnosticsAnimatorUpdateAfter,
+            lateSnapshot);
+        bool suspectedOverwrite = _clientDiagnosticsLastRequestedStateHash != 0 &&
+                                  updateMatchedRequest &&
+                                  !lateMatchedRequest;
+
+        Debug.Log(
+            $"[HamsterVisualDiag/AnimatorLate] role={ResolveClientDiagnosticsRole()} frame={Time.frameCount} " +
+            $"late={FormatAnimatorSnapshot(lateSnapshot)} updateAfter={FormatAnimatorSnapshot(_clientDiagnosticsAnimatorUpdateAfter)} " +
+            $"driverState={FormatState(_currentStateName, _currentStateHash)} " +
+            $"lastRequested={FormatState(_clientDiagnosticsLastRequestedStateName, _clientDiagnosticsLastRequestedStateHash)} " +
+            $"lastCrossFadeFrame={_clientDiagnosticsLastCrossFadeCalledFrame} updateMatchedRequest={updateMatchedRequest} " +
+            $"lateMatchedRequest={lateMatchedRequest} stateChangedAfterUpdate={stateChangedAfterUpdate} " +
+            $"suspectedOverwrite={suspectedOverwrite}",
+            this);
     }
 
     private void OnValidate()
@@ -268,6 +384,7 @@ public sealed class HamsterVisualClipStateDriver : MonoBehaviour
         maxThrowStateTime = Mathf.Max(minThrowStateTime, maxThrowStateTime);
         groundedReturnDelay = Mathf.Max(0f, groundedReturnDelay);
         debugLogInterval = Mathf.Max(0.01f, debugLogInterval);
+        clientLocomotionDiagnosticsInterval = Mathf.Max(0.01f, clientLocomotionDiagnosticsInterval);
     }
 
     [ContextMenu("Find Clip State Driver References")]
@@ -1361,21 +1478,78 @@ public sealed class HamsterVisualClipStateDriver : MonoBehaviour
         string reason = null,
         bool restartIfCurrent = false)
     {
+        string driverStateNameBefore = _currentStateName;
+        int driverStateHashBefore = _currentStateHash;
+
+        if (debugClientLocomotionDiagnostics)
+        {
+            _clientDiagnosticsLastRequestedStateName = playableState.Name ?? string.Empty;
+            _clientDiagnosticsLastRequestedStateHash = playableState.Hash;
+            _clientDiagnosticsLastRestartIfCurrent = restartIfCurrent;
+            _clientDiagnosticsLastCallerReason = reason ?? string.Empty;
+        }
+
         if (!playableState.IsValid)
         {
             if (debugLogs)
                 Debug.Log($"[HamsterVisualClipStateDriver] Skip state because it is missing. speed={sample.PlanarSpeed:F2} sprint={sample.IsSprintHeld} grounded={FormatGrounded(sample)} vertical={sample.VerticalVelocity:F2} reason={FormatReason(reason)}", this);
 
+            if (debugClientLocomotionDiagnostics)
+            {
+                LogClientLocomotionCrossFade(
+                    playableState,
+                    crossFadeDuration,
+                    sample,
+                    reason,
+                    restartIfCurrent,
+                    false,
+                    "state missing",
+                    driverStateNameBefore,
+                    driverStateHashBefore);
+            }
+
             return false;
         }
 
         if (_currentStateHash == playableState.Hash && !restartIfCurrent)
+        {
+            if (debugClientLocomotionDiagnostics)
+            {
+                LogClientLocomotionCrossFade(
+                    playableState,
+                    crossFadeDuration,
+                    sample,
+                    reason,
+                    restartIfCurrent,
+                    false,
+                    "already current",
+                    driverStateNameBefore,
+                    driverStateHashBefore);
+            }
             return false;
+        }
 
         visualAnimator.CrossFade(playableState.Hash, crossFadeDuration, BaseLayerIndex);
         _currentStateHash = playableState.Hash;
         _currentStateName = playableState.Name;
         _stateTimer = 0f;
+
+        if (debugClientLocomotionDiagnostics)
+            _clientDiagnosticsLastCrossFadeCalledFrame = Time.frameCount;
+
+        if (debugClientLocomotionDiagnostics)
+        {
+            LogClientLocomotionCrossFade(
+                playableState,
+                crossFadeDuration,
+                sample,
+                reason,
+                restartIfCurrent,
+                true,
+                "none",
+                driverStateNameBefore,
+                driverStateHashBefore);
+        }
 
         if (debugLogs)
             Debug.Log($"[HamsterVisualClipStateDriver] CrossFade {_currentStateName} speed={sample.PlanarSpeed:F2} sprint={sample.IsSprintHeld} grounded={FormatGrounded(sample)} vertical={sample.VerticalVelocity:F2} reason={FormatReason(reason)}", this);
@@ -1439,6 +1613,518 @@ public sealed class HamsterVisualClipStateDriver : MonoBehaviour
     {
         PlayableState playableState = ResolvePlayableState(state);
         return playableState.IsValid && _currentStateHash == playableState.Hash;
+    }
+
+    private void BeginClientLocomotionDiagnosticsUpdate(float deltaTime)
+    {
+        if (!_clientDiagnosticsWasEnabled)
+        {
+            ResetClientLocomotionDiagnosticsState();
+            _clientDiagnosticsWasEnabled = true;
+        }
+
+        ResolveClientLocomotionDiagnosticsReferences();
+        _clientDiagnosticsUpdateFrame = Time.frameCount;
+        _clientDiagnosticsAnimatorLogThisFrame = false;
+        _clientDiagnosticsAnimatorUpdateBefore = CaptureAnimatorDiagnosticSnapshot();
+        SampleClientDiagnosticsRootMotion(deltaTime);
+
+        float interval = Mathf.Max(0.01f, clientLocomotionDiagnosticsInterval);
+        _clientDiagnosticsPeriodicLogThisFrame = Time.unscaledTime >= _clientDiagnosticsNextPeriodicLogTime;
+        if (!_clientDiagnosticsPeriodicLogThisFrame)
+            return;
+
+        _clientDiagnosticsNextPeriodicLogTime = Time.unscaledTime + interval;
+        LogClientLocomotionDiagnosticsContext();
+        LogClientLocomotionDiagnosticsRootMotion();
+    }
+
+    private void CompleteClientLocomotionDiagnosticsUpdate(
+        MotionSample sample,
+        bool hasSample,
+        bool canDriveAnimator,
+        string updateResult)
+    {
+        if (!debugClientLocomotionDiagnostics)
+            return;
+
+        MotionSample diagnosticSample = hasSample ? sample : ReadMotionSample();
+        ClipState selectedState = SelectLocomotionState(diagnosticSample, out string decisionReason);
+        bool decisionChanged = !_clientDiagnosticsLastDecisionInitialized ||
+                               _clientDiagnosticsLastDecisionState != selectedState ||
+                               _clientDiagnosticsLastDecisionReason != decisionReason;
+
+        if (decisionChanged)
+        {
+            _clientDiagnosticsLastDecisionInitialized = true;
+            _clientDiagnosticsLastDecisionState = selectedState;
+            _clientDiagnosticsLastDecisionReason = decisionReason;
+        }
+
+        _clientDiagnosticsAnimatorUpdateAfter = CaptureAnimatorDiagnosticSnapshot();
+        bool crossFadeCalledThisFrame = _clientDiagnosticsLastCrossFadeCalledFrame == Time.frameCount;
+        bool shouldLogAnimator = _clientDiagnosticsPeriodicLogThisFrame || decisionChanged || crossFadeCalledThisFrame;
+        _clientDiagnosticsAnimatorLogThisFrame = shouldLogAnimator;
+        if (!shouldLogAnimator)
+            return;
+
+        LogClientLocomotionDiagnosticsMotorSample(diagnosticSample);
+        LogClientLocomotionDiagnosticsDecision(
+            diagnosticSample,
+            selectedState,
+            decisionReason,
+            canDriveAnimator,
+            updateResult);
+        LogClientLocomotionDiagnosticsAnimatorUpdate(updateResult, crossFadeCalledThisFrame);
+
+        if (!canDriveAnimator)
+        {
+            Debug.Log(
+                $"[HamsterVisualDiag/CrossFade] role={ResolveClientDiagnosticsRole()} frame={Time.frameCount} " +
+                "requested=<none> requestedHash=0 restartIfCurrent=False playableStateValid=False " +
+                "animatorAvailable=False earlyReturn=animator unavailable crossFadeCalled=False " +
+                $"sampleSource={FormatReason(diagnosticSample.Source)} speed={diagnosticSample.PlanarSpeed:F3} " +
+                $"move={FormatMoveInput(diagnosticSample)} grounded={FormatGrounded(diagnosticSample)} " +
+                $"sprint={diagnosticSample.IsSprintHeld} callerReason={FormatReason(updateResult)}",
+                this);
+        }
+    }
+
+    private void ResolveClientLocomotionDiagnosticsReferences()
+    {
+        if (_clientDiagnosticsNetworkObject == null)
+            _clientDiagnosticsNetworkObject = GetComponentInParent<NetworkObject>();
+
+        Transform resolvedRoot = _clientDiagnosticsNetworkObject != null
+            ? _clientDiagnosticsNetworkObject.transform
+            : null;
+        if (_clientDiagnosticsRoot != resolvedRoot)
+        {
+            _clientDiagnosticsRoot = resolvedRoot;
+            ResetClientDiagnosticsRootTracking();
+        }
+
+        if (_clientDiagnosticsVisualPreviewRoot == null)
+        {
+            Transform searchRoot = _clientDiagnosticsRoot != null ? _clientDiagnosticsRoot : transform;
+            _clientDiagnosticsVisualPreviewRoot = FindChildRecursive(searchRoot, "VisualPreviewRoot");
+        }
+
+        if (_clientDiagnosticsRecoveryStateSource == null)
+            _clientDiagnosticsRecoveryStateSource = GetComponentInParent<HamsterMotorShellRagdollRecoveryAdapter>();
+    }
+
+    private void SampleClientDiagnosticsRootMotion(float deltaTime)
+    {
+        _clientDiagnosticsDeltaTime = deltaTime;
+        _clientDiagnosticsDeltaTimeValid = IsFinite(deltaTime) && deltaTime > 0f;
+        _clientDiagnosticsRootInitializedThisFrame = false;
+        _clientDiagnosticsRootPositionValid = false;
+        _clientDiagnosticsLargeDelta = false;
+        _clientDiagnosticsWorldDelta = Vector3.zero;
+        _clientDiagnosticsPlanarDelta = Vector3.zero;
+        _clientDiagnosticsInferredPlanarSpeed = 0f;
+
+        if (_clientDiagnosticsRoot == null)
+        {
+            ResetClientDiagnosticsRootTracking();
+            return;
+        }
+
+        Vector3 currentPosition = _clientDiagnosticsRoot.position;
+        _clientDiagnosticsCurrentRootPosition = currentPosition;
+        _clientDiagnosticsRootPositionValid = IsFinite(currentPosition);
+        if (!_clientDiagnosticsRootPositionValid)
+            return;
+
+        if (!_clientDiagnosticsRootTrackingInitialized)
+        {
+            _clientDiagnosticsPreviousRootPosition = currentPosition;
+            _clientDiagnosticsPreviousRootPositionForLog = currentPosition;
+            _clientDiagnosticsRootTrackingInitialized = true;
+            _clientDiagnosticsRootInitializedThisFrame = true;
+            return;
+        }
+
+        _clientDiagnosticsPreviousRootPositionForLog = _clientDiagnosticsPreviousRootPosition;
+        _clientDiagnosticsWorldDelta = currentPosition - _clientDiagnosticsPreviousRootPosition;
+        _clientDiagnosticsPreviousRootPosition = currentPosition;
+        _clientDiagnosticsPlanarDelta = Vector3.ProjectOnPlane(
+            _clientDiagnosticsWorldDelta,
+            Vector3.up);
+        _clientDiagnosticsLargeDelta = _clientDiagnosticsWorldDelta.sqrMagnitude >
+                                       ClientDiagnosticsLargeDeltaDistance * ClientDiagnosticsLargeDeltaDistance;
+
+        if (_clientDiagnosticsDeltaTimeValid)
+        {
+            float inferredSpeed = _clientDiagnosticsPlanarDelta.magnitude / deltaTime;
+            if (IsFinite(inferredSpeed))
+                _clientDiagnosticsInferredPlanarSpeed = Mathf.Max(0f, inferredSpeed);
+            else
+                _clientDiagnosticsDeltaTimeValid = false;
+        }
+    }
+
+    private void LogClientLocomotionDiagnosticsContext()
+    {
+        NetworkManager networkManager = NetworkManager.Singleton;
+        NetworkObject networkObject = _clientDiagnosticsNetworkObject;
+        RuntimeAnimatorController controller = visualAnimator != null
+            ? visualAnimator.runtimeAnimatorController
+            : null;
+        Component networkTransform = _clientDiagnosticsRoot != null
+            ? _clientDiagnosticsRoot.GetComponent("NetworkTransform")
+            : null;
+        string localClientId = networkManager != null
+            ? networkManager.LocalClientId.ToString()
+            : "<none>";
+        string ownerClientId = networkObject != null
+            ? networkObject.OwnerClientId.ToString()
+            : "<none>";
+
+        Debug.Log(
+            $"[HamsterVisualDiag/Context] role={ResolveClientDiagnosticsRole()} objectName={name} " +
+            $"objectPath={GetTransformPath(transform)} listening={(networkManager != null && networkManager.IsListening)} " +
+            $"isServer={(networkManager != null && networkManager.IsServer)} isClient={(networkManager != null && networkManager.IsClient)} " +
+            $"networkObject={(networkObject != null ? networkObject.name : "<null>")} " +
+            $"networkObjectPath={GetTransformPath(networkObject != null ? networkObject.transform : null)} " +
+            $"isSpawned={(networkObject != null && networkObject.IsSpawned)} isOwner={(networkObject != null && networkObject.IsOwner)} " +
+            $"ownerClientId={ownerClientId} localClientId={localClientId} driverEnabled={enabled} " +
+            $"visualAnimatorPath={GetTransformPath(visualAnimator != null ? visualAnimator.transform : null)} " +
+            $"visualAnimatorEnabled={(visualAnimator != null && visualAnimator.enabled)} " +
+            $"runtimeAnimatorController={(controller != null ? controller.name : "<null>")} " +
+            $"motorStateSourcePath={GetTransformPath(motorStateSource != null ? motorStateSource.transform : null)} " +
+            $"targetBodyPath={GetTransformPath(targetBody != null ? targetBody.transform : null)} " +
+            $"trackedRootPath={GetTransformPath(_clientDiagnosticsRoot)} " +
+            $"networkTransformPath={GetTransformPath(networkTransform != null ? networkTransform.transform : null)} " +
+            $"networkTransformMatchesRoot={(networkTransform != null && networkTransform.transform == _clientDiagnosticsRoot)}",
+            this);
+    }
+
+    private void LogClientLocomotionDiagnosticsRootMotion()
+    {
+        Transform root = _clientDiagnosticsRoot;
+        Transform visualPreviewRoot = _clientDiagnosticsVisualPreviewRoot;
+
+        Debug.Log(
+            $"[HamsterVisualDiag/RootMotion] role={ResolveClientDiagnosticsRole()} trackedRoot={GetTransformPath(root)} " +
+            $"initialized={_clientDiagnosticsRootTrackingInitialized} initializedThisFrame={_clientDiagnosticsRootInitializedThisFrame} " +
+            $"rootPositionValid={_clientDiagnosticsRootPositionValid} currentPosition={FormatVector3(_clientDiagnosticsCurrentRootPosition)} " +
+            $"previousPosition={FormatVector3(_clientDiagnosticsPreviousRootPositionForLog)} " +
+            $"worldDelta={FormatVector3(_clientDiagnosticsWorldDelta)} planarDelta={FormatVector3(_clientDiagnosticsPlanarDelta)} " +
+            $"inferredPlanarSpeed={_clientDiagnosticsInferredPlanarSpeed:F3} deltaTime={_clientDiagnosticsDeltaTime:F6} " +
+            $"deltaTimeValid={_clientDiagnosticsDeltaTimeValid} largeDelta={_clientDiagnosticsLargeDelta} " +
+            $"largeDeltaThreshold={ClientDiagnosticsLargeDeltaDistance:F3} rootRotation={FormatRotation(root)} " +
+            $"rootYaw={FormatYaw(root)} targetBodyPosition={FormatPosition(targetBody != null ? targetBody.transform : null)} " +
+            $"targetBodyRotation={FormatRotation(targetBody != null ? targetBody.transform : null)} " +
+            $"visualPreviewRootPath={GetTransformPath(visualPreviewRoot)} " +
+            $"visualPreviewRootPosition={FormatPosition(visualPreviewRoot)} " +
+            $"visualPreviewRootRotation={FormatRotation(visualPreviewRoot)}",
+            this);
+    }
+
+    private void LogClientLocomotionDiagnosticsMotorSample(MotionSample sample)
+    {
+        string motorDetails = motorStateSource != null
+            ? $"motorIsGrounded={motorStateSource.IsGrounded} motorHasMoveInput={motorStateSource.HasMoveInput} " +
+              $"motorPlanarSpeed={motorStateSource.CurrentPlanarSpeed:F3} motorVerticalVelocity={motorStateSource.CurrentVerticalVelocity:F3} " +
+              $"motorSprintHeld={motorStateSource.IsSprintHeld} motorExternalControlLocked={motorStateSource.IsExternalControlLocked} " +
+              $"motorExternalMovementControlScale={motorStateSource.ExternalMovementControlScale:F3}"
+            : "motorStateSource=<null>";
+
+        Debug.Log(
+            $"[HamsterVisualDiag/MotorSample] role={ResolveClientDiagnosticsRole()} source={FormatReason(sample.Source)} " +
+            $"hasGroundedState={sample.HasGroundedState} isGrounded={sample.IsGrounded} " +
+            $"isSprintHeld={sample.IsSprintHeld} hasMoveInputState={sample.HasMoveInputState} " +
+            $"hasMoveInput={sample.HasMoveInput} planarSpeed={sample.PlanarSpeed:F3} " +
+            $"verticalVelocity={sample.VerticalVelocity:F3} hasHoldingState={sample.HasHoldingState} " +
+            $"isHolding={sample.IsHolding} {motorDetails}",
+            this);
+    }
+
+    private void LogClientLocomotionDiagnosticsDecision(
+        MotionSample sample,
+        ClipState selectedState,
+        string decisionReason,
+        bool canDriveAnimator,
+        string updateResult)
+    {
+        PlayableState selectedPlayableState = ResolvePlayableState(selectedState);
+        string recoveryState = _clientDiagnosticsRecoveryStateSource != null
+            ? _clientDiagnosticsRecoveryStateSource.CurrentRecoveryState.ToString()
+            : "<none>";
+
+        Debug.Log(
+            $"[HamsterVisualDiag/Decision] role={ResolveClientDiagnosticsRole()} selectedState={selectedState} " +
+            $"selectedPlayableState={FormatState(selectedPlayableState.Name, selectedPlayableState.Hash)} " +
+            $"selectedPlayableValid={selectedPlayableState.IsValid} reason={FormatReason(decisionReason)} " +
+            $"driverState={FormatState(_currentStateName, _currentStateHash)} stateTimer={_stateTimer:F3} " +
+            $"externalOneShotActive={_externalOneShotActive} externalSustainedStateActive={_externalSustainedStateActive} " +
+            $"interactionStateActive={_interactionStateActive} recoveryStateExists={_clientDiagnosticsRecoveryStateSource != null} " +
+            $"recoveryState={recoveryState} canDriveAnimator={canDriveAnimator} updateResult={FormatReason(updateResult)} " +
+            $"sampleSource={FormatReason(sample.Source)} speed={sample.PlanarSpeed:F3} move={FormatMoveInput(sample)} " +
+            $"grounded={FormatGrounded(sample)} sprint={sample.IsSprintHeld}",
+            this);
+    }
+
+    private void LogClientLocomotionDiagnosticsAnimatorUpdate(
+        string updateResult,
+        bool crossFadeCalledThisFrame)
+    {
+        bool requestedMatchesBefore = AnimatorSnapshotMatchesHash(
+            _clientDiagnosticsAnimatorUpdateBefore,
+            _clientDiagnosticsLastRequestedStateHash);
+        bool requestedMatchesAfter = AnimatorSnapshotMatchesHash(
+            _clientDiagnosticsAnimatorUpdateAfter,
+            _clientDiagnosticsLastRequestedStateHash);
+
+        Debug.Log(
+            $"[HamsterVisualDiag/AnimatorUpdate] role={ResolveClientDiagnosticsRole()} frame={Time.frameCount} " +
+            $"before={FormatAnimatorSnapshot(_clientDiagnosticsAnimatorUpdateBefore)} " +
+            $"after={FormatAnimatorSnapshot(_clientDiagnosticsAnimatorUpdateAfter)} " +
+            $"driverState={FormatState(_currentStateName, _currentStateHash)} " +
+            $"lastRequested={FormatState(_clientDiagnosticsLastRequestedStateName, _clientDiagnosticsLastRequestedStateHash)} " +
+            $"restartIfCurrent={_clientDiagnosticsLastRestartIfCurrent} callerReason={FormatReason(_clientDiagnosticsLastCallerReason)} " +
+            $"requestedMatchesBefore={requestedMatchesBefore} requestedMatchesAfter={requestedMatchesAfter} " +
+            $"crossFadeCalledThisFrame={crossFadeCalledThisFrame} updateResult={FormatReason(updateResult)}",
+            this);
+    }
+
+    private void LogClientLocomotionCrossFade(
+        PlayableState playableState,
+        float crossFadeDuration,
+        MotionSample sample,
+        string callerReason,
+        bool restartIfCurrent,
+        bool crossFadeCalled,
+        string earlyReturnReason,
+        string driverStateNameBefore,
+        int driverStateHashBefore)
+    {
+        if (!debugClientLocomotionDiagnostics)
+            return;
+
+        int fingerprint = ComputeClientDiagnosticsCrossFadeFingerprint(
+            playableState,
+            restartIfCurrent,
+            crossFadeCalled,
+            earlyReturnReason,
+            callerReason);
+        bool fingerprintChanged = fingerprint != _clientDiagnosticsLastCrossFadeFingerprint;
+        bool intervalElapsed = Time.unscaledTime >= _clientDiagnosticsNextCrossFadeLogTime;
+        if (!crossFadeCalled && !fingerprintChanged && !intervalElapsed)
+            return;
+
+        _clientDiagnosticsLastCrossFadeFingerprint = fingerprint;
+        _clientDiagnosticsNextCrossFadeLogTime = Time.unscaledTime +
+                                                 Mathf.Max(0.01f, clientLocomotionDiagnosticsInterval);
+        AnimatorDiagnosticSnapshot animatorSnapshot = CaptureAnimatorDiagnosticSnapshot();
+
+        Debug.Log(
+            $"[HamsterVisualDiag/CrossFade] role={ResolveClientDiagnosticsRole()} frame={Time.frameCount} " +
+            $"requestedState={FormatReason(playableState.Name)} requestedHash={playableState.Hash} " +
+            $"driverBefore={FormatState(driverStateNameBefore, driverStateHashBefore)} " +
+            $"driverAfter={FormatState(_currentStateName, _currentStateHash)} restartIfCurrent={restartIfCurrent} " +
+            $"playableStateValid={playableState.IsValid} animatorAvailable={animatorSnapshot.Available} " +
+            $"earlyReturn={FormatReason(earlyReturnReason)} crossFadeCalled={crossFadeCalled} " +
+            $"crossFadeDuration={crossFadeDuration:F3} sampleSource={FormatReason(sample.Source)} " +
+            $"speed={sample.PlanarSpeed:F3} move={FormatMoveInput(sample)} grounded={FormatGrounded(sample)} " +
+            $"sprint={sample.IsSprintHeld} callerReason={FormatReason(callerReason)} " +
+            $"animator={FormatAnimatorSnapshot(animatorSnapshot)}",
+            this);
+    }
+
+    private int ComputeClientDiagnosticsCrossFadeFingerprint(
+        PlayableState playableState,
+        bool restartIfCurrent,
+        bool crossFadeCalled,
+        string earlyReturnReason,
+        string callerReason)
+    {
+        unchecked
+        {
+            int hash = playableState.Hash;
+            hash = (hash * 397) ^ (playableState.IsValid ? 1 : 0);
+            hash = (hash * 397) ^ (restartIfCurrent ? 1 : 0);
+            hash = (hash * 397) ^ (crossFadeCalled ? 1 : 0);
+            hash = (hash * 397) ^ (earlyReturnReason != null ? earlyReturnReason.GetHashCode() : 0);
+            hash = (hash * 397) ^ (callerReason != null ? callerReason.GetHashCode() : 0);
+            return hash;
+        }
+    }
+
+    private AnimatorDiagnosticSnapshot CaptureAnimatorDiagnosticSnapshot()
+    {
+        AnimatorDiagnosticSnapshot snapshot = default;
+        if (visualAnimator == null ||
+            !visualAnimator.enabled ||
+            visualAnimator.runtimeAnimatorController == null ||
+            visualAnimator.layerCount <= BaseLayerIndex)
+        {
+            return snapshot;
+        }
+
+        snapshot.Available = true;
+        AnimatorStateInfo currentState = visualAnimator.GetCurrentAnimatorStateInfo(BaseLayerIndex);
+        snapshot.ShortNameHash = currentState.shortNameHash;
+        snapshot.FullPathHash = currentState.fullPathHash;
+        snapshot.NormalizedTime = currentState.normalizedTime;
+        snapshot.InTransition = visualAnimator.IsInTransition(BaseLayerIndex);
+        if (snapshot.InTransition)
+        {
+            AnimatorStateInfo nextState = visualAnimator.GetNextAnimatorStateInfo(BaseLayerIndex);
+            snapshot.NextShortNameHash = nextState.shortNameHash;
+            snapshot.NextFullPathHash = nextState.fullPathHash;
+            snapshot.NextNormalizedTime = nextState.normalizedTime;
+        }
+
+        return snapshot;
+    }
+
+    private static bool AnimatorSnapshotMatchesHash(AnimatorDiagnosticSnapshot snapshot, int stateHash)
+    {
+        if (!snapshot.Available || stateHash == 0)
+            return false;
+
+        if (snapshot.ShortNameHash == stateHash || snapshot.FullPathHash == stateHash)
+            return true;
+
+        return snapshot.InTransition &&
+               (snapshot.NextShortNameHash == stateHash || snapshot.NextFullPathHash == stateHash);
+    }
+
+    private static bool AnimatorSnapshotsHaveSameState(
+        AnimatorDiagnosticSnapshot first,
+        AnimatorDiagnosticSnapshot second)
+    {
+        return first.Available == second.Available &&
+               first.ShortNameHash == second.ShortNameHash &&
+               first.FullPathHash == second.FullPathHash &&
+               first.InTransition == second.InTransition &&
+               first.NextShortNameHash == second.NextShortNameHash &&
+               first.NextFullPathHash == second.NextFullPathHash;
+    }
+
+    private string ResolveClientDiagnosticsRole()
+    {
+        NetworkManager networkManager = NetworkManager.Singleton;
+        bool isServer = networkManager != null && networkManager.IsServer;
+        bool isClient = networkManager != null && networkManager.IsClient;
+        bool isOwner = _clientDiagnosticsNetworkObject != null && _clientDiagnosticsNetworkObject.IsOwner;
+
+        if (isServer && isClient)
+            return isOwner ? "HostOwner" : "HostRemoteClient";
+
+        if (!isServer && isClient)
+            return isOwner ? "ClientOwner" : "ClientRemote";
+
+        if (isServer)
+            return isOwner ? "ServerOwner" : "ServerRemote";
+
+        return "Offline";
+    }
+
+    private void ResetClientLocomotionDiagnosticsState()
+    {
+        _clientDiagnosticsNetworkObject = null;
+        _clientDiagnosticsRecoveryStateSource = null;
+        _clientDiagnosticsRoot = null;
+        _clientDiagnosticsVisualPreviewRoot = null;
+        ResetClientDiagnosticsRootTracking();
+        _clientDiagnosticsNextPeriodicLogTime = 0f;
+        _clientDiagnosticsNextCrossFadeLogTime = 0f;
+        _clientDiagnosticsPeriodicLogThisFrame = false;
+        _clientDiagnosticsAnimatorLogThisFrame = false;
+        _clientDiagnosticsUpdateFrame = -1;
+        _clientDiagnosticsLastDecisionInitialized = false;
+        _clientDiagnosticsLastDecisionState = default;
+        _clientDiagnosticsLastDecisionReason = string.Empty;
+        _clientDiagnosticsLastRequestedStateName = string.Empty;
+        _clientDiagnosticsLastRequestedStateHash = 0;
+        _clientDiagnosticsLastRestartIfCurrent = false;
+        _clientDiagnosticsLastCallerReason = string.Empty;
+        _clientDiagnosticsLastCrossFadeCalledFrame = -1;
+        _clientDiagnosticsLastCrossFadeFingerprint = int.MinValue;
+        _clientDiagnosticsAnimatorUpdateBefore = default;
+        _clientDiagnosticsAnimatorUpdateAfter = default;
+    }
+
+    private void ResetClientDiagnosticsRootTracking()
+    {
+        _clientDiagnosticsPreviousRootPosition = Vector3.zero;
+        _clientDiagnosticsPreviousRootPositionForLog = Vector3.zero;
+        _clientDiagnosticsCurrentRootPosition = Vector3.zero;
+        _clientDiagnosticsWorldDelta = Vector3.zero;
+        _clientDiagnosticsPlanarDelta = Vector3.zero;
+        _clientDiagnosticsRootTrackingInitialized = false;
+        _clientDiagnosticsRootInitializedThisFrame = false;
+        _clientDiagnosticsRootPositionValid = false;
+        _clientDiagnosticsDeltaTimeValid = false;
+        _clientDiagnosticsLargeDelta = false;
+        _clientDiagnosticsInferredPlanarSpeed = 0f;
+        _clientDiagnosticsDeltaTime = 0f;
+    }
+
+    private static bool IsFinite(float value)
+    {
+        return !float.IsNaN(value) && !float.IsInfinity(value);
+    }
+
+    private static bool IsFinite(Vector3 value)
+    {
+        return IsFinite(value.x) && IsFinite(value.y) && IsFinite(value.z);
+    }
+
+    private static string GetTransformPath(Transform target)
+    {
+        if (target == null)
+            return "<null>";
+
+        string path = target.name;
+        Transform current = target.parent;
+        while (current != null)
+        {
+            path = current.name + "/" + path;
+            current = current.parent;
+        }
+
+        return path;
+    }
+
+    private static string FormatAnimatorSnapshot(AnimatorDiagnosticSnapshot snapshot)
+    {
+        if (!snapshot.Available)
+            return "available=False";
+
+        return $"available=True shortHash={snapshot.ShortNameHash} fullPathHash={snapshot.FullPathHash} " +
+               $"normalizedTime={snapshot.NormalizedTime:F3} inTransition={snapshot.InTransition} " +
+               $"nextShortHash={snapshot.NextShortNameHash} nextFullPathHash={snapshot.NextFullPathHash} " +
+               $"nextNormalizedTime={snapshot.NextNormalizedTime:F3}";
+    }
+
+    private static string FormatState(string stateName, int stateHash)
+    {
+        return $"{(string.IsNullOrEmpty(stateName) ? "<none>" : stateName)}({stateHash})";
+    }
+
+    private static string FormatVector3(Vector3 value)
+    {
+        return $"({value.x:F3},{value.y:F3},{value.z:F3})";
+    }
+
+    private static string FormatPosition(Transform target)
+    {
+        return target != null ? FormatVector3(target.position) : "<null>";
+    }
+
+    private static string FormatRotation(Transform target)
+    {
+        return target != null ? FormatVector3(target.rotation.eulerAngles) : "<null>";
+    }
+
+    private static string FormatYaw(Transform target)
+    {
+        return target != null ? target.rotation.eulerAngles.y.ToString("F3") : "<null>";
     }
 
     private void TickDebugLog(MotionSample sample, float deltaTime)
