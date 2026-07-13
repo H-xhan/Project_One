@@ -40,6 +40,9 @@ public sealed class HamsterVisualClipStateDriver : MonoBehaviour
     [SerializeField] private bool disableFallAndLandForNow = true;
     [SerializeField] private bool requireAnimatorController = true;
 
+    [Header("Network Animation Authority")]
+    [SerializeField] private bool useServerAuthoritativeNetworkAnimator = true;
+
     [Header("Interaction Driver")]
     [SerializeField] private bool driveInteractionStates = false;
     [SerializeField] private bool useCarryStateWhileHolding = false;
@@ -370,9 +373,10 @@ public sealed class HamsterVisualClipStateDriver : MonoBehaviour
             return;
         }
 
+        bool canDriveUpdateLocomotionAnimator = ShouldAuthoritativelyDriveUpdateLocomotionAnimator();
         MotionSample sample = ReadMotionSample();
         bool interactionHandled = TickInteractionDriver(sample, deltaTime);
-        if (!interactionHandled)
+        if (!interactionHandled && canDriveUpdateLocomotionAnimator)
             TickStateDriver(sample, deltaTime);
 
         TickDebugLog(sample, deltaTime);
@@ -386,7 +390,11 @@ public sealed class HamsterVisualClipStateDriver : MonoBehaviour
                 sample,
                 true,
                 true,
-                interactionHandled ? "interaction handled" : "state driver ticked");
+                interactionHandled
+                    ? "interaction handled"
+                    : canDriveUpdateLocomotionAnimator
+                        ? "state driver ticked"
+                        : "network animator observer; locomotion state driver skipped");
         }
     }
 
@@ -947,6 +955,22 @@ public sealed class HamsterVisualClipStateDriver : MonoBehaviour
         }
 
         return true;
+    }
+
+    private bool ShouldAuthoritativelyDriveUpdateLocomotionAnimator()
+    {
+        if (!useServerAuthoritativeNetworkAnimator)
+            return true;
+
+        NetworkManager networkManager = NetworkManager.Singleton;
+        if (networkManager == null || !networkManager.IsListening)
+            return true;
+
+        NetworkObject networkObject = GetComponentInParent<NetworkObject>();
+        if (networkObject == null || !networkObject.IsSpawned)
+            return true;
+
+        return networkManager.IsServer;
     }
 
     private MotionSample ReadMotionSample()

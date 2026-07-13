@@ -22,6 +22,7 @@ GameObject:
   - component: {fileID: 6100000000000000107}
   - component: {fileID: 6100000000000000108}
   - component: {fileID: 6100000000000000110}
+  - component: {fileID: 6100000000000000111}
   m_Layer: 6
   m_Name: Hamster_JointFreeMotorShell_MainScenes
   m_TagString: Player
@@ -679,6 +680,46 @@ MonoBehaviour:
   ShowTopMostFoldoutHeaderGroup: 1
   maxPostItSlots: 6
   debugLogs: 1
+--- !u!114 &6100000000000000111
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 692270962315936511}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: e8d0727d5ae3244e3b569694d3912374, type: 3}
+  m_Name:
+  m_EditorClassIdentifier:
+  ShowTopMostFoldoutHeaderGroup: 1
+  NetworkAnimatorExpanded: 0
+  AuthorityMode: 0
+  m_Animator: {fileID: 215362220143687087}
+  TransitionStateInfoList: []
+  AnimatorParameterEntries:
+    ParameterEntries:
+    - name: Speed
+      NameHash: -823668238
+      Synchronize: 1
+      ParameterType: 1
+    - name: Move01
+      NameHash: -1749641009
+      Synchronize: 1
+      ParameterType: 1
+    - name: Sprint01
+      NameHash: -2035141404
+      Synchronize: 1
+      ParameterType: 1
+    - name: Grounded
+      NameHash: 862969536
+      Synchronize: 1
+      ParameterType: 4
+    - name: VerticalVelocity
+      NameHash: -1380605809
+      Synchronize: 1
+      ParameterType: 1
+  AnimatorParametersExpanded: 0
 --- !u!1 &1594514674284813732
 GameObject:
   m_ObjectHideFlags: 0
@@ -957,6 +998,7 @@ MonoBehaviour:
   move01Parameter: Move01
   animatorDampTime: 0.1
   speedForMove01: 2.5
+  useServerAuthoritativeNetworkAnimator: 1
   motorStateSource: {fileID: 984655929091462153}
   autoFindMotorStateSource: 1
   groundedParameter: Grounded
@@ -1054,6 +1096,7 @@ MonoBehaviour:
   driveJump: 1
   disableFallAndLandForNow: 1
   requireAnimatorController: 1
+  useServerAuthoritativeNetworkAnimator: 1
   driveInteractionStates: 1
   useCarryStateWhileHolding: 1
   playGrabOnGrabCount: 1

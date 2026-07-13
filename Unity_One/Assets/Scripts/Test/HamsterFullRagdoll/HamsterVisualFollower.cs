@@ -1,3 +1,4 @@
+using Unity.Netcode;
 using UnityEngine;
 
 public sealed class HamsterVisualFollower : MonoBehaviour
@@ -129,6 +130,9 @@ public sealed class HamsterVisualFollower : MonoBehaviour
     [SerializeField] private string move01Parameter = "Move01";
     [SerializeField] private float animatorDampTime = 0.10f;
     [SerializeField] private float speedForMove01 = 2.5f;
+
+    [Header("Network Animation Authority")]
+    [SerializeField] private bool useServerAuthoritativeNetworkAnimator = true;
 
     [Header("Locomotion Animator Parameters")]
     [SerializeField] private HamsterFullRagdollMotor motorStateSource;
@@ -1818,6 +1822,22 @@ public sealed class HamsterVisualFollower : MonoBehaviour
         _hasSprint01Parameter = HasFloatParameter(visualAnimator, sprint01Parameter, out _sprint01ParameterHash);
     }
 
+    private bool ShouldAuthoritativelyWriteAnimatorParameters()
+    {
+        if (!useServerAuthoritativeNetworkAnimator)
+            return true;
+
+        NetworkManager networkManager = NetworkManager.Singleton;
+        if (networkManager == null || !networkManager.IsListening)
+            return true;
+
+        NetworkObject networkObject = GetComponentInParent<NetworkObject>();
+        if (networkObject == null || !networkObject.IsSpawned)
+            return true;
+
+        return networkManager.IsServer;
+    }
+
     private void UpdateAnimator(float planarSpeed)
     {
         if (!updateAnimator || visualAnimator == null)
@@ -1827,6 +1847,9 @@ public sealed class HamsterVisualFollower : MonoBehaviour
             visualAnimator.applyRootMotion = false;
 
         CacheAnimatorParameters();
+
+        if (!ShouldAuthoritativelyWriteAnimatorParameters())
+            return;
 
         if (_hasSpeedParameter)
             visualAnimator.SetFloat(_speedParameterHash, planarSpeed, animatorDampTime, Time.deltaTime);
