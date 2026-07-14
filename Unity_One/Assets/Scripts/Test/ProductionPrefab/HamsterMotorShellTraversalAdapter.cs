@@ -1358,6 +1358,7 @@ public sealed class HamsterMotorShellTraversalAdapter : MonoBehaviour
 
         float bestDistance = float.PositiveInfinity;
         bool rejectedSelf = false;
+        bool rejectedOtherPlayer = false;
         bool rejectedSlope = false;
         bool rejectedApproach = false;
         bool rejectedLowStartHit = false;
@@ -1373,6 +1374,12 @@ public sealed class HamsterMotorShellTraversalAdapter : MonoBehaviour
             if (IsOwnCollider(hit.collider))
             {
                 rejectedSelf = true;
+                continue;
+            }
+
+            if (IsOtherPlayerCollider(hit.collider))
+            {
+                rejectedOtherPlayer = true;
                 continue;
             }
 
@@ -1412,6 +1419,9 @@ public sealed class HamsterMotorShellTraversalAdapter : MonoBehaviour
 
         if (rejectedSelf)
             return Block("own collider", out failureReason);
+
+        if (rejectedOtherPlayer)
+            return Block("other player collider", out failureReason);
 
         if (rejectedSlope)
             return Block("wall slope rejected", out failureReason);
@@ -1674,6 +1684,32 @@ public sealed class HamsterMotorShellTraversalAdapter : MonoBehaviour
 
         Transform hitTransform = wallCollider.transform;
         return hitTransform == _targetRoot || hitTransform.IsChildOf(_targetRoot);
+    }
+
+    private bool IsOtherPlayerCollider(Collider candidate)
+    {
+        if (candidate == null || IsOwnCollider(candidate))
+            return false;
+
+        NetworkObject candidateNetworkObject = candidate.GetComponentInParent<NetworkObject>();
+        if (candidateNetworkObject == null || candidateNetworkObject == ResolveOwnerNetworkObject())
+            return false;
+
+        bool isPlayer = candidateNetworkObject.GetComponentInChildren<PlayerHub>(true) != null ||
+                        candidateNetworkObject.GetComponentInChildren<PlayerStatusModule>(true) != null;
+        if (!isPlayer)
+            return false;
+
+        if (debugWallTraversalLogs)
+        {
+            string networkObjectId = candidateNetworkObject.IsSpawned
+                ? candidateNetworkObject.NetworkObjectId.ToString()
+                : "unspawned";
+            WallLog(
+                $"wall candidate rejected reason=other player collider={candidate.name} layer={candidate.gameObject.layer} root={candidateNetworkObject.name} NetworkObjectId={networkObjectId}");
+        }
+
+        return true;
     }
 
     private bool IsTargetRoot()
