@@ -5,6 +5,8 @@ public sealed class HamsterVisualClipStateDriver : MonoBehaviour
 {
     private const int BaseLayerIndex = 0;
     private const float ClientDiagnosticsLargeDeltaDistance = 1f;
+    private const string PlayerBuildMotionFallbackGlideReason = "TraversalGlide";
+    private const string PlayerBuildMotionFallbackGlideStateName = "Glide";
 
     [Header("References")]
     [SerializeField] private Animator visualAnimator;
@@ -642,6 +644,23 @@ public sealed class HamsterVisualClipStateDriver : MonoBehaviour
         out int stateHash,
         out string failureReason)
     {
+        return CanPlayExternalState(
+            stateName,
+            requireStateMotion,
+            true,
+            "one-shot",
+            out stateHash,
+            out failureReason);
+    }
+
+    private bool CanPlayExternalState(
+        string stateName,
+        bool requireStateMotion,
+        bool allowPlayerBuildStateExistenceFallback,
+        string validationContext,
+        out int stateHash,
+        out string failureReason)
+    {
         stateHash = 0;
         failureReason = "none";
 
@@ -669,10 +688,22 @@ public sealed class HamsterVisualClipStateDriver : MonoBehaviour
             return false;
         }
 
-        if (!HasStateMotion(stateName, requireStateMotion, false))
+        if (!HasStateMotion(
+                stateName,
+                requireStateMotion,
+                false,
+                allowPlayerBuildStateExistenceFallback,
+                out bool acceptedPlayerBuildStateExistence))
         {
             failureReason = "state motion missing";
             return false;
+        }
+
+        if (acceptedPlayerBuildStateExistence && debugLogs)
+        {
+            Debug.Log(
+                $"[HamsterVisualClipStateDriver:{name}] runtime motion verification unavailable; state existence accepted state={stateName} hash={stateHash} context={validationContext}",
+                this);
         }
 
         return true;
@@ -716,6 +747,10 @@ public sealed class HamsterVisualClipStateDriver : MonoBehaviour
             return false;
         }
 
+        bool allowPlayerBuildStateExistenceFallback =
+            reason == PlayerBuildMotionFallbackGlideReason &&
+            stateName == PlayerBuildMotionFallbackGlideStateName;
+
         if (_externalOneShotActive)
         {
             failureReason = "one-shot active";
@@ -729,7 +764,13 @@ public sealed class HamsterVisualClipStateDriver : MonoBehaviour
 
             if (_externalSustainedStateReason == reason)
             {
-                if (!CanPlayOneShotState(stateName, requireStateMotion, out int replacementStateHash, out failureReason))
+                if (!CanPlayExternalState(
+                        stateName,
+                        requireStateMotion,
+                        allowPlayerBuildStateExistenceFallback,
+                        reason,
+                        out int replacementStateHash,
+                        out failureReason))
                     return false;
 
                 visualAnimator.CrossFade(replacementStateHash, Mathf.Max(0f, crossFadeDuration), BaseLayerIndex, 0f);
@@ -749,7 +790,13 @@ public sealed class HamsterVisualClipStateDriver : MonoBehaviour
             return false;
         }
 
-        if (!CanPlayOneShotState(stateName, requireStateMotion, out int stateHash, out failureReason))
+        if (!CanPlayExternalState(
+                stateName,
+                requireStateMotion,
+                allowPlayerBuildStateExistenceFallback,
+                reason,
+                out int stateHash,
+                out failureReason))
             return false;
 
         visualAnimator.CrossFade(stateHash, Mathf.Max(0f, crossFadeDuration), BaseLayerIndex, 0f);
@@ -2058,6 +2105,23 @@ public sealed class HamsterVisualClipStateDriver : MonoBehaviour
 
     private bool HasStateMotion(string stateName, bool requireMotion, bool allowWhenEditorStateUnavailable)
     {
+        return HasStateMotion(
+            stateName,
+            requireMotion,
+            allowWhenEditorStateUnavailable,
+            false,
+            out _);
+    }
+
+    private bool HasStateMotion(
+        string stateName,
+        bool requireMotion,
+        bool allowWhenEditorStateUnavailable,
+        bool allowPlayerBuildStateExistenceFallback,
+        out bool acceptedPlayerBuildStateExistence)
+    {
+        acceptedPlayerBuildStateExistence = false;
+
         if (!requireMotion)
             return true;
 
@@ -2072,6 +2136,12 @@ public sealed class HamsterVisualClipStateDriver : MonoBehaviour
         UnityEditor.Animations.AnimatorState state = FindEditorStateByName(stateMachine, stateName);
         return state == null ? allowWhenEditorStateUnavailable : state.motion != null;
 #else
+        if (allowPlayerBuildStateExistenceFallback && TryCacheState(stateName, out _))
+        {
+            acceptedPlayerBuildStateExistence = true;
+            return true;
+        }
+
         return allowWhenEditorStateUnavailable;
 #endif
     }

@@ -53,11 +53,15 @@ public sealed class HamsterMotorShellCombatAdapter : MonoBehaviour
     private readonly HashSet<int> _processedTargets = new HashSet<int>();
     private NetworkObject _ownerNetworkObject;
     private Transform _targetRoot;
+    private HamsterFullRagdollMotor _motorStateSource;
+    private HamsterMotorShellRagdollRecoveryAdapter _recoveryAdapter;
     private HamsterMotorShellSpinDashAdapter _spinDashAdapter;
     private bool _pendingAttack;
     private float _pendingAttackTime;
     private float _nextAttackTime;
     private bool _waitingForAttackAnimationEvent;
+    private int _attackSequence;
+    private PendingAttackSnapshot _pendingAttackSnapshot;
 
     private struct AttackProfile
     {
@@ -70,6 +74,31 @@ public sealed class HamsterMotorShellCombatAdapter : MonoBehaviour
         public int WeaponId;
     }
 
+    private struct AttackVisualSelection
+    {
+        public string StateName;
+        public int StateHash;
+        public float CrossFade;
+        public float MinTime;
+        public float MaxTime;
+        public bool HasHeldItem;
+        public bool UsedFallbackState;
+    }
+
+    private struct PendingAttackSnapshot
+    {
+        public AttackProfile Profile;
+        public AttackVisualSelection Visual;
+        public int Sequence;
+        public bool RequiresSpawnedServer;
+    }
+
+    private enum AttackHitTiming
+    {
+        AnimationEvent,
+        Fallback
+    }
+
     private void Awake()
     {
         CacheReferences();
@@ -80,19 +109,35 @@ public sealed class HamsterMotorShellCombatAdapter : MonoBehaviour
         CacheReferences();
     }
 
+    private void OnDisable()
+    {
+        ClearPendingAttack();
+    }
+
     private void Update()
     {
-        if (!CanReadOwnerInput())
-            return;
+        if (ShouldReadDirectAttackInput() && ReadAttackPressed())
+            TryQueueDirectAttack();
 
-        if (ReadAttackPressed())
-            TryQueueAttack();
+        if (_pendingAttack &&
+            _pendingAttackSnapshot.RequiresSpawnedServer &&
+            !CanApplyAttack(true))
+        {
+            ClearPendingAttack();
+            return;
+        }
 
         if (_pendingAttack && Time.time >= _pendingAttackTime)
         {
-            _pendingAttack = false;
-            _waitingForAttackAnimationEvent = false;
-            ExecuteAttack();
+            if (TryConsumePendingAttack(AttackHitTiming.Fallback, out PendingAttackSnapshot snapshot, out string failureReason))
+            {
+                LogRoute("HitFallback", true, "none", snapshot.Sequence, AttackHitTiming.Fallback);
+                ExecuteAttack(snapshot);
+            }
+            else
+            {
+                LogRoute("HitSkipped", false, failureReason, 0, AttackHitTiming.Fallback);
+            }
         }
     }
 
@@ -127,26 +172,63 @@ public sealed class HamsterMotorShellCombatAdapter : MonoBehaviour
         if (animationEventRelay == null)
             animationEventRelay = GetComponentInParent<HamsterAnimationEventRelay>();
 
+        if (_motorStateSource == null && _targetRoot != null)
+            _motorStateSource = _targetRoot.GetComponentInChildren<HamsterFullRagdollMotor>(true);
+
+        if (_recoveryAdapter == null && _targetRoot != null)
+            _recoveryAdapter = _targetRoot.GetComponentInChildren<HamsterMotorShellRagdollRecoveryAdapter>(true);
+
         if (_spinDashAdapter == null && _targetRoot != null)
             _spinDashAdapter = _targetRoot.GetComponentInChildren<HamsterMotorShellSpinDashAdapter>(true);
     }
 
-    private bool CanReadOwnerInput()
+    public bool CanQueueServerAttackFromPlayerHub(out string failureReason)
+    {
+        return TryBuildAttackSnapshot(true, out _, out failureReason);
+    }
+
+    public bool ServerTryQueueAttackFromPlayerHub(out string failureReason)
+    {
+        if (!TryBuildAttackSnapshot(true, out PendingAttackSnapshot snapshot, out failureReason))
+        {
+            LogRoute("ServerQueue", false, failureReason, 0, null);
+            return false;
+        }
+
+        bool queued = TryCommitAttack(snapshot, out failureReason);
+        LogRoute("ServerQueue", queued, failureReason, queued ? _attackSequence : 0, null);
+        return queued;
+    }
+
+    private bool ShouldReadDirectAttackInput()
     {
         if (!enableCombatAdapter || !IsTargetRoot())
             return false;
 
+        if (_targetRoot == null || _ownerNetworkObject == null)
+            CacheReferences();
+
         NetworkManager networkManager = NetworkManager.Singleton;
         if (networkManager == null || !networkManager.IsListening)
-            return false;
+            return true;
 
-        return _ownerNetworkObject == null || _ownerNetworkObject.IsOwner;
+        if (_ownerNetworkObject == null || !_ownerNetworkObject.IsSpawned)
+            return true;
+
+        return false;
     }
 
-    private bool CanApplyAttack()
+    private bool CanApplyAttack(bool requireSpawnedServer)
     {
         NetworkManager networkManager = NetworkManager.Singleton;
-        return networkManager != null && networkManager.IsServer;
+        if (networkManager == null || !networkManager.IsListening)
+            return !requireSpawnedServer;
+
+        if (!networkManager.IsServer)
+            return false;
+
+        return !requireSpawnedServer ||
+               (_ownerNetworkObject != null && _ownerNetworkObject.IsSpawned);
     }
 
     private bool ReadAttackPressed()
@@ -158,7 +240,7 @@ public sealed class HamsterMotorShellCombatAdapter : MonoBehaviour
         return mouse != null && mouse.leftButton.wasPressedThisFrame;
     }
 
-    private void TryQueueAttack()
+    private void TryQueueDirectAttack()
     {
         Log("[MSCombat/Input]", "leftMouse=true");
 
@@ -168,61 +250,240 @@ public sealed class HamsterMotorShellCombatAdapter : MonoBehaviour
             return;
         }
 
+        if (!TryBuildAttackSnapshot(false, out PendingAttackSnapshot snapshot, out string failureReason))
+        {
+            Log("[MSCombat/Input]", $"skip={failureReason}");
+            return;
+        }
+
+        if (!TryCommitAttack(snapshot, out failureReason))
+            Log("[MSCombat/Input]", $"skip={failureReason}");
+    }
+
+    private bool TryBuildAttackSnapshot(
+        bool requireSpawnedServer,
+        out PendingAttackSnapshot snapshot,
+        out string failureReason)
+    {
+        snapshot = default;
+        failureReason = "none";
+
+        if (!isActiveAndEnabled || !enableCombatAdapter)
+        {
+            failureReason = "adapter disabled";
+            return false;
+        }
+
+        if (!IsTargetRoot())
+        {
+            failureReason = "target root invalid";
+            return false;
+        }
+
+        if (requireSpawnedServer && !CanQueueOnSpawnedServer(out failureReason))
+            return false;
+
+        if (_pendingAttack)
+        {
+            failureReason = "attack pending";
+            return false;
+        }
+
+        if (Time.time < _nextAttackTime)
+        {
+            failureReason = "cooldown active";
+            return false;
+        }
+
+        if (_recoveryAdapter != null && _recoveryAdapter.IsControlLockedByRecovery)
+        {
+            failureReason = "recovering";
+            return false;
+        }
+
+        if (_motorStateSource != null && _motorStateSource.IsExternalControlLocked)
+        {
+            failureReason = "external control locked";
+            return false;
+        }
+
         if (IsSpinDashDizzyInputBlocked())
         {
-            Log("[MSCombat/Input]", "skip=spindashDizzy");
-            return;
+            failureReason = "spindash dizzy";
+            return false;
         }
 
         AttackProfile profile = BuildAttackProfile();
-        if (Time.time < _nextAttackTime)
+        if (!TrySelectAttackVisual(out AttackVisualSelection visual, out failureReason))
+            return false;
+
+        snapshot = new PendingAttackSnapshot
         {
-            Log("[MSCombat/Input]", $"skip=cooldown now={Time.time:F2} next={_nextAttackTime:F2}");
-            return;
+            Profile = profile,
+            Visual = visual,
+            Sequence = 0,
+            RequiresSpawnedServer = requireSpawnedServer
+        };
+        return true;
+    }
+
+    private bool CanQueueOnSpawnedServer(out string failureReason)
+    {
+        failureReason = "none";
+        NetworkManager networkManager = NetworkManager.Singleton;
+        if (networkManager == null || !networkManager.IsListening)
+        {
+            failureReason = "network session not listening";
+            return false;
         }
 
-        _nextAttackTime = Time.time + Mathf.Max(0.01f, profile.Cooldown);
-        bool attackVisualStarted = TryPlayAttackVisual(
-            out float attackVisualMinTime,
-            out string selectedAttackStateName,
-            out bool hasHeldItem,
-            out bool usedVisualFallback);
+        if (_ownerNetworkObject == null)
+        {
+            failureReason = "network object missing";
+            return false;
+        }
+
+        if (!_ownerNetworkObject.IsSpawned)
+        {
+            failureReason = "network object not spawned";
+            return false;
+        }
+
+        if (!networkManager.IsServer)
+        {
+            failureReason = "not server";
+            return false;
+        }
+
+        if (_motorStateSource == null)
+        {
+            failureReason = "motor state source missing";
+            return false;
+        }
+
+        if (_recoveryAdapter == null)
+        {
+            failureReason = "recovery adapter missing";
+            return false;
+        }
+
+        if (_spinDashAdapter == null)
+        {
+            failureReason = "spin dash adapter missing";
+            return false;
+        }
+
+        return true;
+    }
+
+    private bool TryCommitAttack(PendingAttackSnapshot snapshot, out string failureReason)
+    {
+        if (!TryStartAttackVisual(ref snapshot.Visual, out failureReason))
+        {
+            LogRoute("AnimationRejected", false, failureReason, 0, null);
+            return false;
+        }
+
+        snapshot.Sequence = ++_attackSequence;
+        _pendingAttackSnapshot = snapshot;
         _pendingAttack = true;
-        _waitingForAttackAnimationEvent = attackVisualStarted && useAttackAnimationEventTiming;
+        _waitingForAttackAnimationEvent = useAttackAnimationEventTiming;
         float fallbackDelay = _waitingForAttackAnimationEvent
-            ? Mathf.Max(Mathf.Max(0f, attackWindup), Mathf.Max(0f, attackVisualMinTime))
+            ? Mathf.Max(Mathf.Max(0f, attackWindup), Mathf.Max(0f, snapshot.Visual.MinTime))
             : Mathf.Max(0f, attackWindup);
         _pendingAttackTime = Time.time + fallbackDelay;
+        _nextAttackTime = Time.time + Mathf.Max(0.01f, snapshot.Profile.Cooldown);
         AttackStarted?.Invoke();
-        Log("[MSCombat/Attack]", $"queued weapon={profile.WeaponName} id={profile.WeaponId} heldItem={hasHeldItem} selectedState={selectedAttackStateName} visual={attackVisualStarted} visualFallback={usedVisualFallback} cooldown={profile.Cooldown:F2} active={attackActiveDuration:F2} eventTiming={_waitingForAttackAnimationEvent} fallbackDelay={fallbackDelay:F2}");
+
+        LogRoute("AnimationAccepted", true, "none", snapshot.Sequence, null);
+        Log(
+            "[MSCombat/Attack]",
+            $"queued sequence={snapshot.Sequence} weapon={snapshot.Profile.WeaponName} id={snapshot.Profile.WeaponId} heldItem={snapshot.Visual.HasHeldItem} selectedState={snapshot.Visual.StateName} visual=true visualFallback={snapshot.Visual.UsedFallbackState} cooldown={snapshot.Profile.Cooldown:F2} active={attackActiveDuration:F2} eventTiming={_waitingForAttackAnimationEvent} fallbackDelay={fallbackDelay:F2}");
+        failureReason = "none";
+        return true;
     }
 
     public void CompletePendingAttackFromAnimationEvent()
     {
-        if (!_pendingAttack)
+        if (TryConsumePendingAttack(AttackHitTiming.AnimationEvent, out PendingAttackSnapshot snapshot, out string failureReason))
         {
-            Log("[MSCombat/Event]", "attackHit ignored=noPendingAttack");
+            LogRoute("HitEvent", true, "none", snapshot.Sequence, AttackHitTiming.AnimationEvent);
+            ExecuteAttack(snapshot);
             return;
         }
 
-        _pendingAttack = false;
-        _waitingForAttackAnimationEvent = false;
-        Log("[MSCombat/Event]", "attackHit execute=pendingAttack");
-        ExecuteAttack();
+        LogRoute("HitSkipped", false, failureReason, 0, AttackHitTiming.AnimationEvent);
     }
 
-    private void ExecuteAttack()
+    private bool TryConsumePendingAttack(
+        AttackHitTiming timing,
+        out PendingAttackSnapshot snapshot,
+        out string failureReason)
     {
-        if (!CanApplyAttack())
+        snapshot = default;
+        failureReason = "none";
+        if (!_pendingAttack)
         {
-            Log("[MSCombat/Attack]", "skip=serverRequired");
+            failureReason = "no pending attack";
+            return false;
+        }
+
+        if (!CanApplyAttack(_pendingAttackSnapshot.RequiresSpawnedServer))
+        {
+            ClearPendingAttack();
+            failureReason = "server required";
+            return false;
+        }
+
+        if (timing == AttackHitTiming.AnimationEvent)
+        {
+            if (!_waitingForAttackAnimationEvent)
+            {
+                failureReason = "animation event not expected";
+                return false;
+            }
+
+            AttackVisualSelection visual = _pendingAttackSnapshot.Visual;
+            bool matchingExternalState = visualClipStateDriver != null &&
+                                         visualClipStateDriver.IsPlayingExternalOneShot(visual.StateName) &&
+                                         visualClipStateDriver.TryGetAnimatorStateNormalizedTime(visual.StateHash, out _);
+            if (!matchingExternalState)
+            {
+                failureReason = "animation event state mismatch";
+                return false;
+            }
+        }
+        else if (Time.time < _pendingAttackTime)
+        {
+            failureReason = "fallback not due";
+            return false;
+        }
+
+        snapshot = _pendingAttackSnapshot;
+        ClearPendingAttack();
+        return true;
+    }
+
+    private void ClearPendingAttack()
+    {
+        _pendingAttack = false;
+        _pendingAttackTime = 0f;
+        _waitingForAttackAnimationEvent = false;
+        _pendingAttackSnapshot = default;
+    }
+
+    private void ExecuteAttack(PendingAttackSnapshot snapshot)
+    {
+        if (!CanApplyAttack(snapshot.RequiresSpawnedServer))
+        {
+            Log("[MSCombat/Attack]", $"skip=serverRequired sequence={snapshot.Sequence}");
             return;
         }
 
-        AttackProfile profile = BuildAttackProfile();
+        AttackProfile profile = snapshot.Profile;
         if (!TryFindHit(profile, out Collider hitCollider, out Rigidbody targetBody, out Transform targetRoot))
         {
-            Log("[MSCombat/Miss]", $"weapon={profile.WeaponName} id={profile.WeaponId} distance={profile.Distance:F2} radius={profile.Radius:F2}");
+            Log("[MSCombat/Miss]", $"sequence={snapshot.Sequence} weapon={profile.WeaponName} id={profile.WeaponId} distance={profile.Distance:F2} radius={profile.Radius:F2}");
             return;
         }
 
@@ -234,104 +495,103 @@ public sealed class HamsterMotorShellCombatAdapter : MonoBehaviour
 
         Log(
             "[MSCombat/Hit]",
-            $"weapon={profile.WeaponName} id={profile.WeaponId} damage={profile.Damage:F1} target={(targetRoot != null ? targetRoot.name : "<null>")} collider={(hitCollider != null ? hitCollider.name : "<null>")} impulse={FormatVector(impulse)} recoveryApplied={recoveryApplied}");
+            $"sequence={snapshot.Sequence} weapon={profile.WeaponName} id={profile.WeaponId} damage={profile.Damage:F1} target={(targetRoot != null ? targetRoot.name : "<null>")} collider={(hitCollider != null ? hitCollider.name : "<null>")} impulse={FormatVector(impulse)} recoveryApplied={recoveryApplied}");
     }
 
-    private bool TryPlayAttackVisual(
-        out float visualMinTime,
-        out string selectedStateName,
-        out bool hasHeldItem,
-        out bool usedFallbackState)
+    private bool TrySelectAttackVisual(out AttackVisualSelection selection, out string failureReason)
     {
-        visualMinTime = Mathf.Max(0f, attackMinVisualTime);
-        selectedStateName = attackStateName;
-        hasHeldItem = false;
-        usedFallbackState = false;
+        selection = default;
+        failureReason = "none";
+        bool hasHeldItem = HasHeldItemForAttack();
 
-        CacheReferences();
-        hasHeldItem = HasHeldItemForAttack();
         if (visualClipStateDriver == null)
         {
-            Log("[MSCombat/Visual]", "skip=clipStateDriverMissing");
+            failureReason = "clip state driver missing";
             return false;
         }
 
         if (visualClipStateDriver.IsExternalOneShotActive)
         {
-            Log("[MSCombat/Visual]", "skip=externalOneShotActive");
+            failureReason = "external one-shot active";
             return false;
         }
 
         if (useHeldItemAttackVisual && hasHeldItem && !string.IsNullOrWhiteSpace(heldItemAttackStateName))
         {
-            selectedStateName = heldItemAttackStateName;
-            visualMinTime = Mathf.Max(0f, heldItemAttackMinVisualTime);
-            bool heldPlayed = TryPlayAttackVisualState(
-                heldItemAttackStateName,
-                heldItemAttackCrossFade,
-                heldItemAttackMinVisualTime,
-                heldItemAttackMaxVisualTime,
-                out int heldStateHash,
-                out string heldFailureReason);
-
-            if (heldPlayed)
+            if (CanPlayAttackVisualState(heldItemAttackStateName, out int heldStateHash, out string heldFailureReason))
             {
-                Log("[MSCombat/Visual]", $"play state={heldItemAttackStateName} hash={heldStateHash} heldItem=true");
+                selection = new AttackVisualSelection
+                {
+                    StateName = heldItemAttackStateName,
+                    StateHash = heldStateHash,
+                    CrossFade = heldItemAttackCrossFade,
+                    MinTime = Mathf.Max(0f, heldItemAttackMinVisualTime),
+                    MaxTime = Mathf.Max(0f, heldItemAttackMaxVisualTime),
+                    HasHeldItem = true,
+                    UsedFallbackState = false
+                };
                 return true;
             }
 
-            Log("[MSCombat/Visual]", $"skip={heldFailureReason} state={heldItemAttackStateName} requireMotion={requireAttackMotion} heldItem=true");
             if (!fallbackToUnarmedAttackVisualIfHeldMotionMissing)
+            {
+                failureReason = $"held attack state unavailable: {heldFailureReason}";
                 return false;
-
-            usedFallbackState = true;
+            }
         }
 
-        selectedStateName = attackStateName;
-        visualMinTime = Mathf.Max(0f, attackMinVisualTime);
-        bool played = TryPlayAttackVisualState(
-            attackStateName,
-            attackCrossFade,
-            attackMinVisualTime,
-            attackMaxVisualTime,
-            out int stateHash,
-            out string failureReason);
+        if (!CanPlayAttackVisualState(attackStateName, out int stateHash, out failureReason))
+            return false;
 
-        Log("[MSCombat/Visual]", played
-            ? $"play state={attackStateName} hash={stateHash} heldItem={hasHeldItem} fallback={usedFallbackState}"
-            : $"skip={failureReason} state={attackStateName} requireMotion={requireAttackMotion} heldItem={hasHeldItem} fallback={usedFallbackState}");
-        return played;
+        selection = new AttackVisualSelection
+        {
+            StateName = attackStateName,
+            StateHash = stateHash,
+            CrossFade = attackCrossFade,
+            MinTime = Mathf.Max(0f, attackMinVisualTime),
+            MaxTime = Mathf.Max(0f, attackMaxVisualTime),
+            HasHeldItem = hasHeldItem,
+            UsedFallbackState = useHeldItemAttackVisual && hasHeldItem && !string.IsNullOrWhiteSpace(heldItemAttackStateName)
+        };
+        failureReason = "none";
+        return true;
     }
 
-    private bool TryPlayAttackVisualState(
-        string stateName,
-        float crossFade,
-        float minTime,
-        float maxTime,
-        out int stateHash,
-        out string failureReason)
+    private bool CanPlayAttackVisualState(string stateName, out int stateHash, out string failureReason)
     {
         stateHash = 0;
         if (string.IsNullOrWhiteSpace(stateName))
         {
-            failureReason = "stateNameEmpty";
+            failureReason = "state name empty";
             return false;
         }
 
-        if (visualClipStateDriver == null)
-        {
-            failureReason = "clipStateDriverMissing";
-            return false;
-        }
-
-        return visualClipStateDriver.TryPlayOneShotState(
+        return visualClipStateDriver.CanPlayOneShotState(
             stateName,
-            crossFade,
-            minTime,
-            maxTime,
             requireAttackMotion,
             out stateHash,
             out failureReason);
+    }
+
+    private bool TryStartAttackVisual(ref AttackVisualSelection selection, out string failureReason)
+    {
+        bool played = visualClipStateDriver.TryPlayOneShotState(
+            selection.StateName,
+            selection.CrossFade,
+            selection.MinTime,
+            selection.MaxTime,
+            requireAttackMotion,
+            out int stateHash,
+            out failureReason);
+        if (played)
+            selection.StateHash = stateHash;
+
+        Log(
+            "[MSCombat/Visual]",
+            played
+                ? $"play state={selection.StateName} hash={selection.StateHash} heldItem={selection.HasHeldItem} fallback={selection.UsedFallbackState}"
+                : $"skip={failureReason} state={selection.StateName} requireMotion={requireAttackMotion} heldItem={selection.HasHeldItem} fallback={selection.UsedFallbackState}");
+        return played;
     }
 
     private bool HasHeldItemForAttack()
@@ -672,6 +932,32 @@ public sealed class HamsterMotorShellCombatAdapter : MonoBehaviour
         }
 
         return null;
+    }
+
+    private void LogRoute(
+        string phase,
+        bool accepted,
+        string failureReason,
+        int sequence,
+        AttackHitTiming? hitTiming)
+    {
+        if (!debugCombatLogs)
+            return;
+
+        NetworkManager networkManager = NetworkManager.Singleton;
+        bool isServer = networkManager != null && networkManager.IsServer;
+        bool isOwner = _ownerNetworkObject != null && _ownerNetworkObject.IsOwner;
+        string networkObjectId = _ownerNetworkObject != null && _ownerNetworkObject.IsSpawned
+            ? _ownerNetworkObject.NetworkObjectId.ToString()
+            : "unspawned";
+        string ownerClientId = _ownerNetworkObject != null
+            ? _ownerNetworkObject.OwnerClientId.ToString()
+            : "none";
+        string timing = hitTiming.HasValue ? hitTiming.Value.ToString() : "none";
+
+        Debug.Log(
+            $"[MSCombat/Route] phase={phase} objectName={name} NetworkObjectId={networkObjectId} IsServer={isServer} IsOwner={isOwner} OwnerClientId={ownerClientId} accepted={accepted} failureReason={failureReason} pending={_pendingAttack} attackSequence={sequence} hitTiming={timing}",
+            this);
     }
 
     private void Log(string prefix, string message)

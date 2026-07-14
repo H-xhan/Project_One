@@ -236,6 +236,7 @@ public class PlayerHub : NetworkBehaviour
     private float _nextInputRouteServerLogTime;
     private float _nextMotorShellCameraLogTime;
     private HamsterFullRagdollMotor _motorShellMotor;
+    private HamsterMotorShellCombatAdapter _motorShellCombatAdapter;
 
     private bool _attackLockedServer;
     private bool _attackBufferedServer;
@@ -350,8 +351,26 @@ public class PlayerHub : NetworkBehaviour
         if (coinWalletModule == null) coinWalletModule = GetComponentInChildren<PlayerCoinWalletModule>(true);
         if (staminaModule == null) staminaModule = GetComponentInChildren<PlayerStaminaModule>(true);
         if (_motorShellMotor == null) _motorShellMotor = GetComponentInChildren<HamsterFullRagdollMotor>(true);
+        ResolveMotorShellCombatAdapter();
         if (gameStateManager == null) gameStateManager = FindFirstObjectByType<GameStateManager>();
         if (_readySystem == null) _readySystem = FindFirstObjectByType<ReadySystem>();
+    }
+
+    private HamsterMotorShellCombatAdapter ResolveMotorShellCombatAdapter()
+    {
+        if (_motorShellCombatAdapter == null)
+            _motorShellCombatAdapter = GetComponentInChildren<HamsterMotorShellCombatAdapter>(true);
+
+        if (_motorShellCombatAdapter == null)
+            return null;
+
+        NetworkObject hubNetworkObject = GetComponentInParent<NetworkObject>();
+        NetworkObject adapterNetworkObject = _motorShellCombatAdapter.GetComponentInParent<NetworkObject>();
+        if (hubNetworkObject != null && adapterNetworkObject == hubNetworkObject)
+            return _motorShellCombatAdapter;
+
+        _motorShellCombatAdapter = null;
+        return null;
     }
 
     private SugaActiveRagdollController ResolveActiveRagdollController()
@@ -1685,7 +1704,9 @@ public class PlayerHub : NetworkBehaviour
         _jumpPressed = true;
     }
 
-    [Rpc(SendTo.Server)]
+    [Rpc(
+        SendTo.Server,
+        InvokePermission = RpcInvokePermission.Owner)]
     private void AttackServerRpc()
     {
         if (TryConsumeCharacterThrowOrBlockAttackServer())
@@ -1721,6 +1742,13 @@ public class PlayerHub : NetworkBehaviour
         if (!CanAttackNow())
             return;
 
+        HamsterMotorShellCombatAdapter motorShellCombatAdapter = ResolveMotorShellCombatAdapter();
+        if (motorShellCombatAdapter != null)
+        {
+            TryStartMotorShellAttackServer(motorShellCombatAdapter, out _);
+            return;
+        }
+
         if (!ShouldAllowBasicAttackWithStamina())
             return;
 
@@ -1738,6 +1766,62 @@ public class PlayerHub : NetworkBehaviour
 
         if (_attackLockRoutine != null) StopCoroutine(_attackLockRoutine);
         _attackLockRoutine = StartCoroutine(ServerAttackLockRoutine());
+    }
+
+    private bool TryStartMotorShellAttackServer(
+        HamsterMotorShellCombatAdapter adapter,
+        out string failureReason)
+    {
+        failureReason = "none";
+        if (adapter == null)
+        {
+            failureReason = "adapter missing";
+            return false;
+        }
+
+        if (!adapter.CanQueueServerAttackFromPlayerHub(out failureReason))
+            return false;
+
+        bool shouldSpendStamina = useStaminaForBasicAttack && Mathf.Max(0f, basicAttackStaminaCost) > 0f;
+        PlayerStaminaModule targetStaminaModule = shouldSpendStamina ? StaminaModule : null;
+        if (shouldSpendStamina)
+        {
+            if (targetStaminaModule == null)
+            {
+                if (!allowBasicAttackWhenStaminaModuleMissing)
+                {
+                    failureReason = "stamina module missing";
+                    return false;
+                }
+            }
+            else if (!CanUseBasicAttackStamina(targetStaminaModule))
+            {
+                failureReason = "stamina unavailable";
+                return false;
+            }
+        }
+
+        if (shouldSpendStamina &&
+            targetStaminaModule != null &&
+            !TryConsumeBasicAttackStamina(targetStaminaModule))
+        {
+            failureReason = "stamina spend rejected";
+            return false;
+        }
+
+        if (!adapter.ServerTryQueueAttackFromPlayerHub(out failureReason))
+        {
+            Debug.LogWarning(
+                $"[MSCombat/Hub] invariant=queue failed after successful preflight and stamina spend NetworkObjectId={NetworkObjectId} OwnerClientId={OwnerClientId} IsServer={IsServer} IsOwner={IsOwner} route=HamsterAdapter failureReason={failureReason}",
+                this);
+            return false;
+        }
+
+        _attackLockedServer = true;
+        if (_attackLockRoutine != null) StopCoroutine(_attackLockRoutine);
+        _attackLockRoutine = StartCoroutine(ServerAttackLockRoutine());
+        failureReason = "none";
+        return true;
     }
 
     private bool ShouldAllowBasicAttackWithStamina()
