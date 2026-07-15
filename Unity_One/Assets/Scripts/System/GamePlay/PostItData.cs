@@ -1,4 +1,5 @@
 using System;
+using Unity.Netcode;
 
 [Serializable]
 public enum PostItType
@@ -22,7 +23,9 @@ public enum PostItTopicId
 }
 
 [Serializable]
-public struct PostItRuntimeData
+public struct PostItRuntimeData :
+    INetworkSerializable,
+    IEquatable<PostItRuntimeData>
 {
     public int PostItId;
     public PostItType Type;
@@ -59,5 +62,48 @@ public struct PostItRuntimeData
         OriginalOwnerClientId = originalOwnerClientId;
         HolderClientId = holderClientId;
         SlotIndex = slotIndex;
+    }
+
+    public void NetworkSerialize<T>(BufferSerializer<T> serializer) where T : IReaderWriter
+    {
+        serializer.SerializeValue(ref PostItId);
+        serializer.SerializeValue(ref Type);
+        serializer.SerializeValue(ref TopicId);
+        serializer.SerializeValue(ref VisualId);
+        serializer.SerializeValue(ref OriginalOwnerClientId);
+        serializer.SerializeValue(ref HolderClientId);
+        serializer.SerializeValue(ref SlotIndex);
+    }
+
+    public bool Equals(PostItRuntimeData other)
+    {
+        return PostItId == other.PostItId &&
+               Type == other.Type &&
+               TopicId == other.TopicId &&
+               VisualId == other.VisualId &&
+               OriginalOwnerClientId == other.OriginalOwnerClientId &&
+               HolderClientId == other.HolderClientId &&
+               SlotIndex == other.SlotIndex;
+    }
+
+    public override bool Equals(object obj)
+    {
+        return obj is PostItRuntimeData other && Equals(other);
+    }
+
+    public override int GetHashCode()
+    {
+        unchecked
+        {
+            int hash = 17;
+            hash = hash * 31 + PostItId;
+            hash = hash * 31 + (int)Type;
+            hash = hash * 31 + (int)TopicId;
+            hash = hash * 31 + VisualId;
+            hash = hash * 31 + OriginalOwnerClientId.GetHashCode();
+            hash = hash * 31 + HolderClientId.GetHashCode();
+            hash = hash * 31 + SlotIndex;
+            return hash;
+        }
     }
 }
