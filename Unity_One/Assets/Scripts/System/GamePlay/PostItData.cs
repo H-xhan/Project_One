@@ -107,3 +107,78 @@ public struct PostItRuntimeData :
         }
     }
 }
+
+[Serializable]
+public struct PostItPublicVisualData :
+    INetworkSerializable,
+    IEquatable<PostItPublicVisualData>
+{
+    public int PostItId;
+    public int SlotIndex;
+    public PostItType Type;
+    public int VisualId;
+    public bool IsOriginalOwnerItem;
+
+    public bool IsValid =>
+        PostItId >= 0 &&
+        SlotIndex >= 0 &&
+        Type != PostItType.None;
+
+    public static PostItPublicVisualData Invalid => new PostItPublicVisualData(
+        -1,
+        -1,
+        PostItType.None,
+        0,
+        false);
+
+    public PostItPublicVisualData(
+        int postItId,
+        int slotIndex,
+        PostItType type,
+        int visualId,
+        bool isOriginalOwnerItem)
+    {
+        PostItId = postItId;
+        SlotIndex = slotIndex;
+        Type = type;
+        VisualId = visualId;
+        IsOriginalOwnerItem = isOriginalOwnerItem;
+    }
+
+    public void NetworkSerialize<T>(BufferSerializer<T> serializer) where T : IReaderWriter
+    {
+        serializer.SerializeValue(ref PostItId);
+        serializer.SerializeValue(ref SlotIndex);
+        serializer.SerializeValue(ref Type);
+        serializer.SerializeValue(ref VisualId);
+        serializer.SerializeValue(ref IsOriginalOwnerItem);
+    }
+
+    public bool Equals(PostItPublicVisualData other)
+    {
+        return PostItId == other.PostItId &&
+               SlotIndex == other.SlotIndex &&
+               Type == other.Type &&
+               VisualId == other.VisualId &&
+               IsOriginalOwnerItem == other.IsOriginalOwnerItem;
+    }
+
+    public override bool Equals(object obj)
+    {
+        return obj is PostItPublicVisualData other && Equals(other);
+    }
+
+    public override int GetHashCode()
+    {
+        unchecked
+        {
+            int hash = 17;
+            hash = hash * 31 + PostItId;
+            hash = hash * 31 + SlotIndex;
+            hash = hash * 31 + (int)Type;
+            hash = hash * 31 + VisualId;
+            hash = hash * 31 + IsOriginalOwnerItem.GetHashCode();
+            return hash;
+        }
+    }
+}
