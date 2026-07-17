@@ -6,6 +6,7 @@ using Unity.Netcode;
 using UnityEngine;
 using UnityEngine.InputSystem;
 
+[DefaultExecutionOrder(100)]
 public sealed class HamsterMotorShellItemAdapter : MonoBehaviour
 {
     private const string TargetRootName = "Hamster_JointFreeMotorShell_MainScenes";
@@ -223,7 +224,12 @@ public sealed class HamsterMotorShellItemAdapter : MonoBehaviour
         }
 
         if (pickupDropPressed)
+        {
+            if (_playerHub != null && _playerHub.TryConsumePostItPeelInteractThisFrame())
+                return;
+
             TryPickupFromCamera();
+        }
     }
 
     private void LateUpdate()

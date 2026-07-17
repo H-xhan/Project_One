@@ -189,6 +189,15 @@ public class PlayerHub : NetworkBehaviour
     [Tooltip("이 씬들에서는 초기 Owner 스폰 보정 루틴을 건너뜁니다. 인게임 씬은 InGameMatchManager가 배치를 전담하도록 비워두지 않는 것을 권장합니다.")]
     [SerializeField] private string[] skipInitialSpawnScenes = new[] { "InGame" };
 
+    [Header("Post-it Peel")]
+    [SerializeField, Min(0f)] private float postItPeelSelectionDistance = 6f;
+    [SerializeField, Min(0f)] private float postItPeelServerDistance = 2f;
+    [SerializeField, Min(0f)] private float postItPeelBodyRayRadius = 0.2f;
+    [SerializeField, Min(0f)] private float postItPeelVisualRayTolerance = 0.3f;
+    [SerializeField, Range(-1f, 1f)] private float postItPeelAimDirectionMinDot = 0.9f;
+    [SerializeField, Range(-1f, 1f)] private float postItPeelMinForwardDot = 0.25f;
+    [SerializeField, Min(0f)] private float postItPeelCooldown = 0.2f;
+
     [Header("Modules (자동 연결됨)")]
     [Tooltip("플레이어 입력을 읽는 모듈입니다. 비워두면 자식에서 자동 탐색합니다.")]
     [SerializeField] private PlayerInputModule inputModule;
@@ -237,6 +246,12 @@ public class PlayerHub : NetworkBehaviour
     private float _nextMotorShellCameraLogTime;
     private HamsterFullRagdollMotor _motorShellMotor;
     private HamsterMotorShellCombatAdapter _motorShellCombatAdapter;
+    private HamsterMotorShellItemAdapter _motorShellItemAdapter;
+    private HamsterMotorShellSpinDashAdapter _motorShellSpinDashAdapter;
+    private PlayerPostItInventory _postItInventory;
+    private int _postItPeelEvaluatedFrame = -1;
+    private bool _postItPeelConsumedInEvaluatedFrame;
+    private float _nextPostItPeelServerTime;
 
     private bool _attackLockedServer;
     private bool _attackBufferedServer;
@@ -351,6 +366,9 @@ public class PlayerHub : NetworkBehaviour
         if (coinWalletModule == null) coinWalletModule = GetComponentInChildren<PlayerCoinWalletModule>(true);
         if (staminaModule == null) staminaModule = GetComponentInChildren<PlayerStaminaModule>(true);
         if (_motorShellMotor == null) _motorShellMotor = GetComponentInChildren<HamsterFullRagdollMotor>(true);
+        if (_motorShellItemAdapter == null) _motorShellItemAdapter = GetComponentInChildren<HamsterMotorShellItemAdapter>(true);
+        if (_motorShellSpinDashAdapter == null) _motorShellSpinDashAdapter = GetComponentInChildren<HamsterMotorShellSpinDashAdapter>(true);
+        if (_postItInventory == null) _postItInventory = GetComponentInChildren<PlayerPostItInventory>(true);
         ResolveMotorShellCombatAdapter();
         if (gameStateManager == null) gameStateManager = FindFirstObjectByType<GameStateManager>();
         if (_readySystem == null) _readySystem = FindFirstObjectByType<ReadySystem>();
@@ -596,7 +614,16 @@ public class PlayerHub : NetworkBehaviour
             consumedInteractForSpinDash = true;
         }
 
-        if (interactPressed && !consumedInteractForSpinDash && CanInteractNow() && interactModule != null)
+        bool consumedInteractForPostItPeel =
+            interactPressed &&
+            !consumedInteractForSpinDash &&
+            TryConsumePostItPeelInteractThisFrame();
+
+        if (interactPressed &&
+            !consumedInteractForSpinDash &&
+            !consumedInteractForPostItPeel &&
+            CanInteractNow() &&
+            interactModule != null)
         {
             if (!interactModule.HasHeldItem() && !interactModule.IsGrabbingCharacter)
             {
@@ -656,6 +683,496 @@ public class PlayerHub : NetworkBehaviour
             return;
 
         locomotionModule.ServerTryStartSpinDash();
+    }
+
+    public bool TryConsumePostItPeelInteractThisFrame()
+    {
+        int currentFrame = Time.frameCount;
+        if (_postItPeelEvaluatedFrame == currentFrame)
+        {
+            return _postItPeelConsumedInEvaluatedFrame;
+        }
+
+        _postItPeelEvaluatedFrame = currentFrame;
+        _postItPeelConsumedInEvaluatedFrame = TryRequestPostItPeel();
+        return _postItPeelConsumedInEvaluatedFrame;
+    }
+
+    private bool TryRequestPostItPeel()
+    {
+        if (!IsOwner || !IsSpawned || !IsPlayingState() || !CanInteractNow())
+            return false;
+
+        if (IsPostItPeelInputBlocked())
+            return false;
+
+        PlayerPostItInventory requesterInventory = ResolvePostItInventory();
+        if (requesterInventory == null || requesterInventory.IsFull)
+            return false;
+
+        Camera playerCamera = PlayerCamera;
+        if (playerCamera == null || !playerCamera.isActiveAndEnabled)
+            return false;
+
+        Ray ray = playerCamera.ViewportPointToRay(new Vector3(0.5f, 0.5f, 0f));
+        if (!TryFindPostItPeelTarget(
+                ray,
+                out NetworkObjectReference targetReference,
+                out PostItPublicVisualData selectedPostIt))
+        {
+            return false;
+        }
+
+        RequestPostItPeelServerRpc(
+            targetReference,
+            selectedPostIt.PostItId,
+            ray.direction.normalized);
+        return true;
+    }
+
+    private bool IsPostItPeelInputBlocked()
+    {
+        if (interactModule != null &&
+            (interactModule.HasHeldItem() ||
+             interactModule.IsGrabbingCharacter ||
+             interactModule.IsGrabbedByCharacter))
+        {
+            return true;
+        }
+
+        if (_motorShellItemAdapter == null)
+            _motorShellItemAdapter = GetComponentInChildren<HamsterMotorShellItemAdapter>(true);
+
+        if (_motorShellItemAdapter != null && _motorShellItemAdapter.HasHeldItem)
+            return true;
+
+        if (_motorShellSpinDashAdapter == null)
+            _motorShellSpinDashAdapter = GetComponentInChildren<HamsterMotorShellSpinDashAdapter>(true);
+
+        return _motorShellSpinDashAdapter != null && _motorShellSpinDashAdapter.IsDizzyActive;
+    }
+
+    private PlayerPostItInventory ResolvePostItInventory()
+    {
+        if (_postItInventory == null)
+            _postItInventory = GetComponentInChildren<PlayerPostItInventory>(true);
+
+        if (_postItInventory == null)
+            return null;
+
+        NetworkObject inventoryNetworkObject = _postItInventory.GetComponentInParent<NetworkObject>();
+        return inventoryNetworkObject == NetworkObject ? _postItInventory : null;
+    }
+
+    private bool TryFindPostItPeelTarget(
+        Ray ray,
+        out NetworkObjectReference targetReference,
+        out PostItPublicVisualData selectedPostIt)
+    {
+        targetReference = default;
+        selectedPostIt = PostItPublicVisualData.Invalid;
+
+        float selectionDistance = Mathf.Max(0f, postItPeelSelectionDistance);
+        if (selectionDistance <= 0f)
+            return false;
+
+        float rayRadius = Mathf.Max(0f, postItPeelBodyRayRadius);
+        RaycastHit[] hits = rayRadius > 0f
+            ? Physics.SphereCastAll(
+                ray,
+                rayRadius,
+                selectionDistance,
+                Physics.DefaultRaycastLayers,
+                QueryTriggerInteraction.Collide)
+            : Physics.RaycastAll(
+                ray,
+                selectionDistance,
+                Physics.DefaultRaycastLayers,
+                QueryTriggerInteraction.Collide);
+
+        System.Array.Sort(hits, (left, right) => left.distance.CompareTo(right.distance));
+        NetworkObject requesterNetworkObject = NetworkObject;
+
+        for (int i = 0; i < hits.Length; i++)
+        {
+            Collider hitCollider = hits[i].collider;
+            if (hitCollider == null)
+                continue;
+
+            NetworkObject hitNetworkObject = hitCollider.GetComponentInParent<NetworkObject>();
+            if (hitNetworkObject == requesterNetworkObject)
+                continue;
+
+            PlayerHub targetHub = hitCollider.GetComponentInParent<PlayerHub>();
+            if (targetHub != null && targetHub != this)
+            {
+                NetworkObject targetNetworkObject = targetHub.GetComponentInParent<NetworkObject>();
+                if (targetNetworkObject == null ||
+                    !targetNetworkObject.IsSpawned ||
+                    targetNetworkObject == requesterNetworkObject)
+                {
+                    return false;
+                }
+
+                PlayerPostItWorldPresenter presenter =
+                    targetNetworkObject.GetComponent<PlayerPostItWorldPresenter>();
+                if (presenter == null)
+                {
+                    presenter = targetNetworkObject.GetComponentInChildren<PlayerPostItWorldPresenter>(true);
+                }
+
+                if (presenter == null ||
+                    !presenter.TryGetClosestVisiblePostIt(
+                        ray,
+                        selectionDistance,
+                        Mathf.Max(0f, postItPeelVisualRayTolerance),
+                        out selectedPostIt) ||
+                    !presenter.TryGetVisiblePostItWorldPosition(
+                        selectedPostIt.PostItId,
+                        out Vector3 postItWorldPosition) ||
+                    !IsPostItPeelWithinReach(requesterNetworkObject, postItWorldPosition))
+                {
+                    return false;
+                }
+
+                targetReference = targetNetworkObject;
+                return true;
+            }
+
+            if (hitCollider.isTrigger)
+                continue;
+
+            return false;
+        }
+
+        return false;
+    }
+
+    [ServerRpc]
+    private void RequestPostItPeelServerRpc(
+        NetworkObjectReference targetReference,
+        int postItId,
+        Vector3 aimDirection,
+        ServerRpcParams rpcParams = default)
+    {
+        if (rpcParams.Receive.SenderClientId != OwnerClientId)
+            return;
+
+        if (!IsSpawned || !IsPlayingState() || !CanInteractNow() || IsPostItPeelInputBlocked())
+            return;
+
+        float now = Time.unscaledTime;
+        if (now < _nextPostItPeelServerTime)
+            return;
+
+        _nextPostItPeelServerTime = now + Mathf.Max(0f, postItPeelCooldown);
+
+        if (!ServerTryValidatePostItPeelRequest(
+                targetReference,
+                postItId,
+                aimDirection,
+                out PlayerPostItInventory requesterInventory,
+                out PlayerPostItInventory targetInventory))
+        {
+            return;
+        }
+
+        targetInventory.ServerTryTransferPostItTo(
+            requesterInventory,
+            postItId,
+            out _);
+    }
+
+    private bool ServerTryValidatePostItPeelRequest(
+        NetworkObjectReference targetReference,
+        int postItId,
+        Vector3 aimDirection,
+        out PlayerPostItInventory requesterInventory,
+        out PlayerPostItInventory targetInventory)
+    {
+        requesterInventory = null;
+        targetInventory = null;
+
+        NetworkObject requesterNetworkObject = NetworkObject;
+        if (postItId < 0 ||
+            requesterNetworkObject == null ||
+            !requesterNetworkObject.IsSpawned ||
+            !targetReference.TryGet(out NetworkObject targetNetworkObject) ||
+            targetNetworkObject == null ||
+            !targetNetworkObject.IsSpawned ||
+            targetNetworkObject == requesterNetworkObject ||
+            targetNetworkObject.OwnerClientId == OwnerClientId)
+        {
+            return false;
+        }
+
+        PlayerHub targetHub = targetNetworkObject.GetComponent<PlayerHub>();
+        if (targetHub == null || !targetHub.IsSpawned)
+            return false;
+
+        PlayerStatusModule targetStatus = targetHub.statusModule;
+        if (targetStatus == null)
+            targetStatus = targetNetworkObject.GetComponentInChildren<PlayerStatusModule>(true);
+
+        if (targetStatus != null && targetStatus.IsEliminated)
+            return false;
+
+        if (!ServerTryResolvePostItPeelAimRay(aimDirection, out Ray serverAimRay) ||
+            !TryFindPostItPeelTarget(
+                serverAimRay,
+                out NetworkObjectReference serverTargetReference,
+                out PostItPublicVisualData serverSelectedPostIt) ||
+            !serverTargetReference.TryGet(out NetworkObject serverTargetNetworkObject) ||
+            serverTargetNetworkObject != targetNetworkObject ||
+            serverSelectedPostIt.PostItId != postItId)
+        {
+            return false;
+        }
+
+        requesterInventory = ResolvePostItInventory();
+        targetInventory = targetNetworkObject.GetComponent<PlayerPostItInventory>();
+        if (targetInventory == null)
+            targetInventory = targetNetworkObject.GetComponentInChildren<PlayerPostItInventory>(true);
+
+        if (requesterInventory == null ||
+            targetInventory == null ||
+            requesterInventory == targetInventory ||
+            requesterInventory.GetComponentInParent<NetworkObject>() != requesterNetworkObject ||
+            targetInventory.GetComponentInParent<NetworkObject>() != targetNetworkObject ||
+            requesterInventory.IsFull ||
+            requesterInventory.ContainsPostIt(postItId))
+        {
+            return false;
+        }
+
+        if (!targetInventory.TryGetPostIt(postItId, out PostItRuntimeData runtimeData) ||
+            !runtimeData.IsValid ||
+            runtimeData.HolderClientId != targetNetworkObject.OwnerClientId ||
+            !targetInventory.TryGetPublicVisualAtSlot(
+                runtimeData.SlotIndex,
+                out PostItPublicVisualData publicData) ||
+            publicData.PostItId != postItId)
+        {
+            return false;
+        }
+
+        PlayerPostItWorldPresenter targetPresenter =
+            targetNetworkObject.GetComponent<PlayerPostItWorldPresenter>();
+        if (targetPresenter == null)
+            targetPresenter = targetNetworkObject.GetComponentInChildren<PlayerPostItWorldPresenter>(true);
+
+        if (targetPresenter == null ||
+            targetPresenter.BoundInventory != targetInventory ||
+            !targetPresenter.TryGetVisiblePostItWorldPosition(postItId, out Vector3 postItWorldPosition))
+        {
+            return false;
+        }
+
+        return ServerValidatePostItPeelGeometry(
+            requesterNetworkObject,
+            targetNetworkObject,
+            postItWorldPosition,
+            serverAimRay.origin);
+    }
+
+    private bool ServerTryResolvePostItPeelAimRay(
+        Vector3 requestedAimDirection,
+        out Ray aimRay)
+    {
+        aimRay = default;
+
+        if (!IsFiniteVector3(requestedAimDirection) ||
+            requestedAimDirection.sqrMagnitude <= 0.0001f)
+        {
+            return false;
+        }
+
+        Vector3 normalizedAimDirection = requestedAimDirection.normalized;
+        if (Mathf.Abs(normalizedAimDirection.y) > 0.98f ||
+            !TryResolvePostItPeelServerForward(out Vector3 serverPlanarForward))
+        {
+            return false;
+        }
+
+        Vector3 requestedPlanarForward = Vector3.ProjectOnPlane(normalizedAimDirection, Vector3.up);
+        if (requestedPlanarForward.sqrMagnitude <= 0.0001f)
+            return false;
+
+        float aimDirectionDot = Vector3.Dot(
+            requestedPlanarForward.normalized,
+            serverPlanarForward);
+        if (aimDirectionDot < Mathf.Clamp(postItPeelAimDirectionMinDot, -1f, 1f))
+            return false;
+
+        Camera serverCamera = PlayerCamera;
+        if (serverCamera == null || !IsFiniteVector3(serverCamera.transform.position))
+            return false;
+
+        aimRay = new Ray(serverCamera.transform.position, normalizedAimDirection);
+        return true;
+    }
+
+    private bool ServerValidatePostItPeelGeometry(
+        NetworkObject requesterNetworkObject,
+        NetworkObject targetNetworkObject,
+        Vector3 postItWorldPosition,
+        Vector3 visibilityOrigin)
+    {
+        Vector3 origin = ResolvePostItPeelBodyCenter(requesterNetworkObject);
+        Vector3 toPostIt = postItWorldPosition - origin;
+        float maxDistance = Mathf.Max(0f, postItPeelServerDistance);
+        float distanceSqr = toPostIt.sqrMagnitude;
+        if (maxDistance <= 0f ||
+            distanceSqr <= 0.0001f ||
+            distanceSqr > maxDistance * maxDistance)
+        {
+            return false;
+        }
+
+        if (!TryResolvePostItPeelServerForward(out Vector3 planarForward))
+            return false;
+
+        Vector3 planarToPostIt = Vector3.ProjectOnPlane(toPostIt, Vector3.up);
+        if (planarForward.sqrMagnitude > 0.0001f && planarToPostIt.sqrMagnitude > 0.0001f)
+        {
+            float forwardDot = Vector3.Dot(planarForward.normalized, planarToPostIt.normalized);
+            if (forwardDot < Mathf.Clamp(postItPeelMinForwardDot, -1f, 1f))
+                return false;
+        }
+
+        return HasPostItPeelLineOfSight(
+            visibilityOrigin,
+            postItWorldPosition,
+            requesterNetworkObject,
+            targetNetworkObject,
+            Mathf.Max(
+                Mathf.Max(0f, postItPeelVisualRayTolerance),
+                Mathf.Max(0f, postItPeelBodyRayRadius)));
+    }
+
+    private bool IsPostItPeelWithinReach(
+        NetworkObject requesterNetworkObject,
+        Vector3 postItWorldPosition)
+    {
+        if (requesterNetworkObject == null || !IsFiniteVector3(postItWorldPosition))
+            return false;
+
+        float maxDistance = Mathf.Max(0f, postItPeelServerDistance);
+        if (maxDistance <= 0f)
+            return false;
+
+        Vector3 origin = ResolvePostItPeelBodyCenter(requesterNetworkObject);
+        return (postItWorldPosition - origin).sqrMagnitude <= maxDistance * maxDistance;
+    }
+
+    private bool TryResolvePostItPeelServerForward(out Vector3 planarForward)
+    {
+        planarForward = Vector3.zero;
+
+        HamsterFullRagdollMotor motorShellMotor = ResolveMotorShellMotor();
+        if (motorShellMotor != null && motorShellMotor.IsMainScenesInputRouteTarget)
+        {
+            return TryNormalizePostItPeelPlanarDirection(
+                motorShellMotor.CameraPlanarForward,
+                out planarForward);
+        }
+
+        Camera playerCamera = PlayerCamera;
+        if (playerCamera != null &&
+            TryNormalizePostItPeelPlanarDirection(playerCamera.transform.forward, out planarForward))
+        {
+            return true;
+        }
+
+        return TryNormalizePostItPeelPlanarDirection(transform.forward, out planarForward);
+    }
+
+    private static bool TryNormalizePostItPeelPlanarDirection(
+        Vector3 direction,
+        out Vector3 normalizedDirection)
+    {
+        normalizedDirection = Vector3.ProjectOnPlane(direction, Vector3.up);
+        if (!IsFiniteVector3(normalizedDirection) || normalizedDirection.sqrMagnitude <= 0.0001f)
+        {
+            normalizedDirection = Vector3.zero;
+            return false;
+        }
+
+        normalizedDirection.Normalize();
+        return true;
+    }
+
+    private static Vector3 ResolvePostItPeelBodyCenter(NetworkObject playerNetworkObject)
+    {
+        if (playerNetworkObject == null)
+            return Vector3.zero;
+
+        Collider[] colliders = playerNetworkObject.GetComponentsInChildren<Collider>(true);
+        for (int i = 0; i < colliders.Length; i++)
+        {
+            Collider candidate = colliders[i];
+            if (candidate == null ||
+                !candidate.enabled ||
+                !candidate.gameObject.activeInHierarchy ||
+                candidate.gameObject.name != "BodyHurtbox")
+            {
+                continue;
+            }
+
+            return candidate.bounds.center;
+        }
+
+        return playerNetworkObject.transform.position + Vector3.up * 0.4f;
+    }
+
+    private static bool HasPostItPeelLineOfSight(
+        Vector3 origin,
+        Vector3 postItWorldPosition,
+        NetworkObject requesterNetworkObject,
+        NetworkObject targetNetworkObject,
+        float targetEndpointTolerance)
+    {
+        Vector3 toPostIt = postItWorldPosition - origin;
+        float distance = toPostIt.magnitude;
+        if (distance <= 0.0001f)
+            return false;
+
+        RaycastHit[] hits = Physics.RaycastAll(
+            origin,
+            toPostIt / distance,
+            distance,
+            Physics.DefaultRaycastLayers,
+            QueryTriggerInteraction.Collide);
+        System.Array.Sort(hits, (left, right) => left.distance.CompareTo(right.distance));
+
+        for (int i = 0; i < hits.Length; i++)
+        {
+            Collider hitCollider = hits[i].collider;
+            if (hitCollider == null)
+                continue;
+
+            NetworkObject hitNetworkObject = hitCollider.GetComponentInParent<NetworkObject>();
+            if (hitNetworkObject == requesterNetworkObject)
+                continue;
+
+            if (hitNetworkObject == targetNetworkObject)
+            {
+                if (distance - hits[i].distance <= targetEndpointTolerance)
+                    continue;
+
+                return false;
+            }
+
+            if (hitNetworkObject != null)
+                return false;
+
+            if (hitCollider.isTrigger)
+                continue;
+
+            return false;
+        }
+
+        return true;
     }
 
     private void RequestCharacterGrab(PlayerStatusModule targetStatus)

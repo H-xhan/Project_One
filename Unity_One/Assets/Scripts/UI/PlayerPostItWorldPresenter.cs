@@ -135,6 +135,31 @@ public sealed class PlayerPostItWorldPresenter : MonoBehaviour
         return found;
     }
 
+    public bool TryGetVisiblePostItWorldPosition(
+        int postItId,
+        out Vector3 worldPosition)
+    {
+        worldPosition = default;
+
+        for (int i = 0; i < _visualSlots.Length; i++)
+        {
+            VisualSlot slot = _visualSlots[i];
+            if (slot == null ||
+                !slot.HasData ||
+                slot.Data.PostItId != postItId ||
+                slot.Instance == null ||
+                !slot.Instance.activeInHierarchy)
+            {
+                continue;
+            }
+
+            worldPosition = slot.Instance.transform.position;
+            return true;
+        }
+
+        return false;
+    }
+
     private void ResolveReferences()
     {
         if (targetInventory != null)
