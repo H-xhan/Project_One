@@ -44,17 +44,34 @@ public sealed class PlayerPostItWorldPresenter : MonoBehaviour
         public bool HasData;
     }
 
+    private sealed class WorldVisualSlot
+    {
+        public GameObject Instance;
+        public Renderer[] Renderers;
+        public MaterialPropertyBlock PropertyBlock;
+        public PostItWorldDropData Data;
+        public bool HasData;
+    }
+
     private PlayerPostItInventory _boundInventory;
+    private PostItRoundManager _boundRoundManager;
     private Transform[] _resolvedAnchors = Array.Empty<Transform>();
     private VisualSlot[] _visualSlots = Array.Empty<VisualSlot>();
+    private readonly List<WorldVisualSlot> _worldVisualSlots = new List<WorldVisualSlot>();
+    private Transform _worldVisualRoot;
     private bool _poolInitialized;
     private bool _hasWarnedMissingTemplate;
     private int _visibleCount;
+    private int _worldVisibleCount;
     private int _lastOverflowCount = -1;
+    private float _nextWorldManagerResolveTime;
+
+    private const float WorldManagerResolveInterval = 0.5f;
 
     public PlayerPostItInventory BoundInventory => _boundInventory;
     public int AnchorCount => _resolvedAnchors.Length;
     public int VisibleCount => _visibleCount;
+    public int WorldVisibleCount => _worldVisibleCount;
 
     private void Awake()
     {
@@ -66,17 +83,44 @@ public sealed class PlayerPostItWorldPresenter : MonoBehaviour
         ResolveReferences();
         InitializePool();
         BindInventory(targetInventory);
+        TryBindWorldDropManager(true);
     }
 
     private void OnDisable()
     {
+        UnbindWorldDropManager();
+        DestroyWorldDropPool();
         UnbindInventory();
         HideAllVisuals();
+    }
+
+    private void Update()
+    {
+        if (!CanPresentWorldDrops())
+        {
+            if (_boundRoundManager != null || _worldVisualRoot != null)
+            {
+                UnbindWorldDropManager();
+                DestroyWorldDropPool();
+            }
+
+            return;
+        }
+
+        if (_boundRoundManager == null)
+        {
+            HideAllWorldDropVisuals();
+            if (Time.unscaledTime >= _nextWorldManagerResolveTime)
+            {
+                TryBindWorldDropManager(false);
+            }
+        }
     }
 
     public void ForceRefresh()
     {
         RefreshVisuals();
+        RefreshWorldDropVisuals();
     }
 
     public bool TryGetClosestVisiblePostIt(
@@ -224,6 +268,55 @@ public sealed class PlayerPostItWorldPresenter : MonoBehaviour
     private void OnPublicVisualsChanged()
     {
         RefreshVisuals();
+    }
+
+    private bool CanPresentWorldDrops()
+    {
+        return isActiveAndEnabled &&
+               _boundInventory != null &&
+               _boundInventory.IsSpawned &&
+               _boundInventory.IsOwner;
+    }
+
+    private void TryBindWorldDropManager(bool forceResolve)
+    {
+        if (!CanPresentWorldDrops())
+            return;
+
+        if (_boundRoundManager != null)
+        {
+            RefreshWorldDropVisuals();
+            return;
+        }
+
+        if (!forceResolve && Time.unscaledTime < _nextWorldManagerResolveTime)
+            return;
+
+        _nextWorldManagerResolveTime = Time.unscaledTime + WorldManagerResolveInterval;
+        PostItRoundManager manager = FindFirstObjectByType<PostItRoundManager>();
+        if (manager == null)
+            return;
+
+        _boundRoundManager = manager;
+        _boundRoundManager.WorldDropsChanged += OnWorldDropsChanged;
+        RefreshWorldDropVisuals();
+        Log($"Bound world-drop manager. count={_boundRoundManager.WorldDropCount}");
+    }
+
+    private void UnbindWorldDropManager()
+    {
+        if (_boundRoundManager != null)
+        {
+            _boundRoundManager.WorldDropsChanged -= OnWorldDropsChanged;
+        }
+
+        _boundRoundManager = null;
+        HideAllWorldDropVisuals();
+    }
+
+    private void OnWorldDropsChanged()
+    {
+        RefreshWorldDropVisuals();
     }
 
     private void InitializePool()
@@ -381,6 +474,105 @@ public sealed class PlayerPostItWorldPresenter : MonoBehaviour
         Log($"Refreshed visuals. visible={_visibleCount}, public={items.Count}, anchors={_visualSlots.Length}");
     }
 
+    private void RefreshWorldDropVisuals()
+    {
+        HideAllWorldDropVisuals();
+        if (!CanPresentWorldDrops() || _boundRoundManager == null)
+            return;
+
+        IReadOnlyList<PostItWorldDropData> items = _boundRoundManager.WorldDrops;
+        if (!EnsureWorldDropPoolCapacity(items.Count))
+            return;
+
+        for (int i = 0; i < items.Count; i++)
+        {
+            PostItWorldDropData data = items[i];
+            WorldVisualSlot slot = _worldVisualSlots[i];
+            if (!data.IsValid || slot == null || slot.Instance == null)
+                continue;
+
+            slot.Data = data;
+            slot.HasData = true;
+            slot.Instance.transform.SetPositionAndRotation(data.Position, data.Rotation);
+            ApplyVisualProperties(
+                slot.Renderers,
+                slot.PropertyBlock,
+                data.Type,
+                data.VisualId,
+                data.IsOriginalOwnerItem);
+            slot.Instance.SetActive(true);
+            _worldVisibleCount++;
+        }
+
+        Log($"Refreshed world-drop visuals. visible={_worldVisibleCount}, public={items.Count}");
+    }
+
+    private bool EnsureWorldDropPoolCapacity(int requiredCount)
+    {
+        bool hasStalePool = _worldVisualSlots.Count > 0 && _worldVisualRoot == null;
+        for (int i = 0; !hasStalePool && i < _worldVisualSlots.Count; i++)
+        {
+            WorldVisualSlot slot = _worldVisualSlots[i];
+            hasStalePool = slot == null || slot.Instance == null;
+        }
+
+        if (hasStalePool)
+        {
+            DestroyWorldDropPool();
+        }
+
+        if (requiredCount <= _worldVisualSlots.Count)
+            return true;
+
+        if (visualTemplate == null)
+        {
+            WarnMissingTemplate();
+            return false;
+        }
+
+        if (_worldVisualRoot == null)
+        {
+            GameObject rootObject = new GameObject("PostItWorldDrops_Local");
+            _worldVisualRoot = rootObject.transform;
+            _worldVisualRoot.SetPositionAndRotation(Vector3.zero, Quaternion.identity);
+            _worldVisualRoot.localScale = Vector3.one;
+        }
+
+        while (_worldVisualSlots.Count < requiredCount)
+        {
+            int poolIndex = _worldVisualSlots.Count;
+            GameObject instance = Instantiate(visualTemplate, _worldVisualRoot, false);
+            instance.name = $"{visualTemplate.name}_World_{poolIndex}";
+
+            if (HasForbiddenComponents(instance))
+            {
+                LogWarning($"Rejected world visual template with gameplay or network components. poolIndex={poolIndex}");
+                Destroy(instance);
+                return false;
+            }
+
+            Renderer[] renderers = instance.GetComponentsInChildren<Renderer>(true);
+            if (renderers.Length == 0)
+            {
+                LogWarning($"World visual template has no Renderer. poolIndex={poolIndex}");
+                Destroy(instance);
+                return false;
+            }
+
+            instance.SetActive(false);
+            _worldVisualSlots.Add(new WorldVisualSlot
+            {
+                Instance = instance,
+                Renderers = renderers,
+                PropertyBlock = new MaterialPropertyBlock(),
+                Data = PostItWorldDropData.Invalid,
+                HasData = false
+            });
+        }
+
+        return true;
+    }
+
     private void HideAllVisuals()
     {
         _visibleCount = 0;
@@ -402,24 +594,67 @@ public sealed class PlayerPostItWorldPresenter : MonoBehaviour
         }
     }
 
+    private void HideAllWorldDropVisuals()
+    {
+        _worldVisibleCount = 0;
+        for (int i = 0; i < _worldVisualSlots.Count; i++)
+        {
+            WorldVisualSlot slot = _worldVisualSlots[i];
+            if (slot == null)
+                continue;
+
+            slot.Data = PostItWorldDropData.Invalid;
+            slot.HasData = false;
+            if (slot.Instance != null && slot.Instance.activeSelf)
+            {
+                slot.Instance.SetActive(false);
+            }
+        }
+    }
+
+    private void DestroyWorldDropPool()
+    {
+        _worldVisibleCount = 0;
+        _worldVisualSlots.Clear();
+        if (_worldVisualRoot != null)
+        {
+            Destroy(_worldVisualRoot.gameObject);
+            _worldVisualRoot = null;
+        }
+    }
+
     private void ApplyVisualData(VisualSlot slot, PostItPublicVisualData data)
     {
-        Color color = ResolveTypeColor(data.Type);
-        if (!data.IsOriginalOwnerItem)
+        ApplyVisualProperties(
+            slot.Renderers,
+            slot.PropertyBlock,
+            data.Type,
+            data.VisualId,
+            data.IsOriginalOwnerItem);
+    }
+
+    private void ApplyVisualProperties(
+        Renderer[] renderers,
+        MaterialPropertyBlock propertyBlock,
+        PostItType type,
+        int visualId,
+        bool isOriginalOwnerItem)
+    {
+        Color color = ResolveTypeColor(type);
+        if (!isOriginalOwnerItem)
         {
             color = Color.Lerp(color, acquiredTint, acquiredTintStrength);
         }
 
-        MaterialPropertyBlock propertyBlock = slot.PropertyBlock;
         propertyBlock.Clear();
         propertyBlock.SetColor(BaseColorPropertyId, color);
         propertyBlock.SetColor(ColorPropertyId, color);
-        propertyBlock.SetFloat(VisualIdPropertyId, data.VisualId);
-        propertyBlock.SetFloat(TypePropertyId, (int)data.Type);
+        propertyBlock.SetFloat(VisualIdPropertyId, visualId);
+        propertyBlock.SetFloat(TypePropertyId, (int)type);
 
-        for (int i = 0; i < slot.Renderers.Length; i++)
+        for (int i = 0; i < renderers.Length; i++)
         {
-            Renderer renderer = slot.Renderers[i];
+            Renderer renderer = renderers[i];
             if (renderer != null)
             {
                 renderer.SetPropertyBlock(propertyBlock);
