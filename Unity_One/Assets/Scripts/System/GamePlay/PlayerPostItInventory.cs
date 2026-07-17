@@ -9,16 +9,25 @@ public class PlayerPostItInventory : NetworkBehaviour
     [SerializeField] private bool debugLogs = false;
 
     private readonly List<PostItRuntimeData> _postIts = new List<PostItRuntimeData>();
+    private readonly List<PostItPublicVisualData> _publicVisuals = new List<PostItPublicVisualData>();
     private NetworkList<PostItRuntimeData> _networkPostIts;
+    private NetworkList<PostItPublicVisualData> _networkPublicVisuals;
     private bool _hasSubscribedToNetworkPostIts;
+    private bool _hasSubscribedToNetworkPublicVisuals;
 
     public event Action PostItsChanged;
+    public event Action PublicVisualsChanged;
 
     private void Awake()
     {
         _networkPostIts = new NetworkList<PostItRuntimeData>(
             values: null,
             readPerm: NetworkVariableReadPermission.Owner,
+            writePerm: NetworkVariableWritePermission.Server);
+
+        _networkPublicVisuals = new NetworkList<PostItPublicVisualData>(
+            values: null,
+            readPerm: NetworkVariableReadPermission.Everyone,
             writePerm: NetworkVariableWritePermission.Server);
     }
 
@@ -30,6 +39,12 @@ public class PlayerPostItInventory : NetworkBehaviour
         {
             LogWarning("Network post-it storage is unavailable on spawn.");
             return;
+        }
+
+        bool hasPublicNetworkStorage = _networkPublicVisuals != null;
+        if (!hasPublicNetworkStorage)
+        {
+            LogWarning("Public visual network storage is unavailable on spawn.");
         }
 
         if (IsServer && _networkPostIts.Count == 0 && _postIts.Count > 0)
@@ -51,14 +66,35 @@ public class PlayerPostItInventory : NetworkBehaviour
             }
         }
 
+        if (IsServer && hasPublicNetworkStorage)
+        {
+            ReconcileServerPublicVisualsFromPrivate();
+        }
+
         SubscribeToNetworkPostIts();
+        if (hasPublicNetworkStorage)
+        {
+            SubscribeToNetworkPublicVisuals();
+        }
+
         RebuildLocalMirrorFromNetworkList();
+        if (hasPublicNetworkStorage)
+        {
+            RebuildLocalPublicVisualMirror();
+        }
+        else
+        {
+            _publicVisuals.Clear();
+        }
+
         NotifyPostItsChanged();
+        NotifyPublicVisualsChanged();
     }
 
     public override void OnNetworkDespawn()
     {
         UnsubscribeFromNetworkPostIts();
+        UnsubscribeFromNetworkPublicVisuals();
         base.OnNetworkDespawn();
     }
 
@@ -66,6 +102,8 @@ public class PlayerPostItInventory : NetworkBehaviour
     public int Capacity => Mathf.Max(0, maxPostItSlots);
     public bool IsFull => Count >= Capacity;
     public IReadOnlyList<PostItRuntimeData> Items => _postIts;
+    public int PublicVisualCount => _publicVisuals.Count;
+    public IReadOnlyList<PostItPublicVisualData> PublicVisualItems => _publicVisuals;
 
     public PostItRuntimeData[] GetSnapshot()
     {
@@ -112,6 +150,27 @@ public class PlayerPostItInventory : NetworkBehaviour
         }
 
         data = PostItRuntimeData.Invalid;
+        return false;
+    }
+
+    public bool TryGetPublicVisualAtSlot(int slotIndex, out PostItPublicVisualData data)
+    {
+        if (slotIndex < 0)
+        {
+            data = PostItPublicVisualData.Invalid;
+            return false;
+        }
+
+        for (int i = 0; i < _publicVisuals.Count; i++)
+        {
+            if (_publicVisuals[i].SlotIndex == slotIndex)
+            {
+                data = _publicVisuals[i];
+                return true;
+            }
+        }
+
+        data = PostItPublicVisualData.Invalid;
         return false;
     }
 
@@ -312,9 +371,37 @@ public class PlayerPostItInventory : NetworkBehaviour
         _hasSubscribedToNetworkPostIts = false;
     }
 
+    private void SubscribeToNetworkPublicVisuals()
+    {
+        if (_networkPublicVisuals == null || _hasSubscribedToNetworkPublicVisuals)
+        {
+            return;
+        }
+
+        _networkPublicVisuals.OnListChanged += OnNetworkPublicVisualsChanged;
+        _hasSubscribedToNetworkPublicVisuals = true;
+    }
+
+    private void UnsubscribeFromNetworkPublicVisuals()
+    {
+        if (_networkPublicVisuals == null || !_hasSubscribedToNetworkPublicVisuals)
+        {
+            return;
+        }
+
+        _networkPublicVisuals.OnListChanged -= OnNetworkPublicVisualsChanged;
+        _hasSubscribedToNetworkPublicVisuals = false;
+    }
+
     private void OnNetworkPostItsChanged(NetworkListEvent<PostItRuntimeData> changeEvent)
     {
         RebuildLocalMirrorFromNetworkList();
+
+        if (IsServer)
+        {
+            ProjectNetworkPostItChangeToPublicVisuals(changeEvent);
+        }
+
         NotifyPostItsChanged();
 
         if (debugLogs)
@@ -322,6 +409,21 @@ public class PlayerPostItInventory : NetworkBehaviour
             Debug.Log(
                 $"[{nameof(PlayerPostItInventory)}] Network list changed. " +
                 $"type={changeEvent.Type}, index={changeEvent.Index}, count={_postIts.Count}",
+                this);
+        }
+    }
+
+    private void OnNetworkPublicVisualsChanged(
+        NetworkListEvent<PostItPublicVisualData> changeEvent)
+    {
+        RebuildLocalPublicVisualMirror();
+        NotifyPublicVisualsChanged();
+
+        if (debugLogs)
+        {
+            Debug.Log(
+                $"[{nameof(PlayerPostItInventory)}] Public visual list changed. " +
+                $"type={changeEvent.Type}, index={changeEvent.Index}, count={_publicVisuals.Count}",
                 this);
         }
     }
@@ -341,9 +443,282 @@ public class PlayerPostItInventory : NetworkBehaviour
         }
     }
 
+    private void RebuildLocalPublicVisualMirror()
+    {
+        _publicVisuals.Clear();
+
+        if (_networkPublicVisuals == null)
+        {
+            return;
+        }
+
+        for (int i = 0; i < _networkPublicVisuals.Count; i++)
+        {
+            _publicVisuals.Add(_networkPublicVisuals[i]);
+        }
+    }
+
+    private void RebuildLocalPublicVisualsFromPrivateMirrorAndNotify()
+    {
+        _publicVisuals.Clear();
+
+        for (int i = 0; i < _postIts.Count; i++)
+        {
+            _publicVisuals.Add(CreatePublicVisualData(_postIts[i]));
+        }
+
+        NotifyPublicVisualsChanged();
+    }
+
     private void NotifyPostItsChanged()
     {
         PostItsChanged?.Invoke();
+    }
+
+    private void NotifyPublicVisualsChanged()
+    {
+        PublicVisualsChanged?.Invoke();
+    }
+
+    private void ProjectNetworkPostItChangeToPublicVisuals(
+        NetworkListEvent<PostItRuntimeData> changeEvent)
+    {
+        if (!IsServer || _networkPostIts == null || _networkPublicVisuals == null)
+        {
+            return;
+        }
+
+        if (TryApplyServerPublicVisualDelta(changeEvent) &&
+            PublicProjectionMatchesPrivate())
+        {
+            return;
+        }
+
+        if (debugLogs)
+        {
+            Debug.LogWarning(
+                $"[{nameof(PlayerPostItInventory)}] Public visual projection mismatch. " +
+                $"type={changeEvent.Type}, index={changeEvent.Index}",
+                this);
+        }
+
+        ReconcileServerPublicVisualsFromPrivate();
+    }
+
+    private bool TryApplyServerPublicVisualDelta(
+        NetworkListEvent<PostItRuntimeData> changeEvent)
+    {
+        switch (changeEvent.Type)
+        {
+            case NetworkListEvent<PostItRuntimeData>.EventType.Add:
+            {
+                int index = changeEvent.Index;
+                if (index < 0 ||
+                    index >= _networkPostIts.Count ||
+                    _networkPublicVisuals.Count + 1 != _networkPostIts.Count ||
+                    index != _networkPublicVisuals.Count)
+                {
+                    return false;
+                }
+
+                PostItRuntimeData privateData = _networkPostIts[index];
+                if (privateData.PostItId != changeEvent.Value.PostItId)
+                {
+                    return false;
+                }
+
+                _networkPublicVisuals.Add(CreatePublicVisualData(privateData));
+                return true;
+            }
+
+            case NetworkListEvent<PostItRuntimeData>.EventType.Insert:
+            {
+                int index = changeEvent.Index;
+                if (index < 0 ||
+                    index >= _networkPostIts.Count ||
+                    index > _networkPublicVisuals.Count ||
+                    _networkPublicVisuals.Count + 1 != _networkPostIts.Count)
+                {
+                    return false;
+                }
+
+                PostItRuntimeData privateData = _networkPostIts[index];
+                if (privateData.PostItId != changeEvent.Value.PostItId)
+                {
+                    return false;
+                }
+
+                _networkPublicVisuals.Insert(index, CreatePublicVisualData(privateData));
+                return true;
+            }
+
+            case NetworkListEvent<PostItRuntimeData>.EventType.Remove:
+            {
+                if (_networkPublicVisuals.Count != _networkPostIts.Count + 1)
+                {
+                    return false;
+                }
+
+                int publicIndex = FindNetworkPublicVisualIndex(changeEvent.Value.PostItId);
+                if (publicIndex < 0 ||
+                    !_networkPublicVisuals[publicIndex].Equals(
+                        CreatePublicVisualData(changeEvent.Value)))
+                {
+                    return false;
+                }
+
+                _networkPublicVisuals.RemoveAt(publicIndex);
+                return true;
+            }
+
+            case NetworkListEvent<PostItRuntimeData>.EventType.RemoveAt:
+            {
+                int index = changeEvent.Index;
+                if (index < 0 ||
+                    index >= _networkPublicVisuals.Count ||
+                    _networkPublicVisuals.Count != _networkPostIts.Count + 1)
+                {
+                    return false;
+                }
+
+                PostItPublicVisualData removedPublicData =
+                    CreatePublicVisualData(changeEvent.Value);
+                if (_networkPublicVisuals[index].PostItId != removedPublicData.PostItId ||
+                    !_networkPublicVisuals[index].Equals(removedPublicData))
+                {
+                    return false;
+                }
+
+                _networkPublicVisuals.RemoveAt(index);
+                return true;
+            }
+
+            case NetworkListEvent<PostItRuntimeData>.EventType.Value:
+            {
+                int index = changeEvent.Index;
+                if (index < 0 ||
+                    index >= _networkPostIts.Count ||
+                    index >= _networkPublicVisuals.Count ||
+                    _networkPublicVisuals.Count != _networkPostIts.Count)
+                {
+                    return false;
+                }
+
+                PostItRuntimeData privateData = _networkPostIts[index];
+                PostItPublicVisualData previousPublicData =
+                    CreatePublicVisualData(changeEvent.PreviousValue);
+                if (!privateData.Equals(changeEvent.Value) ||
+                    privateData.PostItId != changeEvent.PreviousValue.PostItId ||
+                    _networkPublicVisuals[index].PostItId != privateData.PostItId ||
+                    !_networkPublicVisuals[index].Equals(previousPublicData))
+                {
+                    return false;
+                }
+
+                PostItPublicVisualData projectedData = CreatePublicVisualData(privateData);
+                if (!_networkPublicVisuals[index].Equals(projectedData))
+                {
+                    _networkPublicVisuals[index] = projectedData;
+                }
+
+                return true;
+            }
+
+            case NetworkListEvent<PostItRuntimeData>.EventType.Clear:
+            {
+                if (_networkPostIts.Count != 0)
+                {
+                    return false;
+                }
+
+                if (_networkPublicVisuals.Count > 0)
+                {
+                    _networkPublicVisuals.Clear();
+                }
+
+                return true;
+            }
+
+            default:
+                return false;
+        }
+    }
+
+    private void ReconcileServerPublicVisualsFromPrivate()
+    {
+        if (!IsServer ||
+            !IsSpawnedNetworkSession() ||
+            _networkPostIts == null ||
+            _networkPublicVisuals == null ||
+            PublicProjectionMatchesPrivate())
+        {
+            return;
+        }
+
+        if (_networkPublicVisuals.Count > 0)
+        {
+            _networkPublicVisuals.Clear();
+        }
+
+        for (int i = 0; i < _networkPostIts.Count; i++)
+        {
+            _networkPublicVisuals.Add(CreatePublicVisualData(_networkPostIts[i]));
+        }
+
+        if (!PublicProjectionMatchesPrivate())
+        {
+            LogWarning("Failed to reconcile public visual state from private inventory.");
+        }
+    }
+
+    private bool PublicProjectionMatchesPrivate()
+    {
+        if (_networkPostIts == null ||
+            _networkPublicVisuals == null ||
+            _networkPostIts.Count != _networkPublicVisuals.Count)
+        {
+            return false;
+        }
+
+        for (int i = 0; i < _networkPostIts.Count; i++)
+        {
+            PostItPublicVisualData projectedData =
+                CreatePublicVisualData(_networkPostIts[i]);
+            if (!_networkPublicVisuals[i].Equals(projectedData))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private int FindNetworkPublicVisualIndex(int postItId)
+    {
+        if (_networkPublicVisuals == null)
+        {
+            return -1;
+        }
+
+        for (int i = 0; i < _networkPublicVisuals.Count; i++)
+        {
+            if (_networkPublicVisuals[i].PostItId == postItId)
+            {
+                return i;
+            }
+        }
+
+        return -1;
+    }
+
+    private static PostItPublicVisualData CreatePublicVisualData(PostItRuntimeData data)
+    {
+        return new PostItPublicVisualData(
+            data.PostItId,
+            data.SlotIndex,
+            data.Type,
+            data.VisualId,
+            data.OriginalOwnerClientId == data.HolderClientId);
     }
 
     private bool ClearAuthoritativeStorage()
@@ -378,6 +753,7 @@ public class PlayerPostItInventory : NetworkBehaviour
 
         _postIts.Clear();
         NotifyPostItsChanged();
+        RebuildLocalPublicVisualsFromPrivateMirrorAndNotify();
         return true;
     }
 
@@ -406,6 +782,7 @@ public class PlayerPostItInventory : NetworkBehaviour
 
         _postIts.Add(data);
         NotifyPostItsChanged();
+        RebuildLocalPublicVisualsFromPrivateMirrorAndNotify();
         return true;
     }
 
@@ -453,6 +830,7 @@ public class PlayerPostItInventory : NetworkBehaviour
 
         _postIts.RemoveAt(index);
         NotifyPostItsChanged();
+        RebuildLocalPublicVisualsFromPrivateMirrorAndNotify();
         return true;
     }
 
