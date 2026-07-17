@@ -23,6 +23,7 @@ GameObject:
   - component: {fileID: 6100000000000000108}
   - component: {fileID: 6100000000000000110}
   - component: {fileID: 6100000000000000111}
+  - component: {fileID: 6100000000000000112}
   m_Layer: 6
   m_Name: Hamster_JointFreeMotorShell_MainScenes
   m_TagString: Player
@@ -720,6 +721,60 @@ MonoBehaviour:
       Synchronize: 1
       ParameterType: 1
   AnimatorParametersExpanded: 0
+--- !u!114 &6100000000000000112
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 692270962315936511}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 9d607c30de1344d0895d812f472a0a16, type: 3}
+  m_Name:
+  m_EditorClassIdentifier:
+  targetInventory: {fileID: 6100000000000000110}
+  visualTemplate: {fileID: 718040633378108544, guid: c24898cd03f344efbe037c34f58bea68, type: 3}
+  anchors: []
+  animatedModelRoot: {fileID: 6061055755674054613}
+  runtimeAnchors:
+  - Name: UpperBack
+    BonePath: "\uBCF8/root/hips/spine/chest"
+    LocalPosition: {x: 0.0019, y: 0, z: 0}
+    LocalEulerAngles: {x: 0, y: -90, z: 0}
+    LocalScale: {x: 0.01, y: 0.01, z: 0.01}
+  - Name: LowerBack
+    BonePath: "\uBCF8/root/hips/spine"
+    LocalPosition: {x: 0.0019, y: 0, z: 0}
+    LocalEulerAngles: {x: 0, y: -90, z: 0}
+    LocalScale: {x: 0.01, y: 0.01, z: 0.01}
+  - Name: Chest
+    BonePath: "\uBCF8/root/hips/spine/chest"
+    LocalPosition: {x: -0.0019, y: 0, z: 0}
+    LocalEulerAngles: {x: 0, y: 90, z: 0}
+    LocalScale: {x: 0.01, y: 0.01, z: 0.01}
+  - Name: HeadBack
+    BonePath: "\uBCF8/root/hips/spine/chest/neck/head"
+    LocalPosition: {x: 0.0016, y: 0, z: 0}
+    LocalEulerAngles: {x: 0, y: -90, z: 0}
+    LocalScale: {x: 0.01, y: 0.01, z: 0.01}
+  - Name: LeftSide
+    BonePath: "\uBCF8/root/hips/spine/chest"
+    LocalPosition: {x: 0, y: -0.0008, z: -0.0024}
+    LocalEulerAngles: {x: 0, y: 0, z: 0}
+    LocalScale: {x: 0.01, y: 0.01, z: 0.01}
+  - Name: RightSide
+    BonePath: "\uBCF8/root/hips/spine/chest"
+    LocalPosition: {x: 0, y: -0.0008, z: 0.0024}
+    LocalEulerAngles: {x: 0, y: 180, z: 0}
+    LocalScale: {x: 0.01, y: 0.01, z: 0.01}
+  drawingColor: {r: 1, g: 0.78, b: 0.18, a: 1}
+  messageColor: {r: 0.34, g: 0.72, b: 1, a: 1}
+  bonusColor: {r: 0.38, g: 0.82, b: 0.42, a: 1}
+  penaltyColor: {r: 1, g: 0.32, b: 0.28, a: 1}
+  acquiredTint: {r: 1, g: 0.46, b: 0.12, a: 1}
+  acquiredTintStrength: 0.35
+  debugLogs: 0
 --- !u!1 &1594514674284813732
 GameObject:
   m_ObjectHideFlags: 0
