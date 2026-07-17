@@ -10,6 +10,7 @@ public class PlayerHub : NetworkBehaviour
     private const float InputRouteLogInterval = 0.5f;
     private const string RuntimeMainCameraTag = "MainCamera";
     private const string SceneMainCameraName = "Main Camera";
+    private const float PostItWorldRecoveryEndpointGroundMinUpDot = 0.35f;
 
     [Header("Refs")]
     [Tooltip("로컬 소유자만 활성화할 카메라 루트")]
@@ -249,6 +250,7 @@ public class PlayerHub : NetworkBehaviour
     private HamsterMotorShellItemAdapter _motorShellItemAdapter;
     private HamsterMotorShellSpinDashAdapter _motorShellSpinDashAdapter;
     private PlayerPostItInventory _postItInventory;
+    private PostItRoundManager _postItRoundManager;
     private int _postItPeelEvaluatedFrame = -1;
     private bool _postItPeelConsumedInEvaluatedFrame;
     private float _nextPostItPeelServerTime;
@@ -694,7 +696,8 @@ public class PlayerHub : NetworkBehaviour
         }
 
         _postItPeelEvaluatedFrame = currentFrame;
-        _postItPeelConsumedInEvaluatedFrame = TryRequestPostItPeel();
+        _postItPeelConsumedInEvaluatedFrame =
+            TryRequestPostItPeel() || TryRequestDroppedPostItRecovery();
         return _postItPeelConsumedInEvaluatedFrame;
     }
 
@@ -726,6 +729,45 @@ public class PlayerHub : NetworkBehaviour
         RequestPostItPeelServerRpc(
             targetReference,
             selectedPostIt.PostItId,
+            ray.direction.normalized);
+        return true;
+    }
+
+    private bool TryRequestDroppedPostItRecovery()
+    {
+        if (!IsOwner || !IsSpawned || !IsPlayingState() || !CanInteractNow())
+            return false;
+
+        if (IsPostItPeelInputBlocked())
+            return false;
+
+        PlayerPostItInventory requesterInventory = ResolvePostItInventory();
+        PostItRoundManager roundManager = ResolvePostItRoundManager();
+        if (requesterInventory == null || requesterInventory.IsFull || roundManager == null)
+            return false;
+
+        Camera playerCamera = PlayerCamera;
+        if (playerCamera == null || !playerCamera.isActiveAndEnabled)
+            return false;
+
+        Ray ray = playerCamera.ViewportPointToRay(new Vector3(0.5f, 0.5f, 0f));
+        if (!roundManager.TryGetClosestWorldDrop(
+                ray,
+                Mathf.Max(0f, postItPeelSelectionDistance),
+                Mathf.Max(0f, postItPeelVisualRayTolerance),
+                out PostItWorldDropData selectedDrop) ||
+            !IsPostItPeelWithinReach(NetworkObject, selectedDrop.Position) ||
+            !HasPostItWorldRecoveryLineOfSight(
+                ray.origin,
+                selectedDrop.Position,
+                NetworkObject,
+                Mathf.Max(0f, postItPeelVisualRayTolerance)))
+        {
+            return false;
+        }
+
+        RequestPostItWorldRecoveryServerRpc(
+            selectedDrop.PostItId,
             ray.direction.normalized);
         return true;
     }
@@ -762,6 +804,14 @@ public class PlayerHub : NetworkBehaviour
 
         NetworkObject inventoryNetworkObject = _postItInventory.GetComponentInParent<NetworkObject>();
         return inventoryNetworkObject == NetworkObject ? _postItInventory : null;
+    }
+
+    private PostItRoundManager ResolvePostItRoundManager()
+    {
+        if (_postItRoundManager == null)
+            _postItRoundManager = FindFirstObjectByType<PostItRoundManager>();
+
+        return _postItRoundManager;
     }
 
     private bool TryFindPostItPeelTarget(
@@ -1168,6 +1218,186 @@ public class PlayerHub : NetworkBehaviour
 
             if (hitCollider.isTrigger)
                 continue;
+
+            return false;
+        }
+
+        return true;
+    }
+
+    [ServerRpc]
+    private void RequestPostItWorldRecoveryServerRpc(
+        int postItId,
+        Vector3 aimDirection,
+        ServerRpcParams rpcParams = default)
+    {
+        if (rpcParams.Receive.SenderClientId != OwnerClientId)
+            return;
+
+        if (!IsSpawned || !IsPlayingState() || !CanInteractNow() || IsPostItPeelInputBlocked())
+            return;
+
+        float now = Time.unscaledTime;
+        if (now < _nextPostItPeelServerTime)
+            return;
+
+        _nextPostItPeelServerTime = now + Mathf.Max(0f, postItPeelCooldown);
+        if (!ServerTryValidatePostItWorldRecoveryRequest(
+                postItId,
+                aimDirection,
+                out PlayerPostItInventory requesterInventory,
+                out PostItRoundManager roundManager))
+        {
+            return;
+        }
+
+        roundManager.ServerTryRecoverWorldDrop(requesterInventory, postItId, out _);
+    }
+
+    private bool ServerTryValidatePostItWorldRecoveryRequest(
+        int postItId,
+        Vector3 aimDirection,
+        out PlayerPostItInventory requesterInventory,
+        out PostItRoundManager roundManager)
+    {
+        requesterInventory = null;
+        roundManager = null;
+
+        NetworkObject requesterNetworkObject = NetworkObject;
+        if (postItId < 0 ||
+            requesterNetworkObject == null ||
+            !requesterNetworkObject.IsSpawned ||
+            !ServerTryResolvePostItPeelAimRay(aimDirection, out Ray serverAimRay))
+        {
+            return false;
+        }
+
+        roundManager = ResolvePostItRoundManager();
+        if (roundManager == null ||
+            !roundManager.IsSpawned ||
+            !roundManager.IsServer ||
+            !roundManager.TryGetWorldDrop(postItId, out PostItWorldDropData worldDrop) ||
+            !roundManager.TryGetClosestWorldDrop(
+                serverAimRay,
+                Mathf.Max(0f, postItPeelSelectionDistance),
+                Mathf.Max(0f, postItPeelVisualRayTolerance),
+                out PostItWorldDropData selectedDrop) ||
+            selectedDrop.PostItId != postItId)
+        {
+            roundManager = null;
+            return false;
+        }
+
+        requesterInventory = ResolvePostItInventory();
+        if (requesterInventory == null ||
+            !requesterInventory.IsSpawned ||
+            !requesterInventory.IsServer ||
+            requesterInventory.GetComponentInParent<NetworkObject>() != requesterNetworkObject ||
+            requesterInventory.IsFull ||
+            requesterInventory.ContainsPostIt(postItId))
+        {
+            requesterInventory = null;
+            roundManager = null;
+            return false;
+        }
+
+        if (!ServerValidatePostItWorldRecoveryGeometry(
+                requesterNetworkObject,
+                worldDrop.Position,
+                serverAimRay.origin))
+        {
+            requesterInventory = null;
+            roundManager = null;
+            return false;
+        }
+
+        return true;
+    }
+
+    private bool ServerValidatePostItWorldRecoveryGeometry(
+        NetworkObject requesterNetworkObject,
+        Vector3 postItWorldPosition,
+        Vector3 visibilityOrigin)
+    {
+        if (requesterNetworkObject == null ||
+            !IsFiniteVector3(postItWorldPosition) ||
+            !IsFiniteVector3(visibilityOrigin))
+        {
+            return false;
+        }
+
+        Vector3 origin = ResolvePostItPeelBodyCenter(requesterNetworkObject);
+        Vector3 toPostIt = postItWorldPosition - origin;
+        float maxDistance = Mathf.Max(0f, postItPeelServerDistance);
+        float distanceSqr = toPostIt.sqrMagnitude;
+        if (maxDistance <= 0f ||
+            distanceSqr <= 0.0001f ||
+            distanceSqr > maxDistance * maxDistance)
+        {
+            return false;
+        }
+
+        if (!TryResolvePostItPeelServerForward(out Vector3 planarForward))
+            return false;
+
+        Vector3 planarToPostIt = Vector3.ProjectOnPlane(toPostIt, Vector3.up);
+        if (planarForward.sqrMagnitude > 0.0001f && planarToPostIt.sqrMagnitude > 0.0001f)
+        {
+            float forwardDot = Vector3.Dot(planarForward.normalized, planarToPostIt.normalized);
+            if (forwardDot < Mathf.Clamp(postItPeelMinForwardDot, -1f, 1f))
+                return false;
+        }
+
+        return HasPostItWorldRecoveryLineOfSight(
+            visibilityOrigin,
+            postItWorldPosition,
+            requesterNetworkObject,
+            Mathf.Max(0f, postItPeelVisualRayTolerance));
+    }
+
+    private static bool HasPostItWorldRecoveryLineOfSight(
+        Vector3 origin,
+        Vector3 postItWorldPosition,
+        NetworkObject requesterNetworkObject,
+        float targetEndpointTolerance)
+    {
+        Vector3 toPostIt = postItWorldPosition - origin;
+        float distance = toPostIt.magnitude;
+        if (distance <= 0.0001f)
+            return false;
+
+        RaycastHit[] hits = Physics.RaycastAll(
+            origin,
+            toPostIt / distance,
+            distance,
+            Physics.DefaultRaycastLayers,
+            QueryTriggerInteraction.Collide);
+        System.Array.Sort(hits, (left, right) => left.distance.CompareTo(right.distance));
+
+        for (int i = 0; i < hits.Length; i++)
+        {
+            Collider hitCollider = hits[i].collider;
+            if (hitCollider == null)
+                continue;
+
+            NetworkObject hitNetworkObject = hitCollider.GetComponentInParent<NetworkObject>();
+            if (hitNetworkObject == requesterNetworkObject)
+                continue;
+
+            if (hitNetworkObject != null)
+                return false;
+
+            if (hitCollider.isTrigger)
+                continue;
+
+            if (distance - hits[i].distance <= targetEndpointTolerance &&
+                IsFiniteVector3(hits[i].normal) &&
+                hits[i].normal.sqrMagnitude > 0.0001f &&
+                Vector3.Dot(hits[i].normal.normalized, Vector3.up) >=
+                    PostItWorldRecoveryEndpointGroundMinUpDot)
+            {
+                continue;
+            }
 
             return false;
         }
