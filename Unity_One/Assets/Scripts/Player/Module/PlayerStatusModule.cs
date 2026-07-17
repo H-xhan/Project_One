@@ -263,6 +263,7 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
     private bool isKnocked;
     private bool isStandingUp;
     private bool isEliminated;
+    private bool _hasHandledPostItDropForCurrentFallTransition;
     private float knockTimer;
     private float nextHitReactionAt;
     private float standUpTimer;
@@ -289,6 +290,8 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
     private int backStandUpStateHash;
     private PlayerHub playerHub;
     private InGameMatchManager inGameMatchManager;
+    private PlayerPostItInventory postItInventory;
+    private PostItRoundManager postItRoundManager;
     private CoinSpawnManager coinSpawnManager;
     private GameStateManager gameStateManager;
     private float nextGameStateManagerLookupAt;
@@ -856,6 +859,12 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
             if (eliminationCheckY < rootY)
                 Log($"[PlayerStatus] Elimination triggered by ragdoll focus. rootY:{rootY:0.###}, checkY:{eliminationCheckY:0.###}, eliminationY:{eliminationY:0.###}");
 
+            Vector3 authoritativeFallPosition = ResolveAuthoritativeFallPosition(
+                checkTf,
+                rootY,
+                eliminationCheckY);
+            ServerHandlePostItFallDrop(authoritativeFallPosition);
+
             if (TryHandleCoinFallRespawn())
                 return;
 
@@ -1063,6 +1072,85 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
         return inGameMatchManager;
     }
 
+    private PlayerPostItInventory ResolvePostItInventory()
+    {
+        if (postItInventory != null)
+            return postItInventory;
+
+        PlayerHub ownerHub = ResolvePlayerHub();
+        if (ownerHub != null)
+        {
+            postItInventory = ownerHub.GetComponent<PlayerPostItInventory>();
+            if (postItInventory == null)
+                postItInventory = ownerHub.GetComponentInChildren<PlayerPostItInventory>(true);
+        }
+
+        if (postItInventory == null)
+            postItInventory = GetComponentInParent<PlayerPostItInventory>();
+
+        return postItInventory;
+    }
+
+    private PostItRoundManager ResolvePostItRoundManager()
+    {
+        if (postItRoundManager == null)
+            postItRoundManager = FindFirstObjectByType<PostItRoundManager>();
+
+        return postItRoundManager;
+    }
+
+    private Vector3 ResolveAuthoritativeFallPosition(
+        Transform checkTf,
+        float rootY,
+        float eliminationCheckY)
+    {
+        Vector3 rootPosition = checkTf != null ? checkTf.position : transform.position;
+        if (eliminationCheckY < rootY &&
+            TryGetRecentRagdollFocusForRootSync(out Vector3 focusPosition) &&
+            IsFiniteVector(focusPosition))
+        {
+            return focusPosition;
+        }
+
+        return rootPosition;
+    }
+
+    private void ServerHandlePostItFallDrop(Vector3 authoritativeFallPosition)
+    {
+        if (!IsServer || _hasHandledPostItDropForCurrentFallTransition)
+            return;
+
+        _hasHandledPostItDropForCurrentFallTransition = true;
+        if (!IsFiniteVector(authoritativeFallPosition))
+            return;
+
+        PlayerPostItInventory inventory = ResolvePostItInventory();
+        PostItRoundManager roundManager = ResolvePostItRoundManager();
+        PlayerHub ownerHub = ResolvePlayerHub();
+        InGameMatchManager matchManager = ResolveInGameMatchManager();
+        if (inventory == null || roundManager == null || ownerHub == null || matchManager == null)
+            return;
+
+        bool hasFallbackPosition = matchManager.ServerTryResolveGameSpawnPose(
+            ownerHub,
+            out Vector3 fallbackPosition,
+            out _);
+
+        try
+        {
+            roundManager.ServerTryDropHighestAcquiredPostIt(
+                inventory,
+                authoritativeFallPosition,
+                hasFallbackPosition,
+                fallbackPosition,
+                out _);
+        }
+        catch (System.Exception exception)
+        {
+            Debug.LogException(exception, this);
+        }
+    }
+
     private CoinSpawnManager ResolveCoinSpawnManager()
     {
         if (coinSpawnManager == null)
@@ -1239,6 +1327,13 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
             lastLoggedGameState = currentState;
             hasLoggedEliminationGateState = true;
             Log("[PlayerStatus] Elimination allowed. GameState is Playing.");
+        }
+
+        if (hasReachedSafePlayingPosition &&
+            _hasHandledPostItDropForCurrentFallTransition &&
+            GetEliminationCheckY(checkTf.position.y) >= eliminationY)
+        {
+            _hasHandledPostItDropForCurrentFallTransition = false;
         }
 
         if (!hasReachedSafePlayingPosition)
