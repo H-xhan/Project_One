@@ -1,5 +1,6 @@
 using System;
 using Unity.Netcode;
+using UnityEngine;
 
 [Serializable]
 public enum PostItType
@@ -178,6 +179,85 @@ public struct PostItPublicVisualData :
             hash = hash * 31 + (int)Type;
             hash = hash * 31 + VisualId;
             hash = hash * 31 + IsOriginalOwnerItem.GetHashCode();
+            return hash;
+        }
+    }
+}
+
+[Serializable]
+public struct PostItWorldDropData :
+    INetworkSerializable,
+    IEquatable<PostItWorldDropData>
+{
+    public int PostItId;
+    public PostItType Type;
+    public int VisualId;
+    public bool IsOriginalOwnerItem;
+    public Vector3 Position;
+    public Quaternion Rotation;
+
+    public bool IsValid => PostItId >= 0 && Type != PostItType.None;
+
+    public static PostItWorldDropData Invalid => new PostItWorldDropData(
+        -1,
+        PostItType.None,
+        0,
+        false,
+        Vector3.zero,
+        Quaternion.identity);
+
+    public PostItWorldDropData(
+        int postItId,
+        PostItType type,
+        int visualId,
+        bool isOriginalOwnerItem,
+        Vector3 position,
+        Quaternion rotation)
+    {
+        PostItId = postItId;
+        Type = type;
+        VisualId = visualId;
+        IsOriginalOwnerItem = isOriginalOwnerItem;
+        Position = position;
+        Rotation = rotation;
+    }
+
+    public void NetworkSerialize<T>(BufferSerializer<T> serializer) where T : IReaderWriter
+    {
+        serializer.SerializeValue(ref PostItId);
+        serializer.SerializeValue(ref Type);
+        serializer.SerializeValue(ref VisualId);
+        serializer.SerializeValue(ref IsOriginalOwnerItem);
+        serializer.SerializeValue(ref Position);
+        serializer.SerializeValue(ref Rotation);
+    }
+
+    public bool Equals(PostItWorldDropData other)
+    {
+        return PostItId == other.PostItId &&
+               Type == other.Type &&
+               VisualId == other.VisualId &&
+               IsOriginalOwnerItem == other.IsOriginalOwnerItem &&
+               Position.Equals(other.Position) &&
+               Rotation.Equals(other.Rotation);
+    }
+
+    public override bool Equals(object obj)
+    {
+        return obj is PostItWorldDropData other && Equals(other);
+    }
+
+    public override int GetHashCode()
+    {
+        unchecked
+        {
+            int hash = 17;
+            hash = hash * 31 + PostItId;
+            hash = hash * 31 + (int)Type;
+            hash = hash * 31 + VisualId;
+            hash = hash * 31 + IsOriginalOwnerItem.GetHashCode();
+            hash = hash * 31 + Position.GetHashCode();
+            hash = hash * 31 + Rotation.GetHashCode();
             return hash;
         }
     }
