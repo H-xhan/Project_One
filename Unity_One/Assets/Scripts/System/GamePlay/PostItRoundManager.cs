@@ -54,11 +54,14 @@ public class PostItRoundManager : NetworkBehaviour
         new Dictionary<ulong, PostItGuessPlayerScoreData>();
     private readonly Dictionary<ulong, ulong> _serverParticipantPlayerObjectIds =
         new Dictionary<ulong, ulong>();
+    private readonly HashSet<ulong> _serverDisconnectedGuessOwners =
+        new HashSet<ulong>();
     private int _roundRevision = -1;
     private int _guessRevision = -1;
     private double _guessDeadlineServerTime;
     private bool _guessSubmissionOpen;
     private int _finalizedGuessRevision = -1;
+    private bool _guessMutationInProgress;
 
     public event Action WorldDropsChanged;
     public event Action GuessScoresChanged;
@@ -67,6 +70,15 @@ public class PostItRoundManager : NetworkBehaviour
     public IReadOnlyList<PostItWorldDropData> WorldDrops => _worldDrops;
     public int GuessScoreCount => _guessScores.Count;
     public IReadOnlyList<PostItGuessPlayerScoreData> ScoreItems => _guessScores;
+    public int ActiveGuessRoundRevision => _roundRevision;
+    public int ActiveGuessRevision => _guessRevision;
+    public double GuessDeadlineServerTime => _guessDeadlineServerTime;
+    public bool IsGuessSubmissionOpen => _guessSubmissionOpen;
+    public bool AreAllGuessEntriesResolved =>
+        !_guessMutationInProgress &&
+        _roundRevision >= 0 &&
+        _guessRevision >= 0 &&
+        !HasPendingGuessEntries();
 
     private struct ServerPostItGuessEntry
     {
@@ -836,6 +848,7 @@ public class PostItRoundManager : NetworkBehaviour
         {
             _serverParticipantPlayerObjectIds.Add(pair.Key, pair.Value);
         }
+        _serverDisconnectedGuessOwners.Clear();
 
         _roundRevision = roundRevision;
         _guessRevision = guessRevision;
@@ -847,6 +860,954 @@ public class PostItRoundManager : NetworkBehaviour
             $"Prepared frozen guess snapshot. round={roundRevision}, " +
             $"guess={guessRevision}, players={preparedOwnerStates.Count}, " +
             $"eligible={totalEligibleCount}");
+        return true;
+    }
+
+    public bool ServerBeginGuessing(
+        IEnumerable<PlayerPostItInventory> inventories,
+        int roundRevision,
+        int guessRevision,
+        out int totalEligibleCount,
+        out double absoluteDeadlineServerTime)
+    {
+        totalEligibleCount = 0;
+        absoluteDeadlineServerTime = 0d;
+        if (_guessMutationInProgress)
+        {
+            return false;
+        }
+
+        _guessMutationInProgress = true;
+        try
+        {
+            return ServerBeginGuessingCore(
+                inventories,
+                roundRevision,
+                guessRevision,
+                out totalEligibleCount,
+                out absoluteDeadlineServerTime);
+        }
+        finally
+        {
+            _guessMutationInProgress = false;
+        }
+    }
+
+    private bool ServerBeginGuessingCore(
+        IEnumerable<PlayerPostItInventory> inventories,
+        int roundRevision,
+        int guessRevision,
+        out int totalEligibleCount,
+        out double absoluteDeadlineServerTime)
+    {
+        totalEligibleCount = 0;
+        absoluteDeadlineServerTime = 0d;
+        if (!CanMutateServerState())
+        {
+            LogAuthorityError("Blocked Guessing begin on non-server instance.");
+            return false;
+        }
+
+        if (inventories == null || roundRevision < 0 || guessRevision < 0)
+        {
+            LogWarning("Rejected invalid Guessing begin request.");
+            return false;
+        }
+
+        if (!IsPlayingState())
+        {
+            LogWarning("Rejected Guessing begin outside Playing.");
+            return false;
+        }
+
+        if (_roundRevision >= 0 ||
+            _guessRevision >= 0 ||
+            _serverGuessScores.Count > 0 ||
+            _serverGuessEntries.Count > 0)
+        {
+            LogWarning("Rejected Guessing begin because previous Guess state was not cleared.");
+            return false;
+        }
+
+        if (_lastInitialAssignmentRoundRevision >= 0 &&
+            roundRevision != _lastInitialAssignmentRoundRevision)
+        {
+            LogWarning(
+                $"Rejected Guessing begin for a non-current round. roundRevision={roundRevision}");
+            return false;
+        }
+
+        List<PlayerPostItInventory> inventoryList =
+            new List<PlayerPostItInventory>();
+        foreach (PlayerPostItInventory inventory in inventories)
+        {
+            inventoryList.Add(inventory);
+            if (IsValidServerInventory(inventory) && inventory.GuessItemCount > 0)
+            {
+                LogAuthorityError(
+                    "Cannot begin Guessing because an Owner list was not cleared.");
+                return false;
+            }
+        }
+
+        double serverTime = GetAuthoritativeServerTime();
+        if (double.IsNaN(serverTime) || double.IsInfinity(serverTime) || serverTime < 0d)
+        {
+            LogAuthorityError("Cannot begin Guessing because ServerTime is invalid.");
+            return false;
+        }
+
+        absoluteDeadlineServerTime =
+            serverTime + Math.Max(0.1d, guessingDurationSeconds);
+        if (!TryPrepareServerGuessSnapshot(
+                inventoryList,
+                roundRevision,
+                guessRevision,
+                absoluteDeadlineServerTime,
+                out totalEligibleCount))
+        {
+            absoluteDeadlineServerTime = 0d;
+            return false;
+        }
+
+        _guessSubmissionOpen = totalEligibleCount > 0;
+        if (totalEligibleCount == 0 &&
+            !TryFinalizeGuessingCore(roundRevision, guessRevision, true))
+        {
+            LogAuthorityError("Failed to finalize a zero-candidate Guessing snapshot.");
+            if (!ServerClearGuessStateCore(inventoryList))
+            {
+                LogAuthorityError(
+                    "Failed to clear a rejected zero-candidate Guessing snapshot.");
+            }
+
+            totalEligibleCount = 0;
+            absoluteDeadlineServerTime = 0d;
+            return false;
+        }
+
+        GuessLog(
+            $"Began Guessing. round={roundRevision}, guess={guessRevision}, " +
+            $"eligible={totalEligibleCount}, deadline={absoluteDeadlineServerTime:F3}");
+        return true;
+    }
+
+    public bool ServerTrySubmitGuess(
+        PlayerPostItInventory requesterInventory,
+        ulong senderClientId,
+        int roundRevision,
+        int guessRevision,
+        int postItId,
+        PostItTopicId selectedTopicId,
+        out bool allSubmissionsResolved)
+    {
+        allSubmissionsResolved = false;
+        if (_guessMutationInProgress)
+        {
+            return false;
+        }
+
+        _guessMutationInProgress = true;
+        try
+        {
+            return ServerTrySubmitGuessCore(
+                requesterInventory,
+                senderClientId,
+                roundRevision,
+                guessRevision,
+                postItId,
+                selectedTopicId,
+                out allSubmissionsResolved);
+        }
+        finally
+        {
+            _guessMutationInProgress = false;
+        }
+    }
+
+    private bool ServerTrySubmitGuessCore(
+        PlayerPostItInventory requesterInventory,
+        ulong senderClientId,
+        int roundRevision,
+        int guessRevision,
+        int postItId,
+        PostItTopicId selectedTopicId,
+        out bool allSubmissionsResolved)
+    {
+        allSubmissionsResolved = false;
+        if (!CanMutateServerState() || !IsGuessingState())
+        {
+            return false;
+        }
+
+        if (roundRevision != _roundRevision ||
+            guessRevision != _guessRevision ||
+            _finalizedGuessRevision == guessRevision ||
+            postItId < 0 ||
+            !PostItVisualCatalogSO.IsSupportedDrawingTopic(selectedTopicId) ||
+            visualCatalog == null ||
+            !visualCatalog.TryGetDrawingEntry(selectedTopicId, out _))
+        {
+            return false;
+        }
+
+        if (!TryResolveConnectedGuessParticipant(
+                senderClientId,
+                requesterInventory,
+                out PlayerPostItInventory resolvedInventory))
+        {
+            return false;
+        }
+
+        int entryIndex = FindUniqueServerGuessEntryIndex(senderClientId, postItId);
+        if (entryIndex < 0)
+        {
+            return false;
+        }
+
+        ServerPostItGuessEntry entry = _serverGuessEntries[entryIndex];
+        if (entry.RoundRevision != roundRevision ||
+            entry.GuessRevision != guessRevision ||
+            entry.PlayerNetworkObjectId != resolvedInventory.NetworkObjectId)
+        {
+            return false;
+        }
+
+        if (!resolvedInventory.TryGetGuessItem(
+                postItId,
+                out PostItGuessOwnerData ownerData) ||
+            ownerData.RoundRevision != roundRevision ||
+            ownerData.GuessRevision != guessRevision ||
+            ownerData.VisualId != entry.VisualId)
+        {
+            return false;
+        }
+
+        if (entry.Status != PostItGuessStatus.Pending ||
+            entry.SelectedTopicId != PostItTopicId.None ||
+            entry.IsCorrect ||
+            entry.BonusApplied ||
+            ownerData.Status != PostItGuessStatus.Pending ||
+            ownerData.SelectedTopicId != PostItTopicId.None ||
+            ownerData.RevealedTopicId != PostItTopicId.None ||
+            !_guessSubmissionOpen)
+        {
+            return false;
+        }
+
+        double serverTime = GetAuthoritativeServerTime();
+        if (double.IsNaN(serverTime) ||
+            double.IsInfinity(serverTime) ||
+            serverTime < 0d ||
+            serverTime >= _guessDeadlineServerTime)
+        {
+            _guessSubmissionOpen = false;
+            return false;
+        }
+
+        if (!_serverGuessScores.TryGetValue(
+                senderClientId,
+                out PostItGuessPlayerScoreData currentScore) ||
+            currentScore.RoundRevision != roundRevision ||
+            currentScore.GuessRevision != guessRevision ||
+            currentScore.SubmittedCount >= currentScore.EligibleCount)
+        {
+            LogAuthorityError(
+                $"Guess score invariant failed before submit. ownerClientId={senderClientId}");
+            return false;
+        }
+
+        PostItGuessOwnerData submittedOwnerData = new PostItGuessOwnerData(
+            roundRevision,
+            guessRevision,
+            entry.PostItId,
+            entry.VisualId,
+            selectedTopicId,
+            PostItTopicId.None,
+            PostItGuessStatus.Submitted);
+        PostItGuessPlayerScoreData submittedScore = new PostItGuessPlayerScoreData(
+            currentScore.RoundRevision,
+            currentScore.GuessRevision,
+            currentScore.OwnerClientId,
+            currentScore.HeldPostItCount,
+            currentScore.EligibleCount,
+            currentScore.SubmittedCount + 1,
+            currentScore.CorrectCount,
+            currentScore.GuessBonusScore,
+            currentScore.FinalRoundScore);
+        if (!submittedOwnerData.IsValid ||
+            !submittedScore.IsValid ||
+            !resolvedInventory.ServerTryUpdateGuessItem(submittedOwnerData))
+        {
+            return false;
+        }
+
+        entry.SelectedTopicId = selectedTopicId;
+        entry.Status = PostItGuessStatus.Submitted;
+        _serverGuessEntries[entryIndex] = entry;
+        _serverGuessScores[senderClientId] = submittedScore;
+
+        allSubmissionsResolved = !HasPendingGuessEntries();
+        if (allSubmissionsResolved)
+        {
+            _guessSubmissionOpen = false;
+        }
+
+        GuessLog(
+            $"Accepted Guess submission. ownerClientId={senderClientId}, " +
+            $"postItId={postItId}, allResolved={allSubmissionsResolved}");
+        return true;
+    }
+
+    public bool ServerFinalizeGuessing(int roundRevision, int guessRevision)
+    {
+        if (_guessMutationInProgress)
+        {
+            return false;
+        }
+
+        _guessMutationInProgress = true;
+        try
+        {
+            return TryFinalizeGuessingCore(roundRevision, guessRevision, false);
+        }
+        finally
+        {
+            _guessMutationInProgress = false;
+        }
+    }
+
+    public bool ServerHandleGuessDisconnect(
+        ulong ownerClientId,
+        int roundRevision,
+        int guessRevision,
+        out bool allSubmissionsResolved)
+    {
+        allSubmissionsResolved = false;
+        if (_guessMutationInProgress)
+        {
+            return false;
+        }
+
+        _guessMutationInProgress = true;
+        try
+        {
+            return ServerHandleGuessDisconnectCore(
+                ownerClientId,
+                roundRevision,
+                guessRevision,
+                out allSubmissionsResolved);
+        }
+        finally
+        {
+            _guessMutationInProgress = false;
+        }
+    }
+
+    private bool ServerHandleGuessDisconnectCore(
+        ulong ownerClientId,
+        int roundRevision,
+        int guessRevision,
+        out bool allSubmissionsResolved)
+    {
+        allSubmissionsResolved = false;
+        if (!CanMutateServerState() ||
+            ownerClientId == ulong.MaxValue ||
+            roundRevision != _roundRevision ||
+            guessRevision != _guessRevision ||
+            (!_serverParticipantPlayerObjectIds.ContainsKey(ownerClientId) &&
+             !_serverDisconnectedGuessOwners.Contains(ownerClientId)))
+        {
+            return false;
+        }
+
+        _serverParticipantPlayerObjectIds.Remove(ownerClientId);
+        _serverDisconnectedGuessOwners.Add(ownerClientId);
+
+        if (_finalizedGuessRevision == guessRevision)
+        {
+            allSubmissionsResolved = true;
+            return true;
+        }
+
+        for (int entryIndex = 0; entryIndex < _serverGuessEntries.Count; entryIndex++)
+        {
+            ServerPostItGuessEntry entry = _serverGuessEntries[entryIndex];
+            if (entry.OwnerClientId != ownerClientId ||
+                entry.Status != PostItGuessStatus.Pending)
+            {
+                continue;
+            }
+
+            entry.Status = PostItGuessStatus.Skipped;
+            entry.SelectedTopicId = PostItTopicId.None;
+            entry.IsCorrect = false;
+            entry.BonusApplied = false;
+            _serverGuessEntries[entryIndex] = entry;
+        }
+
+        allSubmissionsResolved = !HasPendingGuessEntries();
+        if (allSubmissionsResolved)
+        {
+            _guessSubmissionOpen = false;
+        }
+
+        GuessLog(
+            $"Handled Guess disconnect. ownerClientId={ownerClientId}, " +
+            $"allResolved={allSubmissionsResolved}");
+        return true;
+    }
+
+    public bool ServerClearGuessState(IEnumerable<PlayerPostItInventory> inventories)
+    {
+        if (_guessMutationInProgress)
+        {
+            return false;
+        }
+
+        _guessMutationInProgress = true;
+        try
+        {
+            return ServerClearGuessStateCore(inventories);
+        }
+        finally
+        {
+            _guessMutationInProgress = false;
+        }
+    }
+
+    private bool ServerClearGuessStateCore(
+        IEnumerable<PlayerPostItInventory> inventories)
+    {
+        if (!CanMutateServerState() || inventories == null)
+        {
+            return false;
+        }
+
+        List<PreparedOwnerGuessState> preparedStates =
+            new List<PreparedOwnerGuessState>();
+        HashSet<ulong> includedOwners = new HashSet<ulong>();
+        Dictionary<ulong, ulong> includedPlayerObjectIds =
+            new Dictionary<ulong, ulong>();
+        foreach (PlayerPostItInventory inventory in inventories)
+        {
+            if (!IsValidServerInventory(inventory))
+            {
+                continue;
+            }
+
+            ulong ownerClientId = ResolveInventoryOwnerClientId(inventory);
+            if (ownerClientId == ulong.MaxValue || !includedOwners.Add(ownerClientId))
+            {
+                return false;
+            }
+
+            preparedStates.Add(new PreparedOwnerGuessState
+            {
+                Inventory = inventory,
+                PreviousItems = inventory.GetGuessSnapshot(),
+                DesiredItems = Array.Empty<PostItGuessOwnerData>()
+            });
+            includedPlayerObjectIds.Add(
+                ownerClientId,
+                ResolveInventoryNetworkObjectId(inventory));
+        }
+
+        foreach (KeyValuePair<ulong, ulong> participant in
+                 _serverParticipantPlayerObjectIds)
+        {
+            if (!IsGuessClientConnected(participant.Key))
+            {
+                continue;
+            }
+
+            if (!includedPlayerObjectIds.TryGetValue(
+                    participant.Key,
+                    out ulong includedPlayerObjectId) ||
+                includedPlayerObjectId != participant.Value)
+            {
+                LogAuthorityError(
+                    $"Cannot clear Guess state without a connected participant. " +
+                    $"ownerClientId={participant.Key}");
+                return false;
+            }
+        }
+
+        preparedStates.Sort(ComparePreparedOwnerGuessStatesByOwnerClientId);
+        _guessSubmissionOpen = false;
+        int publishedOwnerCount = 0;
+        for (int stateIndex = 0; stateIndex < preparedStates.Count; stateIndex++)
+        {
+            if (!preparedStates[stateIndex].Inventory.ServerClearGuessItems())
+            {
+                RollBackPreparedOwnerGuessStates(
+                    preparedStates,
+                    publishedOwnerCount);
+                return false;
+            }
+
+            publishedOwnerCount++;
+        }
+
+        if (!TryReplaceGuessScoreItems(Array.Empty<PostItGuessPlayerScoreData>()))
+        {
+            RollBackPreparedOwnerGuessStates(
+                preparedStates,
+                publishedOwnerCount);
+            return false;
+        }
+
+        ClearServerGuessSnapshotState();
+        GuessLog("Cleared Guess state.");
+        return true;
+    }
+
+    public bool ServerTryBuildFinalRoundScores(
+        int roundRevision,
+        int guessRevision,
+        out PostItGuessPlayerScoreData[] scores)
+    {
+        scores = Array.Empty<PostItGuessPlayerScoreData>();
+        if (_guessMutationInProgress ||
+            !CanMutateServerState() ||
+            roundRevision != _roundRevision ||
+            guessRevision != _guessRevision ||
+            _finalizedGuessRevision != guessRevision ||
+            _guessSubmissionOpen ||
+            !TryGetCommittedFinalScores(out PostItGuessPlayerScoreData[] committedScores))
+        {
+            return false;
+        }
+
+        if (IsNetworkGuessScoreStorageActive() &&
+            !NetworkGuessScoresMatch(committedScores))
+        {
+            LogAuthorityError("Final Guess score publication does not match private state.");
+            return false;
+        }
+
+        scores = committedScores;
+        return true;
+    }
+
+    private bool TryFinalizeGuessingCore(
+        int roundRevision,
+        int guessRevision,
+        bool allowOutsideGuessingForZeroCandidates)
+    {
+        if (!CanMutateServerState() ||
+            roundRevision != _roundRevision ||
+            guessRevision != _guessRevision)
+        {
+            return false;
+        }
+
+        if (_finalizedGuessRevision == guessRevision)
+        {
+            return true;
+        }
+
+        bool hasCandidates = _serverGuessEntries.Count > 0;
+        if (!IsGuessingState() &&
+            !(allowOutsideGuessingForZeroCandidates && !hasCandidates))
+        {
+            return false;
+        }
+
+        bool hasPendingEntries = HasPendingGuessEntries();
+        double serverTime = GetAuthoritativeServerTime();
+        if (double.IsNaN(serverTime) ||
+            double.IsInfinity(serverTime) ||
+            serverTime < 0d)
+        {
+            return false;
+        }
+
+        if (hasPendingEntries && serverTime < _guessDeadlineServerTime)
+        {
+            return false;
+        }
+
+        _guessSubmissionOpen = false;
+        if (!TryBuildFinalizedGuessState(
+                out ServerPostItGuessEntry[] finalizedEntries,
+                out PostItGuessPlayerScoreData[] finalizedScores) ||
+            !TryPrepareFinalOwnerPublications(
+                finalizedEntries,
+                finalizedScores,
+                out List<PreparedOwnerGuessState> preparedOwnerStates))
+        {
+            return false;
+        }
+
+        int publishedOwnerCount = 0;
+        for (int stateIndex = 0;
+             stateIndex < preparedOwnerStates.Count;
+             stateIndex++)
+        {
+            PreparedOwnerGuessState state = preparedOwnerStates[stateIndex];
+            if (!state.Inventory.ServerReplaceGuessItems(state.DesiredItems))
+            {
+                RollBackPreparedOwnerGuessStates(preparedOwnerStates, publishedOwnerCount);
+                return false;
+            }
+
+            publishedOwnerCount++;
+        }
+
+        if (!TryReplaceGuessScoreItems(finalizedScores))
+        {
+            RollBackPreparedOwnerGuessStates(preparedOwnerStates, publishedOwnerCount);
+            return false;
+        }
+
+        _serverGuessEntries.Clear();
+        _serverGuessEntries.AddRange(finalizedEntries);
+        _serverGuessScores.Clear();
+        for (int scoreIndex = 0; scoreIndex < finalizedScores.Length; scoreIndex++)
+        {
+            PostItGuessPlayerScoreData score = finalizedScores[scoreIndex];
+            _serverGuessScores.Add(score.OwnerClientId, score);
+        }
+
+        _finalizedGuessRevision = guessRevision;
+        GuessLog(
+            $"Finalized Guessing. round={roundRevision}, guess={guessRevision}, " +
+            $"players={finalizedScores.Length}");
+        return true;
+    }
+
+    private bool TryBuildFinalizedGuessState(
+        out ServerPostItGuessEntry[] finalizedEntries,
+        out PostItGuessPlayerScoreData[] finalizedScores)
+    {
+        finalizedEntries = Array.Empty<ServerPostItGuessEntry>();
+        finalizedScores = Array.Empty<PostItGuessPlayerScoreData>();
+        if (_roundRevision < 0 ||
+            _guessRevision < 0 ||
+            _serverGuessScores.Count == 0 ||
+            !ValidateFrozenGuessParticipantSets())
+        {
+            return false;
+        }
+
+        Dictionary<ulong, int> entryCounts = new Dictionary<ulong, int>();
+        Dictionary<ulong, int> submittedCounts = new Dictionary<ulong, int>();
+        Dictionary<ulong, int> correctCounts = new Dictionary<ulong, int>();
+        foreach (ulong ownerClientId in _serverGuessScores.Keys)
+        {
+            entryCounts.Add(ownerClientId, 0);
+            submittedCounts.Add(ownerClientId, 0);
+            correctCounts.Add(ownerClientId, 0);
+        }
+
+        ServerPostItGuessEntry[] preparedEntries =
+            new ServerPostItGuessEntry[_serverGuessEntries.Count];
+        HashSet<int> includedPostItIds = new HashSet<int>();
+        for (int entryIndex = 0; entryIndex < _serverGuessEntries.Count; entryIndex++)
+        {
+            ServerPostItGuessEntry entry = _serverGuessEntries[entryIndex];
+            if (entry.RoundRevision != _roundRevision ||
+                entry.GuessRevision != _guessRevision ||
+                entry.PostItId < 0 ||
+                entry.SlotIndexAtSnapshot < 0 ||
+                entry.VisualId <= 0 ||
+                !entryCounts.ContainsKey(entry.OwnerClientId) ||
+                !includedPostItIds.Add(entry.PostItId) ||
+                !IsFrozenGuessCatalogEntryValid(entry) ||
+                !IsFrozenGuessParticipantIdentityValid(entry))
+            {
+                LogAuthorityError("Frozen Guess entry invariant failed during finalize.");
+                return false;
+            }
+
+            entryCounts[entry.OwnerClientId]++;
+            switch (entry.Status)
+            {
+                case PostItGuessStatus.Pending:
+                    if (entry.SelectedTopicId != PostItTopicId.None ||
+                        entry.IsCorrect ||
+                        entry.BonusApplied)
+                    {
+                        return false;
+                    }
+
+                    entry.Status = PostItGuessStatus.Skipped;
+                    break;
+
+                case PostItGuessStatus.Submitted:
+                    if (!IsGuessTopicOptionValid(entry.SelectedTopicId) ||
+                        entry.IsCorrect ||
+                        entry.BonusApplied)
+                    {
+                        return false;
+                    }
+
+                    submittedCounts[entry.OwnerClientId]++;
+                    entry.IsCorrect = entry.SelectedTopicId == entry.CorrectTopicId;
+                    entry.Status = entry.IsCorrect
+                        ? PostItGuessStatus.Correct
+                        : PostItGuessStatus.Incorrect;
+                    entry.BonusApplied = entry.IsCorrect;
+                    if (entry.IsCorrect)
+                    {
+                        correctCounts[entry.OwnerClientId]++;
+                    }
+
+                    break;
+
+                case PostItGuessStatus.Skipped:
+                    if (entry.SelectedTopicId != PostItTopicId.None ||
+                        entry.IsCorrect ||
+                        entry.BonusApplied)
+                    {
+                        return false;
+                    }
+
+                    break;
+
+                default:
+                    return false;
+            }
+
+            preparedEntries[entryIndex] = entry;
+        }
+
+        List<ulong> orderedOwnerClientIds =
+            new List<ulong>(_serverGuessScores.Keys);
+        orderedOwnerClientIds.Sort();
+        PostItGuessPlayerScoreData[] preparedScores =
+            new PostItGuessPlayerScoreData[orderedOwnerClientIds.Count];
+        for (int ownerIndex = 0;
+             ownerIndex < orderedOwnerClientIds.Count;
+             ownerIndex++)
+        {
+            ulong ownerClientId = orderedOwnerClientIds[ownerIndex];
+            PostItGuessPlayerScoreData frozenScore = _serverGuessScores[ownerClientId];
+            int submittedCount = submittedCounts[ownerClientId];
+            int correctCount = correctCounts[ownerClientId];
+            if (!frozenScore.IsValid ||
+                frozenScore.RoundRevision != _roundRevision ||
+                frozenScore.GuessRevision != _guessRevision ||
+                frozenScore.EligibleCount != entryCounts[ownerClientId] ||
+                frozenScore.SubmittedCount != submittedCount ||
+                frozenScore.CorrectCount != 0 ||
+                frozenScore.GuessBonusScore != 0 ||
+                frozenScore.FinalRoundScore != 0)
+            {
+                LogAuthorityError(
+                    $"Frozen Guess score invariant failed. ownerClientId={ownerClientId}");
+                return false;
+            }
+
+            long finalRoundScoreLong =
+                (long)frozenScore.HeldPostItCount + correctCount;
+            if (finalRoundScoreLong > int.MaxValue)
+            {
+                LogAuthorityError("Final round score exceeds the supported range.");
+                return false;
+            }
+
+            PostItGuessPlayerScoreData finalizedScore =
+                new PostItGuessPlayerScoreData(
+                    _roundRevision,
+                    _guessRevision,
+                    ownerClientId,
+                    frozenScore.HeldPostItCount,
+                    frozenScore.EligibleCount,
+                    submittedCount,
+                    correctCount,
+                    correctCount,
+                    (int)finalRoundScoreLong);
+            if (!finalizedScore.IsValid)
+            {
+                return false;
+            }
+
+            preparedScores[ownerIndex] = finalizedScore;
+        }
+
+        finalizedEntries = preparedEntries;
+        finalizedScores = preparedScores;
+        return true;
+    }
+
+    private bool TryPrepareFinalOwnerPublications(
+        IReadOnlyList<ServerPostItGuessEntry> finalizedEntries,
+        IReadOnlyList<PostItGuessPlayerScoreData> finalizedScores,
+        out List<PreparedOwnerGuessState> preparedOwnerStates)
+    {
+        preparedOwnerStates = new List<PreparedOwnerGuessState>();
+        Dictionary<ulong, List<PostItGuessOwnerData>> ownerItems =
+            new Dictionary<ulong, List<PostItGuessOwnerData>>();
+        for (int scoreIndex = 0; scoreIndex < finalizedScores.Count; scoreIndex++)
+        {
+            ownerItems.Add(
+                finalizedScores[scoreIndex].OwnerClientId,
+                new List<PostItGuessOwnerData>());
+        }
+
+        for (int entryIndex = 0; entryIndex < finalizedEntries.Count; entryIndex++)
+        {
+            ServerPostItGuessEntry entry = finalizedEntries[entryIndex];
+            if (!ownerItems.TryGetValue(
+                    entry.OwnerClientId,
+                    out List<PostItGuessOwnerData> items) ||
+                (entry.Status != PostItGuessStatus.Correct &&
+                 entry.Status != PostItGuessStatus.Incorrect &&
+                 entry.Status != PostItGuessStatus.Skipped))
+            {
+                return false;
+            }
+
+            PostItGuessOwnerData ownerData = new PostItGuessOwnerData(
+                entry.RoundRevision,
+                entry.GuessRevision,
+                entry.PostItId,
+                entry.VisualId,
+                entry.SelectedTopicId,
+                entry.CorrectTopicId,
+                entry.Status);
+            if (!ownerData.IsValid)
+            {
+                return false;
+            }
+
+            items.Add(ownerData);
+        }
+
+        for (int scoreIndex = 0; scoreIndex < finalizedScores.Count; scoreIndex++)
+        {
+            PostItGuessPlayerScoreData score = finalizedScores[scoreIndex];
+            if (ownerItems[score.OwnerClientId].Count != score.EligibleCount)
+            {
+                return false;
+            }
+
+            if (_serverDisconnectedGuessOwners.Contains(score.OwnerClientId) ||
+                !IsGuessClientConnected(score.OwnerClientId))
+            {
+                continue;
+            }
+
+            if (!TryResolveConnectedGuessParticipant(
+                    score.OwnerClientId,
+                    null,
+                    out PlayerPostItInventory inventory))
+            {
+                LogAuthorityError(
+                    $"Connected Guess participant identity drifted. " +
+                    $"ownerClientId={score.OwnerClientId}");
+                return false;
+            }
+
+            preparedOwnerStates.Add(new PreparedOwnerGuessState
+            {
+                Inventory = inventory,
+                PreviousItems = inventory.GetGuessSnapshot(),
+                DesiredItems = ownerItems[score.OwnerClientId].ToArray()
+            });
+        }
+
+        return true;
+    }
+
+    private bool TryGetCommittedFinalScores(
+        out PostItGuessPlayerScoreData[] committedScores)
+    {
+        committedScores = Array.Empty<PostItGuessPlayerScoreData>();
+        if (!ValidateFrozenGuessParticipantSets())
+        {
+            return false;
+        }
+
+        Dictionary<ulong, int> entryCounts = new Dictionary<ulong, int>();
+        Dictionary<ulong, int> submittedCounts = new Dictionary<ulong, int>();
+        Dictionary<ulong, int> correctCounts = new Dictionary<ulong, int>();
+        foreach (ulong ownerClientId in _serverGuessScores.Keys)
+        {
+            entryCounts.Add(ownerClientId, 0);
+            submittedCounts.Add(ownerClientId, 0);
+            correctCounts.Add(ownerClientId, 0);
+        }
+
+        HashSet<int> includedPostItIds = new HashSet<int>();
+        for (int entryIndex = 0; entryIndex < _serverGuessEntries.Count; entryIndex++)
+        {
+            ServerPostItGuessEntry entry = _serverGuessEntries[entryIndex];
+            if (!entryCounts.ContainsKey(entry.OwnerClientId) ||
+                !includedPostItIds.Add(entry.PostItId) ||
+                entry.PostItId < 0 ||
+                entry.SlotIndexAtSnapshot < 0 ||
+                entry.VisualId <= 0 ||
+                entry.RoundRevision != _roundRevision ||
+                entry.GuessRevision != _guessRevision ||
+                !IsFrozenGuessCatalogEntryValid(entry) ||
+                !IsFrozenGuessParticipantIdentityValid(entry))
+            {
+                return false;
+            }
+
+            entryCounts[entry.OwnerClientId]++;
+            if (entry.Status == PostItGuessStatus.Correct)
+            {
+                if (!IsGuessTopicOptionValid(entry.SelectedTopicId) ||
+                    entry.SelectedTopicId != entry.CorrectTopicId ||
+                    !entry.IsCorrect ||
+                    !entry.BonusApplied)
+                {
+                    return false;
+                }
+
+                submittedCounts[entry.OwnerClientId]++;
+                correctCounts[entry.OwnerClientId]++;
+            }
+            else if (entry.Status == PostItGuessStatus.Incorrect)
+            {
+                if (!IsGuessTopicOptionValid(entry.SelectedTopicId) ||
+                    entry.SelectedTopicId == entry.CorrectTopicId ||
+                    entry.IsCorrect ||
+                    entry.BonusApplied)
+                {
+                    return false;
+                }
+
+                submittedCounts[entry.OwnerClientId]++;
+            }
+            else if (entry.Status != PostItGuessStatus.Skipped ||
+                     entry.SelectedTopicId != PostItTopicId.None ||
+                     entry.IsCorrect ||
+                     entry.BonusApplied)
+            {
+                return false;
+            }
+        }
+
+        List<ulong> ownerClientIds = new List<ulong>(_serverGuessScores.Keys);
+        ownerClientIds.Sort();
+        PostItGuessPlayerScoreData[] scores =
+            new PostItGuessPlayerScoreData[ownerClientIds.Count];
+        for (int ownerIndex = 0; ownerIndex < ownerClientIds.Count; ownerIndex++)
+        {
+            ulong ownerClientId = ownerClientIds[ownerIndex];
+            PostItGuessPlayerScoreData score = _serverGuessScores[ownerClientId];
+            if (!score.IsValid ||
+                score.RoundRevision != _roundRevision ||
+                score.GuessRevision != _guessRevision ||
+                score.EligibleCount != entryCounts[ownerClientId] ||
+                score.SubmittedCount != submittedCounts[ownerClientId] ||
+                score.CorrectCount != correctCounts[ownerClientId] ||
+                score.GuessBonusScore != correctCounts[ownerClientId] ||
+                score.FinalRoundScore !=
+                    (long)score.HeldPostItCount + score.CorrectCount)
+            {
+                return false;
+            }
+
+            scores[ownerIndex] = score;
+        }
+
+        committedScores = scores;
         return true;
     }
 
@@ -1914,21 +2875,25 @@ public class PostItRoundManager : NetworkBehaviour
         return true;
     }
 
-    private void RollBackPreparedOwnerGuessStates(
+    private bool RollBackPreparedOwnerGuessStates(
         IReadOnlyList<PreparedOwnerGuessState> preparedStates,
         int publishedOwnerCount)
     {
+        bool rollbackSucceeded = true;
         for (int index = publishedOwnerCount - 1; index >= 0; index--)
         {
             PreparedOwnerGuessState state = preparedStates[index];
             if (!state.Inventory.ServerReplaceGuessItems(state.PreviousItems))
             {
+                rollbackSucceeded = false;
                 Debug.LogError(
                     $"[{nameof(PostItRoundManager)}] Failed to roll back owner guess state. " +
                     $"ownerClientId={ResolveInventoryOwnerClientId(state.Inventory)}",
                     this);
             }
         }
+
+        return rollbackSucceeded;
     }
 
     private void ClearServerGuessSnapshotState()
@@ -1936,11 +2901,172 @@ public class PostItRoundManager : NetworkBehaviour
         _serverGuessEntries.Clear();
         _serverGuessScores.Clear();
         _serverParticipantPlayerObjectIds.Clear();
+        _serverDisconnectedGuessOwners.Clear();
         _roundRevision = -1;
         _guessRevision = -1;
         _guessDeadlineServerTime = 0d;
         _guessSubmissionOpen = false;
         _finalizedGuessRevision = -1;
+    }
+
+    private bool HasPendingGuessEntries()
+    {
+        for (int entryIndex = 0; entryIndex < _serverGuessEntries.Count; entryIndex++)
+        {
+            if (_serverGuessEntries[entryIndex].Status == PostItGuessStatus.Pending)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private bool IsFrozenGuessParticipantIdentityValid(
+        ServerPostItGuessEntry entry)
+    {
+        if (_serverParticipantPlayerObjectIds.TryGetValue(
+                entry.OwnerClientId,
+                out ulong participantPlayerObjectId))
+        {
+            return !_serverDisconnectedGuessOwners.Contains(entry.OwnerClientId) &&
+                   participantPlayerObjectId == entry.PlayerNetworkObjectId;
+        }
+
+        return _serverDisconnectedGuessOwners.Contains(entry.OwnerClientId);
+    }
+
+    private bool IsFrozenGuessCatalogEntryValid(ServerPostItGuessEntry entry)
+    {
+        return visualCatalog != null &&
+               visualCatalog.TryGetEntryByVisualId(
+                   entry.VisualId,
+                   out PostItVisualCatalogSO.Entry catalogEntry) &&
+               catalogEntry.Type == PostItType.Drawing &&
+               catalogEntry.TopicId == entry.CorrectTopicId;
+    }
+
+    private bool IsGuessTopicOptionValid(PostItTopicId topicId)
+    {
+        return PostItVisualCatalogSO.IsSupportedDrawingTopic(topicId) &&
+               visualCatalog != null &&
+               visualCatalog.TryGetDrawingEntry(topicId, out _);
+    }
+
+    private bool ValidateFrozenGuessParticipantSets()
+    {
+        if (_serverParticipantPlayerObjectIds.Count +
+                _serverDisconnectedGuessOwners.Count !=
+            _serverGuessScores.Count)
+        {
+            return false;
+        }
+
+        foreach (ulong ownerClientId in _serverParticipantPlayerObjectIds.Keys)
+        {
+            if (_serverDisconnectedGuessOwners.Contains(ownerClientId) ||
+                !_serverGuessScores.ContainsKey(ownerClientId))
+            {
+                return false;
+            }
+        }
+
+        foreach (ulong ownerClientId in _serverDisconnectedGuessOwners)
+        {
+            if (!_serverGuessScores.ContainsKey(ownerClientId))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private int FindUniqueServerGuessEntryIndex(ulong ownerClientId, int postItId)
+    {
+        int foundIndex = -1;
+        for (int entryIndex = 0; entryIndex < _serverGuessEntries.Count; entryIndex++)
+        {
+            ServerPostItGuessEntry entry = _serverGuessEntries[entryIndex];
+            if (entry.OwnerClientId != ownerClientId || entry.PostItId != postItId)
+            {
+                continue;
+            }
+
+            if (foundIndex >= 0)
+            {
+                LogAuthorityError(
+                    $"Duplicate frozen Guess entry. ownerClientId={ownerClientId}, " +
+                    $"postItId={postItId}");
+                return -1;
+            }
+
+            foundIndex = entryIndex;
+        }
+
+        return foundIndex;
+    }
+
+    private bool TryResolveConnectedGuessParticipant(
+        ulong ownerClientId,
+        PlayerPostItInventory requesterInventory,
+        out PlayerPostItInventory resolvedInventory)
+    {
+        resolvedInventory = null;
+        if (NetworkManager == null ||
+            !NetworkManager.IsListening ||
+            !NetworkManager.ConnectedClients.TryGetValue(
+                ownerClientId,
+                out NetworkClient client) ||
+            client == null ||
+            client.PlayerObject == null ||
+            !client.PlayerObject.IsSpawned ||
+            client.PlayerObject.OwnerClientId != ownerClientId ||
+            !_serverParticipantPlayerObjectIds.TryGetValue(
+                ownerClientId,
+                out ulong expectedPlayerObjectId) ||
+            client.PlayerObject.NetworkObjectId != expectedPlayerObjectId)
+        {
+            return false;
+        }
+
+        PlayerPostItInventory inventory =
+            client.PlayerObject.GetComponent<PlayerPostItInventory>();
+        if (!IsValidServerInventory(inventory) ||
+            ResolveInventoryOwnerClientId(inventory) != ownerClientId ||
+            ResolveInventoryNetworkObjectId(inventory) != expectedPlayerObjectId ||
+            (requesterInventory != null && requesterInventory != inventory))
+        {
+            return false;
+        }
+
+        resolvedInventory = inventory;
+        return true;
+    }
+
+    private bool IsGuessClientConnected(ulong ownerClientId)
+    {
+        return NetworkManager != null &&
+               NetworkManager.IsListening &&
+               NetworkManager.ConnectedClients.ContainsKey(ownerClientId);
+    }
+
+    private double GetAuthoritativeServerTime()
+    {
+        if (NetworkManager != null && NetworkManager.IsListening)
+        {
+            return NetworkManager.ServerTime.Time;
+        }
+
+        return Time.unscaledTimeAsDouble;
+    }
+
+    private int ComparePreparedOwnerGuessStatesByOwnerClientId(
+        PreparedOwnerGuessState left,
+        PreparedOwnerGuessState right)
+    {
+        return ResolveInventoryOwnerClientId(left.Inventory).CompareTo(
+            ResolveInventoryOwnerClientId(right.Inventory));
     }
 
     private static int CompareGuessParticipantsByOwnerClientId(
@@ -2213,6 +3339,12 @@ public class PostItRoundManager : NetworkBehaviour
     {
         GameStateManager manager = FindFirstObjectByType<GameStateManager>();
         return manager != null && manager.GetState() == GameStateManager.GameState.Playing;
+    }
+
+    private static bool IsGuessingState()
+    {
+        GameStateManager manager = FindFirstObjectByType<GameStateManager>();
+        return manager != null && manager.GetState() == GameStateManager.GameState.Guessing;
     }
 
     private int FindWorldDropIndex(int postItId)
