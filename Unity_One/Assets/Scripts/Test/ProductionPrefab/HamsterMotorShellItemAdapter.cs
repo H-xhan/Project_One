@@ -127,6 +127,7 @@ public sealed class HamsterMotorShellItemAdapter : MonoBehaviour
 
     private NetworkObject _ownerNetworkObject;
     private PlayerHub _playerHub;
+    private GameStateManager _gameStateManager;
     private Transform _targetRoot;
     private HamsterMotorShellSpinDashAdapter _spinDashAdapter;
     private Transform _runtimeRightHandSocket;
@@ -202,6 +203,9 @@ public sealed class HamsterMotorShellItemAdapter : MonoBehaviour
         if (!CanReadOwnerInput())
             return;
 
+        if (!IsPlayingGameplayState())
+            return;
+
         if (IsSpinDashDizzyInputBlocked())
             return;
 
@@ -257,6 +261,9 @@ public sealed class HamsterMotorShellItemAdapter : MonoBehaviour
         if (_playerHub == null)
             _playerHub = GetComponentInParent<PlayerHub>();
 
+        if (_gameStateManager == null)
+            _gameStateManager = FindFirstObjectByType<GameStateManager>();
+
         if (carrierBody == null)
         {
             Transform motorShellBody = FindChildRecursive(_targetRoot, "MotorShellBody");
@@ -298,7 +305,16 @@ public sealed class HamsterMotorShellItemAdapter : MonoBehaviour
             return false;
         }
 
-        return true;
+        return IsPlayingGameplayState();
+    }
+
+    private bool IsPlayingGameplayState()
+    {
+        if (_gameStateManager == null)
+            _gameStateManager = FindFirstObjectByType<GameStateManager>();
+
+        return _gameStateManager != null &&
+               _gameStateManager.GetState() == GameStateManager.GameState.Playing;
     }
 
     private bool IsSpinDashDizzyInputBlocked()
