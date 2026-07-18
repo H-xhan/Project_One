@@ -163,6 +163,59 @@ public class PlayerPostItInventory : NetworkBehaviour
         return false;
     }
 
+    public void RequestSubmitPostItGuess(
+        int roundRevision,
+        int guessRevision,
+        int postItId,
+        PostItTopicId selectedTopicId)
+    {
+        if (!IsOwner || !IsSpawnedNetworkSession())
+        {
+            return;
+        }
+
+        RequestSubmitPostItGuessServerRpc(
+            roundRevision,
+            guessRevision,
+            postItId,
+            selectedTopicId);
+    }
+
+    [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Owner)]
+    private void RequestSubmitPostItGuessServerRpc(
+        int roundRevision,
+        int guessRevision,
+        int postItId,
+        PostItTopicId selectedTopicId,
+        RpcParams rpcParams = default)
+    {
+        if (!IsServer || !IsSpawnedNetworkSession())
+        {
+            return;
+        }
+
+        ulong senderClientId = rpcParams.Receive.SenderClientId;
+        if (senderClientId != OwnerClientId)
+        {
+            return;
+        }
+
+        PostItRoundManager roundManager = FindFirstObjectByType<PostItRoundManager>();
+        if (roundManager == null || !roundManager.IsSpawned || !roundManager.IsServer)
+        {
+            return;
+        }
+
+        roundManager.ServerTrySubmitGuess(
+            this,
+            senderClientId,
+            roundRevision,
+            guessRevision,
+            postItId,
+            selectedTopicId,
+            out _);
+    }
+
     public bool ContainsPostIt(int postItId)
     {
         for (int i = 0; i < _postIts.Count; i++)
