@@ -339,7 +339,6 @@ public class PostItRoundManager : NetworkBehaviour
             _isResettingWorldDrops ||
             sourceInventory == null ||
             !IsValidServerInventory(sourceInventory) ||
-            !hasFallbackPosition ||
             !IsFiniteVector(authoritativePosition) ||
             (hasFallbackPosition && !IsFiniteVector(fallbackPosition)))
         {
