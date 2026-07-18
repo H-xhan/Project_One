@@ -41,7 +41,10 @@ public sealed class PostItInventoryHUD : MonoBehaviour
 
     private readonly StringBuilder _slotBuilder = new StringBuilder(256);
     private PlayerPostItInventory _boundInventory;
+    private GameStateManager _gameStateManager;
     private float _nextBindAttemptTime;
+    private float _nextGameStateBindAttemptTime;
+    private bool _isGameStateSubscribed;
 
     public PlayerPostItInventory BoundInventory => _boundInventory;
 
@@ -53,16 +56,24 @@ public sealed class PostItInventoryHUD : MonoBehaviour
     private void OnEnable()
     {
         ResolveReferences();
+        TryBindGameState();
         TryBindInventory();
     }
 
     private void OnDisable()
     {
+        UnbindGameState();
         UnbindInventory();
     }
 
     private void Update()
     {
+        if (_isGameStateSubscribed && _gameStateManager == null)
+            _isGameStateSubscribed = false;
+
+        if (!_isGameStateSubscribed && Time.unscaledTime >= _nextGameStateBindAttemptTime)
+            TryBindGameState();
+
         if (_boundInventory != null)
         {
             return;
@@ -125,6 +136,36 @@ public sealed class PostItInventoryHUD : MonoBehaviour
         }
 
         BindInventory(inventory);
+    }
+
+    private void TryBindGameState()
+    {
+        _nextGameStateBindAttemptTime =
+            Time.unscaledTime + Mathf.Max(0.05f, rebindInterval);
+
+        if (_gameStateManager == null)
+            _gameStateManager = FindFirstObjectByType<GameStateManager>();
+
+        if (_gameStateManager == null || _isGameStateSubscribed)
+            return;
+
+        _gameStateManager.StateValue.OnValueChanged += OnGameStateChanged;
+        _isGameStateSubscribed = true;
+        RefreshInventoryUI();
+    }
+
+    private void UnbindGameState()
+    {
+        if (_isGameStateSubscribed && _gameStateManager != null)
+            _gameStateManager.StateValue.OnValueChanged -= OnGameStateChanged;
+
+        _isGameStateSubscribed = false;
+        _gameStateManager = null;
+    }
+
+    private void OnGameStateChanged(int previousStateValue, int newStateValue)
+    {
+        RefreshInventoryUI();
     }
 
     private PlayerPostItInventory ResolveTargetInventory()
@@ -235,7 +276,7 @@ public sealed class PostItInventoryHUD : MonoBehaviour
             _slotBuilder
                 .Append(GetTypeLabel(data.Type))
                 .Append(" · ")
-                .Append(GetTopicLabel(data.TopicId));
+                .Append(GetInventoryTopicLabel(data));
 
             if (showOwnershipMarker)
             {
@@ -269,6 +310,23 @@ public sealed class PostItInventoryHUD : MonoBehaviour
                 return "패널티";
             default:
                 return type.ToString();
+        }
+    }
+
+    private string GetInventoryTopicLabel(PostItRuntimeData data)
+    {
+        switch (data.Type)
+        {
+            case PostItType.Drawing:
+                return data.OriginalOwnerClientId == data.HolderClientId
+                    ? GetTopicLabel(data.TopicId)
+                    : "미확인";
+            case PostItType.Bonus:
+                return "Guard";
+            case PostItType.Penalty:
+                return "Heavy";
+            default:
+                return GetTopicLabel(data.TopicId);
         }
     }
 
