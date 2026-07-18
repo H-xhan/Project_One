@@ -15,6 +15,13 @@ public class GameStateManager : NetworkBehaviour
         Guessing = 4
     }
 
+    private enum PlayingEndReason
+    {
+        Timer = 0,
+        LastSurvivor = 1,
+        NoSurvivors = 2
+    }
+
     [Header("Refs")]
     [SerializeField, Tooltip("ReadySystem 참조(없으면 자동 탐색)")]
     private ReadySystem readySystem;
@@ -125,6 +132,13 @@ public class GameStateManager : NetworkBehaviour
     private bool _roundResultResolved;
     private bool _isStateValueChangeSubscribed;
     private bool _postItAssignedThisRound;
+    private bool _roundEndTransitionInProgress;
+    private int _roundRevision = -1;
+    private int _guessRevision = -1;
+    private PlayingEndReason _activePlayingEndReason = PlayingEndReason.Timer;
+    private ulong _pendingSurvivorWinnerClientId = ulong.MaxValue;
+    private PostItRoundManager _postItRoundManager;
+    private NetworkManager _subscribedNetworkManager;
 
     public bool HasRoundWinner => RoundHasWinnerValue.Value;
     public bool IsRoundDraw => RoundIsDrawValue.Value;
@@ -152,11 +166,13 @@ public class GameStateManager : NetworkBehaviour
 
         if (!IsServer) return;
 
+        SubscribeNetworkCallbacksServer();
         EnterLobby(true);
     }
 
     public override void OnNetworkDespawn()
     {
+        UnsubscribeNetworkCallbacksServer();
         UnsubscribeGameStateCursorEvents();
         StopPlayingCursorLockRetry("network-despawn");
         if (unlockCursorOutsidePlaying)
@@ -167,6 +183,7 @@ public class GameStateManager : NetworkBehaviour
 
     public override void OnDestroy()
     {
+        UnsubscribeNetworkCallbacksServer();
         UnsubscribeGameStateCursorEvents();
         StopPlayingCursorLockRetry("destroy");
         base.OnDestroy();
@@ -179,6 +196,9 @@ public class GameStateManager : NetworkBehaviour
 
         if (inGameMatchManager == null)
             inGameMatchManager = FindFirstObjectByType<InGameMatchManager>();
+
+        if (_postItRoundManager == null)
+            _postItRoundManager = FindFirstObjectByType<PostItRoundManager>();
 
     }
 
@@ -210,6 +230,12 @@ public class GameStateManager : NetworkBehaviour
                 return;
         }
 
+        if (state == GameState.Guessing)
+        {
+            TickGuessingServer();
+            return;
+        }
+
         float timer = StateTimer.Value;
         if (timer > 0f)
         {
@@ -227,7 +253,7 @@ public class GameStateManager : NetworkBehaviour
         }
         else if (state == GameState.Playing)
         {
-            EnterResultsWithCurrentSurvivorEvaluationServer();
+            RequestPlayingEndAfterTimerServer();
         }
         else if (state == GameState.Results && autoReturnToLobby)
         {
@@ -237,11 +263,21 @@ public class GameStateManager : NetworkBehaviour
 
     private void EnterLobby(bool isInitialSpawn)
     {
+        if (!isInitialSpawn && !TryClearGuessStateBeforeLobbyServer())
+        {
+            Log("[GameStateManager] Guess state clear failed. Lobby transition deferred.");
+            return;
+        }
+
         StateValue.Value = (int)GameState.Lobby;
         ApplyCursorStateForCurrentGameState("enter-lobby");
         StateTimer.Value = 0f;
         ResetRoundResultServer();
         _postItAssignedThisRound = false;
+        _guessRevision = -1;
+        _activePlayingEndReason = PlayingEndReason.Timer;
+        _pendingSurvivorWinnerClientId = invalidWinnerClientId;
+        _roundEndTransitionInProgress = false;
         _roundParticipantClientIds.Clear();
 
         if (readySystem != null)
@@ -257,10 +293,17 @@ public class GameStateManager : NetworkBehaviour
 
     private void EnterCountdown()
     {
+        if (!TryAdvanceRoundRevisionServer())
+        {
+            Log("[GameStateManager] Round revision could not advance.");
+            return;
+        }
+
         StateValue.Value = (int)GameState.Countdown;
         ApplyCursorStateForCurrentGameState("enter-countdown");
         StateTimer.Value = countdownSeconds;
         _postItAssignedThisRound = false;
+        _guessRevision = -1;
 
         Log("[GameStateManager] EnterCountdown");
     }
@@ -290,14 +333,14 @@ public class GameStateManager : NetworkBehaviour
         if (!IsServer) return;
         if (_postItAssignedThisRound) return;
 
-        PostItRoundManager postItRoundManager = FindFirstObjectByType<PostItRoundManager>();
+        PostItRoundManager postItRoundManager = ResolvePostItRoundManager();
         if (postItRoundManager == null)
         {
             Log("[GameStateManager] PostItRoundManager not found. Initial post-it assignment skipped.");
             return;
         }
 
-        if (!postItRoundManager.ServerAssignInitialPostItsFromScene())
+        if (!postItRoundManager.ServerAssignInitialPostItsFromScene(_roundRevision))
         {
             Log("[GameStateManager] Initial post-it assignment failed.");
             return;
@@ -309,6 +352,9 @@ public class GameStateManager : NetworkBehaviour
 
     private void EnterResults()
     {
+        if (GetState() == GameState.Results)
+            return;
+
         StateValue.Value = (int)GameState.Results;
         ApplyCursorStateForCurrentGameState("enter-results");
         StateTimer.Value = resultsSeconds;
@@ -351,6 +397,9 @@ public class GameStateManager : NetworkBehaviour
         RoundIsDrawValue.Value = false;
         _roundResultResolved = false;
         _nextSurvivorCheckTime = 0f;
+        _roundEndTransitionInProgress = false;
+        _activePlayingEndReason = PlayingEndReason.Timer;
+        _pendingSurvivorWinnerClientId = invalidWinnerClientId;
     }
 
     private void TickRoundEndCheckServer()
@@ -367,11 +416,15 @@ public class GameStateManager : NetworkBehaviour
         int aliveCount = CountAliveParticipantsServer(out ulong lastAliveClientId);
         if (aliveCount == 1)
         {
-            ResolveRoundWinnerServer(lastAliveClientId);
+            RequestPlayingEndServer(
+                PlayingEndReason.LastSurvivor,
+                lastAliveClientId);
         }
         else if (aliveCount == 0)
         {
-            ResolveRoundDrawServer();
+            RequestPlayingEndServer(
+                PlayingEndReason.NoSurvivors,
+                invalidWinnerClientId);
         }
     }
 
@@ -441,19 +494,471 @@ public class GameStateManager : NetworkBehaviour
         EnterResults();
     }
 
-    private void EnterResultsWithCurrentSurvivorEvaluationServer()
+    private bool TryAdvanceRoundRevisionServer()
     {
-        if (!IsServer) return;
-        if (_roundResultResolved) return;
+        if (!IsServer || _roundRevision == int.MaxValue)
+            return false;
 
+        _roundRevision++;
+        return true;
+    }
+
+    private void RequestPlayingEndAfterTimerServer()
+    {
         int aliveCount = CountAliveParticipantsServer(out ulong lastAliveClientId);
         if (aliveCount == 1)
         {
-            ResolveRoundWinnerServer(lastAliveClientId);
+            RequestPlayingEndServer(
+                PlayingEndReason.LastSurvivor,
+                lastAliveClientId);
+        }
+        else if (aliveCount == 0)
+        {
+            RequestPlayingEndServer(
+                PlayingEndReason.NoSurvivors,
+                invalidWinnerClientId);
+        }
+        else
+        {
+            RequestPlayingEndServer(
+                PlayingEndReason.Timer,
+                invalidWinnerClientId);
+        }
+    }
+
+    private void RequestPlayingEndServer(
+        PlayingEndReason reason,
+        ulong survivorWinnerClientId)
+    {
+        if (!IsServer ||
+            _roundEndTransitionInProgress ||
+            _roundResultResolved ||
+            GetState() != GameState.Playing ||
+            _roundRevision < 0 ||
+            (reason == PlayingEndReason.LastSurvivor &&
+             survivorWinnerClientId == invalidWinnerClientId))
+        {
             return;
         }
 
-        ResolveRoundDrawServer();
+        _roundEndTransitionInProgress = true;
+        try
+        {
+            PostItRoundManager postItRoundManager = ResolvePostItRoundManager();
+            if (!IsValidServerPostItRoundManager(postItRoundManager) ||
+                !TryBuildRoundParticipantInventoriesServer(
+                    out List<PlayerPostItInventory> inventories))
+            {
+                Log("[GameStateManager] Playing end snapshot preparation failed.");
+                return;
+            }
+
+            int guessRevision = _roundRevision;
+            if (!postItRoundManager.ServerBeginGuessing(
+                    inventories,
+                    _roundRevision,
+                    guessRevision,
+                    out int totalEligibleCount,
+                    out double absoluteDeadlineServerTime))
+            {
+                Log("[GameStateManager] Guessing begin failed.");
+                return;
+            }
+
+            _guessRevision = guessRevision;
+            _activePlayingEndReason = reason;
+            _pendingSurvivorWinnerClientId = reason == PlayingEndReason.LastSurvivor
+                ? survivorWinnerClientId
+                : invalidWinnerClientId;
+
+            if (totalEligibleCount == 0)
+            {
+                if (!TryPublishFinalGuessResultServer(postItRoundManager))
+                {
+                    EnterGuessingServer(absoluteDeadlineServerTime);
+                    Log("[GameStateManager] Zero-candidate score publication deferred.");
+                }
+
+                return;
+            }
+
+            EnterGuessingServer(absoluteDeadlineServerTime);
+            if (reason != PlayingEndReason.Timer &&
+                !TryFinalizeGuessFlowCore(postItRoundManager, true))
+            {
+                Log("[GameStateManager] Immediate terminal Guess finalize deferred.");
+            }
+        }
+        finally
+        {
+            _roundEndTransitionInProgress = false;
+        }
+    }
+
+    private void EnterGuessingServer(double absoluteDeadlineServerTime)
+    {
+        StateValue.Value = (int)GameState.Guessing;
+        ApplyCursorStateForCurrentGameState("enter-guessing");
+        StateTimer.Value = GetGuessDeadlineRemainingSeconds(
+            absoluteDeadlineServerTime);
+
+        Log("[GameStateManager] EnterGuessing");
+    }
+
+    private void TickGuessingServer()
+    {
+        if (!IsServer || GetState() != GameState.Guessing)
+            return;
+
+        PostItRoundManager postItRoundManager = ResolvePostItRoundManager();
+        if (!IsValidServerPostItRoundManager(postItRoundManager) ||
+            postItRoundManager.ActiveGuessRoundRevision != _roundRevision ||
+            postItRoundManager.ActiveGuessRevision != _guessRevision)
+        {
+            Log("[GameStateManager] Active Guess state does not match GameState revisions.");
+            return;
+        }
+
+        float remainingSeconds = GetGuessDeadlineRemainingSeconds(
+            postItRoundManager.GuessDeadlineServerTime);
+        StateTimer.Value = remainingSeconds;
+
+        bool finalizeImmediately =
+            _activePlayingEndReason != PlayingEndReason.Timer;
+        if (!finalizeImmediately &&
+            !postItRoundManager.AreAllGuessEntriesResolved &&
+            remainingSeconds > 0f)
+        {
+            return;
+        }
+
+        TryFinalizeGuessFlowServer(finalizeImmediately);
+    }
+
+    private bool TryFinalizeGuessFlowServer(bool finalizeImmediately)
+    {
+        if (!IsServer ||
+            _roundEndTransitionInProgress ||
+            _roundResultResolved ||
+            GetState() != GameState.Guessing)
+        {
+            return false;
+        }
+
+        _roundEndTransitionInProgress = true;
+        try
+        {
+            PostItRoundManager postItRoundManager = ResolvePostItRoundManager();
+            return IsValidServerPostItRoundManager(postItRoundManager) &&
+                   TryFinalizeGuessFlowCore(
+                       postItRoundManager,
+                       finalizeImmediately);
+        }
+        finally
+        {
+            _roundEndTransitionInProgress = false;
+        }
+    }
+
+    private bool TryFinalizeGuessFlowCore(
+        PostItRoundManager postItRoundManager,
+        bool finalizeImmediately)
+    {
+        bool finalized = finalizeImmediately
+            ? postItRoundManager.ServerFinalizeGuessingImmediately(
+                _roundRevision,
+                _guessRevision)
+            : postItRoundManager.ServerFinalizeGuessing(
+                _roundRevision,
+                _guessRevision);
+        return finalized &&
+               TryPublishFinalGuessResultServer(postItRoundManager);
+    }
+
+    private bool TryPublishFinalGuessResultServer(
+        PostItRoundManager postItRoundManager)
+    {
+        if (!postItRoundManager.ServerTryBuildFinalRoundScores(
+                _roundRevision,
+                _guessRevision,
+                out PostItGuessPlayerScoreData[] scores))
+        {
+            return false;
+        }
+
+        if (_activePlayingEndReason == PlayingEndReason.LastSurvivor)
+        {
+            if (!ContainsFinalScoreForOwner(
+                    scores,
+                    _pendingSurvivorWinnerClientId))
+            {
+                return false;
+            }
+
+            ResolveRoundWinnerServer(_pendingSurvivorWinnerClientId);
+            return _roundResultResolved;
+        }
+
+        if (_activePlayingEndReason == PlayingEndReason.NoSurvivors)
+        {
+            ResolveRoundDrawServer();
+            return _roundResultResolved;
+        }
+
+        return TryResolveRoundResultFromScoresServer(scores);
+    }
+
+    private bool TryResolveRoundResultFromScoresServer(
+        PostItGuessPlayerScoreData[] scores)
+    {
+        if (scores == null || scores.Length == 0)
+            return false;
+
+        HashSet<ulong> includedOwners = new HashSet<ulong>();
+        int highestScore = int.MinValue;
+        ulong highestScoreOwnerClientId = invalidWinnerClientId;
+        bool hasHighestScore = false;
+        bool highestScoreIsTied = false;
+
+        for (int scoreIndex = 0; scoreIndex < scores.Length; scoreIndex++)
+        {
+            PostItGuessPlayerScoreData score = scores[scoreIndex];
+            if (!score.IsValid ||
+                score.RoundRevision != _roundRevision ||
+                score.GuessRevision != _guessRevision ||
+                !includedOwners.Add(score.OwnerClientId))
+            {
+                return false;
+            }
+
+            if (!hasHighestScore || score.FinalRoundScore > highestScore)
+            {
+                highestScore = score.FinalRoundScore;
+                highestScoreOwnerClientId = score.OwnerClientId;
+                hasHighestScore = true;
+                highestScoreIsTied = false;
+            }
+            else if (score.FinalRoundScore == highestScore)
+            {
+                highestScoreIsTied = true;
+            }
+        }
+
+        if (highestScoreIsTied)
+        {
+            ResolveRoundDrawServer();
+        }
+        else
+        {
+            ResolveRoundWinnerServer(highestScoreOwnerClientId);
+        }
+
+        return _roundResultResolved;
+    }
+
+    private bool ContainsFinalScoreForOwner(
+        PostItGuessPlayerScoreData[] scores,
+        ulong ownerClientId)
+    {
+        if (scores == null || ownerClientId == invalidWinnerClientId)
+            return false;
+
+        for (int scoreIndex = 0; scoreIndex < scores.Length; scoreIndex++)
+        {
+            PostItGuessPlayerScoreData score = scores[scoreIndex];
+            if (score.IsValid &&
+                score.RoundRevision == _roundRevision &&
+                score.GuessRevision == _guessRevision &&
+                score.OwnerClientId == ownerClientId)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private bool TryBuildRoundParticipantInventoriesServer(
+        out List<PlayerPostItInventory> inventories)
+    {
+        inventories = new List<PlayerPostItInventory>();
+        if (!IsServer || NetworkManager == null || !NetworkManager.IsListening)
+            return false;
+
+        for (int participantIndex = 0;
+             participantIndex < _roundParticipantClientIds.Count;
+             participantIndex++)
+        {
+            ulong clientId = _roundParticipantClientIds[participantIndex];
+            if (!NetworkManager.ConnectedClients.ContainsKey(clientId))
+                continue;
+
+            if (!TryResolveConnectedPlayerInventory(
+                    NetworkManager,
+                    clientId,
+                    out PlayerPostItInventory inventory))
+            {
+                return false;
+            }
+
+            inventories.Add(inventory);
+        }
+
+        return inventories.Count > 0;
+    }
+
+    private bool TryBuildConnectedInventoriesServer(
+        out List<PlayerPostItInventory> inventories)
+    {
+        inventories = new List<PlayerPostItInventory>();
+        if (!IsServer || NetworkManager == null || !NetworkManager.IsListening)
+            return false;
+
+        List<ulong> clientIds = new List<ulong>(NetworkManager.ConnectedClientsIds);
+        clientIds.Sort();
+        for (int clientIndex = 0; clientIndex < clientIds.Count; clientIndex++)
+        {
+            if (!TryResolveConnectedPlayerInventory(
+                    NetworkManager,
+                    clientIds[clientIndex],
+                    out PlayerPostItInventory inventory))
+            {
+                return false;
+            }
+
+            inventories.Add(inventory);
+        }
+
+        return true;
+    }
+
+    private static bool TryResolveConnectedPlayerInventory(
+        NetworkManager networkManager,
+        ulong clientId,
+        out PlayerPostItInventory inventory)
+    {
+        inventory = null;
+        if (networkManager == null ||
+            !networkManager.ConnectedClients.TryGetValue(clientId, out var client) ||
+            client == null)
+        {
+            return false;
+        }
+
+        NetworkObject playerObject = client.PlayerObject;
+        if (playerObject == null ||
+            !playerObject.IsSpawned ||
+            playerObject.OwnerClientId != clientId)
+            return false;
+
+        inventory = playerObject.GetComponentInChildren<PlayerPostItInventory>(true);
+        if (inventory == null || !inventory.IsSpawned || !inventory.IsServer)
+            return false;
+
+        NetworkObject inventoryNetworkObject =
+            inventory.GetComponentInParent<NetworkObject>();
+        return inventoryNetworkObject == playerObject &&
+               inventory.OwnerClientId == clientId;
+    }
+
+    private bool TryClearGuessStateBeforeLobbyServer()
+    {
+        PostItRoundManager postItRoundManager = ResolvePostItRoundManager();
+        return IsValidServerPostItRoundManager(postItRoundManager) &&
+               TryBuildConnectedInventoriesServer(
+                   out List<PlayerPostItInventory> inventories) &&
+               postItRoundManager.ServerClearGuessState(inventories);
+    }
+
+    private PostItRoundManager ResolvePostItRoundManager()
+    {
+        if (_postItRoundManager == null)
+            _postItRoundManager = FindFirstObjectByType<PostItRoundManager>();
+
+        return _postItRoundManager;
+    }
+
+    private static bool IsValidServerPostItRoundManager(
+        PostItRoundManager postItRoundManager)
+    {
+        return postItRoundManager != null &&
+               postItRoundManager.IsSpawned &&
+               postItRoundManager.IsServer;
+    }
+
+    private float GetGuessDeadlineRemainingSeconds(
+        double absoluteDeadlineServerTime)
+    {
+        if (!TryGetAuthoritativeServerTime(out double serverTime) ||
+            double.IsNaN(absoluteDeadlineServerTime) ||
+            double.IsInfinity(absoluteDeadlineServerTime))
+        {
+            return 0f;
+        }
+
+        double remainingSeconds = absoluteDeadlineServerTime - serverTime;
+        return remainingSeconds > 0d ? (float)remainingSeconds : 0f;
+    }
+
+    private bool TryGetAuthoritativeServerTime(out double serverTime)
+    {
+        serverTime = 0d;
+        if (!IsServer || NetworkManager == null || !NetworkManager.IsListening)
+            return false;
+
+        serverTime = NetworkManager.ServerTime.Time;
+        return !double.IsNaN(serverTime) &&
+               !double.IsInfinity(serverTime) &&
+               serverTime >= 0d;
+    }
+
+    private void SubscribeNetworkCallbacksServer()
+    {
+        if (!IsServer ||
+            _subscribedNetworkManager != null ||
+            NetworkManager == null)
+        {
+            return;
+        }
+
+        _subscribedNetworkManager = NetworkManager;
+        _subscribedNetworkManager.OnClientDisconnectCallback +=
+            HandleClientDisconnectedServer;
+    }
+
+    private void UnsubscribeNetworkCallbacksServer()
+    {
+        if (_subscribedNetworkManager == null)
+            return;
+
+        _subscribedNetworkManager.OnClientDisconnectCallback -=
+            HandleClientDisconnectedServer;
+        _subscribedNetworkManager = null;
+    }
+
+    private void HandleClientDisconnectedServer(ulong clientId)
+    {
+        if (!IsServer || _roundRevision < 0 || _guessRevision < 0)
+            return;
+
+        PostItRoundManager postItRoundManager = ResolvePostItRoundManager();
+        if (!IsValidServerPostItRoundManager(postItRoundManager) ||
+            postItRoundManager.ActiveGuessRoundRevision != _roundRevision ||
+            postItRoundManager.ActiveGuessRevision != _guessRevision ||
+            !postItRoundManager.ServerHandleGuessDisconnect(
+                clientId,
+                _roundRevision,
+                _guessRevision,
+                out bool allSubmissionsResolved))
+        {
+            return;
+        }
+
+        if (GetState() == GameState.Guessing && allSubmissionsResolved)
+        {
+            TryFinalizeGuessFlowServer(
+                _activePlayingEndReason != PlayingEndReason.Timer);
+        }
     }
 
     private bool CanUseLastSurvivorWinCheck()
