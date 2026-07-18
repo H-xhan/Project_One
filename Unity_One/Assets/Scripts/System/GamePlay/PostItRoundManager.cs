@@ -5,9 +5,11 @@ using UnityEngine;
 
 public class PostItRoundManager : NetworkBehaviour
 {
-    [SerializeField] private int initialPostItCountPerPlayer = 3;
+    [SerializeField] private int initialDrawingPostItCountPerPlayer = 2;
+    [SerializeField] private int initialEffectPostItCountPerPlayer = 1;
+    [SerializeField, HideInInspector] private int initialPostItCountPerPlayer = 3;
     [SerializeField] private int firstPostItId = 0;
-    [SerializeField] private int defaultVisualId = 0;
+    [SerializeField, HideInInspector] private int defaultVisualId = 0;
     [SerializeField] private bool debugLogs = false;
 
     [Header("Guessing")]
@@ -31,6 +33,11 @@ public class PostItRoundManager : NetworkBehaviour
     private readonly Dictionary<int, PostItRuntimeData> _worldDropPayloads =
         new Dictionary<int, PostItRuntimeData>();
     private readonly HashSet<int> _claimedWorldDropIds = new HashSet<int>();
+    private readonly Dictionary<ulong, int> _initialAssignmentRevisionByOwner =
+        new Dictionary<ulong, int>();
+    private int _lastInitialAssignmentRoundRevision = -1;
+    private int _lastExplicitInitialAssignmentRoundRevision = -1;
+    private bool _initialAssignmentInProgress;
     private readonly List<PostItGuessPlayerScoreData> _guessScores =
         new List<PostItGuessPlayerScoreData>();
     private NetworkList<PostItWorldDropData> _networkWorldDrops;
@@ -89,6 +96,14 @@ public class PostItRoundManager : NetworkBehaviour
         public PlayerPostItInventory Inventory;
         public ulong OwnerClientId;
         public ulong PlayerNetworkObjectId;
+    }
+
+    private sealed class PreparedInitialAssignment
+    {
+        public PlayerPostItInventory Inventory;
+        public ulong OwnerClientId;
+        public PostItRuntimeData[] PreviousItems;
+        public PostItRuntimeData[] DesiredItems;
     }
 
     private void Awake()
@@ -164,6 +179,10 @@ public class PostItRoundManager : NetworkBehaviour
             if (IsServer)
             {
                 _worldDropPayloads.Clear();
+                _initialAssignmentRevisionByOwner.Clear();
+                _lastInitialAssignmentRoundRevision = -1;
+                _lastExplicitInitialAssignmentRoundRevision = -1;
+                _initialAssignmentInProgress = false;
                 ClearServerGuessSnapshotState();
             }
 
@@ -185,88 +204,323 @@ public class PostItRoundManager : NetworkBehaviour
 
     public bool ServerAssignInitialPostIts(IEnumerable<PlayerPostItInventory> inventories)
     {
+        if (IsSpawnedNetworkSession() && !IsPlayingState())
+        {
+            LogWarning(
+                "The no-revision initial assignment API is restricted to Playing. " +
+                "Use the revision overload during Countdown.");
+            return false;
+        }
+
+        bool reuseExplicitRevision =
+            _lastInitialAssignmentRoundRevision >= 0 &&
+            _lastExplicitInitialAssignmentRoundRevision ==
+            _lastInitialAssignmentRoundRevision;
+        if (!reuseExplicitRevision &&
+            _lastInitialAssignmentRoundRevision == int.MaxValue)
+        {
+            LogAuthorityError("Cannot advance the initial assignment round revision.");
+            return false;
+        }
+
+        int roundRevision = reuseExplicitRevision
+            ? _lastInitialAssignmentRoundRevision
+            : _lastInitialAssignmentRoundRevision + 1;
+        return ServerAssignInitialPostItsCore(inventories, roundRevision, false);
+    }
+
+    public bool ServerAssignInitialPostIts(
+        IEnumerable<PlayerPostItInventory> inventories,
+        int roundRevision)
+    {
+        return ServerAssignInitialPostItsCore(inventories, roundRevision, true);
+    }
+
+    private bool ServerAssignInitialPostItsCore(
+        IEnumerable<PlayerPostItInventory> inventories,
+        int roundRevision,
+        bool explicitRevision)
+    {
         if (!CanMutateServerState())
         {
             LogWarning("Blocked initial post-it assignment on non-server instance.");
             return false;
         }
 
-        if (inventories == null)
+        if (inventories == null || roundRevision < 0)
         {
-            LogWarning("Rejected initial post-it assignment because inventories is null.");
+            LogWarning("Rejected invalid initial post-it assignment request.");
             return false;
         }
 
-        List<PlayerPostItInventory> validInventories = new List<PlayerPostItInventory>();
-        HashSet<PlayerPostItInventory> uniqueInventories = new HashSet<PlayerPostItInventory>();
-        foreach (PlayerPostItInventory inventory in inventories)
+        if (_initialAssignmentInProgress)
         {
-            if (inventory != null &&
-                IsValidServerInventory(inventory) &&
-                uniqueInventories.Add(inventory))
-            {
-                validInventories.Add(inventory);
-            }
+            LogWarning("Rejected reentrant initial post-it assignment.");
+            return false;
         }
 
-        if (validInventories.Count == 0)
+        if (roundRevision < _lastInitialAssignmentRoundRevision)
+        {
+            LogWarning(
+                $"Rejected stale initial post-it assignment. roundRevision={roundRevision}");
+            return false;
+        }
+
+        bool isNewRoundRevision = roundRevision > _lastInitialAssignmentRoundRevision;
+
+        if (visualCatalog == null)
+        {
+            LogAuthorityError("Cannot assign initial Post-its because the visual catalog is missing.");
+            return false;
+        }
+
+        if (!TryBuildInitialAssignmentCatalog(
+                out List<PostItVisualCatalogSO.Entry> drawingEntries,
+                out List<PostItVisualCatalogSO.Entry> effectEntries,
+                out string catalogError))
+        {
+            LogAuthorityError(
+                $"Cannot assign initial Post-its because the catalog is invalid. {catalogError}");
+            return false;
+        }
+
+        int drawingCount = Mathf.Max(0, initialDrawingPostItCountPerPlayer);
+        int effectCount = Mathf.Max(0, initialEffectPostItCountPerPlayer);
+        long desiredCountLong = (long)drawingCount + effectCount;
+        if (desiredCountLong > int.MaxValue)
+        {
+            LogAuthorityError("Initial Post-it count exceeds the supported range.");
+            return false;
+        }
+
+        int desiredCount = (int)desiredCountLong;
+        if ((drawingCount > 0 && drawingEntries.Count == 0) ||
+            (effectCount > 0 && effectEntries.Count == 0))
+        {
+            LogAuthorityError("The visual catalog cannot satisfy the initial Post-it counts.");
+            return false;
+        }
+
+        List<PreparedInitialAssignment> preparedAssignments =
+            new List<PreparedInitialAssignment>();
+        HashSet<PlayerPostItInventory> uniqueInventories = new HashSet<PlayerPostItInventory>();
+        HashSet<ulong> uniqueOwnerClientIds = new HashSet<ulong>();
+        foreach (PlayerPostItInventory inventory in inventories)
+        {
+            if (!IsValidServerInventory(inventory))
+            {
+                continue;
+            }
+
+            if (!uniqueInventories.Add(inventory))
+            {
+                continue;
+            }
+
+            ulong ownerClientId = ResolveInventoryOwnerClientId(inventory);
+            if (ownerClientId == ulong.MaxValue || !uniqueOwnerClientIds.Add(ownerClientId))
+            {
+                LogAuthorityError("Initial assignment contains an invalid or duplicate inventory owner.");
+                return false;
+            }
+
+            if (inventory.Capacity < desiredCount)
+            {
+                LogAuthorityError(
+                    $"Initial assignment exceeds inventory capacity. ownerClientId={ownerClientId}");
+                return false;
+            }
+
+            if (_initialAssignmentRevisionByOwner.TryGetValue(
+                    ownerClientId,
+                    out int assignedRevision) &&
+                assignedRevision == roundRevision)
+            {
+                continue;
+            }
+
+            preparedAssignments.Add(new PreparedInitialAssignment
+            {
+                Inventory = inventory,
+                OwnerClientId = ownerClientId,
+                PreviousItems = inventory.GetSnapshot()
+            });
+        }
+
+        if (uniqueOwnerClientIds.Count == 0)
         {
             LogWarning("Rejected initial post-it assignment because no valid inventories were found.");
             return false;
         }
 
-        if (!ServerClearWorldDrops())
+        if (preparedAssignments.Count == 0)
         {
-            LogWarning("Rejected initial post-it assignment because world drops could not be cleared.");
+            if (explicitRevision)
+            {
+                _lastExplicitInitialAssignmentRoundRevision = roundRevision;
+            }
+
+            return true;
+        }
+
+        preparedAssignments.Sort(CompareInitialAssignmentsByOwnerClientId);
+
+        PlayerPostItInventory[] allSceneInventories =
+            FindObjectsByType<PlayerPostItInventory>(FindObjectsSortMode.None);
+        if (!ServerTryBuildRoundSnapshot(allSceneInventories, out PostItRuntimeData[] currentSnapshot))
+        {
+            LogAuthorityError("Cannot reserve initial Post-it IDs because current locations are invalid.");
             return false;
         }
 
-        bool allAddsSucceeded = true;
-        int postItCount = Mathf.Max(0, initialPostItCountPerPlayer);
-        int validInventoryCount = validInventories.Count;
-        int totalAssignedPostIts = 0;
-
-        for (int inventoryIndex = 0; inventoryIndex < validInventories.Count; inventoryIndex++)
+        HashSet<int> reservedPostItIds = new HashSet<int>();
+        for (int snapshotIndex = 0; snapshotIndex < currentSnapshot.Length; snapshotIndex++)
         {
-            PlayerPostItInventory inventory = validInventories[inventoryIndex];
-            inventory.ServerClearPostIts();
+            reservedPostItIds.Add(currentSnapshot[snapshotIndex].PostItId);
+        }
 
-            ulong ownerClientId = ResolveInventoryOwnerClientId(inventory);
-            for (int slotIndex = 0; slotIndex < postItCount; slotIndex++)
+        int nextPostItId = _nextPostItId;
+        if (nextPostItId < 0)
+        {
+            LogAuthorityError("Cannot assign initial Post-its from a negative PostItId counter.");
+            return false;
+        }
+
+        for (int assignmentIndex = 0;
+             assignmentIndex < preparedAssignments.Count;
+             assignmentIndex++)
+        {
+            PreparedInitialAssignment assignment = preparedAssignments[assignmentIndex];
+            PostItRuntimeData[] desiredItems = new PostItRuntimeData[desiredCount];
+            int slotIndex = 0;
+
+            int drawingStartIndex = drawingEntries.Count > 0
+                ? (int)(ComputeStableAssignmentHash(
+                    roundRevision,
+                    assignment.OwnerClientId,
+                    0,
+                    0x44524157u) % (uint)drawingEntries.Count)
+                : 0;
+            for (int drawingIndex = 0; drawingIndex < drawingCount; drawingIndex++)
             {
-                PostItRuntimeData data = new PostItRuntimeData(
-                    _nextPostItId++,
-                    PostItType.Drawing,
-                    ResolveTopicByIndex(slotIndex),
-                    defaultVisualId,
-                    ownerClientId,
-                    ownerClientId,
-                    slotIndex);
-
-                if (!inventory.ServerTryAddPostIt(data, out _))
+                if (!TryReserveNextPostItId(
+                        reservedPostItIds,
+                        ref nextPostItId,
+                        out int postItId))
                 {
-                    allAddsSucceeded = false;
-                    LogWarning($"Failed to assign initial post-it. postItId={data.PostItId}, slot={slotIndex}");
-                    continue;
+                    LogAuthorityError("Initial PostItId space is exhausted.");
+                    return false;
                 }
 
-                totalAssignedPostIts++;
+                PostItVisualCatalogSO.Entry entry =
+                    drawingEntries[(drawingStartIndex + drawingIndex) % drawingEntries.Count];
+                desiredItems[slotIndex] = new PostItRuntimeData(
+                    postItId,
+                    entry.Type,
+                    entry.TopicId,
+                    entry.VisualId,
+                    assignment.OwnerClientId,
+                    assignment.OwnerClientId,
+                    slotIndex);
+                slotIndex++;
             }
+
+            for (int effectIndex = 0; effectIndex < effectCount; effectIndex++)
+            {
+                if (!TryReserveNextPostItId(
+                        reservedPostItIds,
+                        ref nextPostItId,
+                        out int postItId))
+                {
+                    LogAuthorityError("Initial PostItId space is exhausted.");
+                    return false;
+                }
+
+                uint effectHash = ComputeStableAssignmentHash(
+                    roundRevision,
+                    assignment.OwnerClientId,
+                    effectIndex,
+                    0x45464654u);
+                PostItVisualCatalogSO.Entry entry =
+                    effectEntries[(int)(effectHash % (uint)effectEntries.Count)];
+                desiredItems[slotIndex] = new PostItRuntimeData(
+                    postItId,
+                    entry.Type,
+                    entry.TopicId,
+                    entry.VisualId,
+                    assignment.OwnerClientId,
+                    assignment.OwnerClientId,
+                    slotIndex);
+                slotIndex++;
+            }
+
+            assignment.DesiredItems = desiredItems;
         }
 
-        if (allAddsSucceeded)
+        _initialAssignmentInProgress = true;
+        try
         {
-            Log(
-                $"Assigned Initial PostIts\nPlayers={validInventoryCount}\nTotalPostIts={totalAssignedPostIts}");
-        }
+            int mutatedAssignmentCount = 0;
+            for (int assignmentIndex = 0;
+                 assignmentIndex < preparedAssignments.Count;
+                 assignmentIndex++)
+            {
+                PreparedInitialAssignment assignment = preparedAssignments[assignmentIndex];
+                assignment.Inventory.ServerClearPostIts();
+                mutatedAssignmentCount = assignmentIndex + 1;
+                if (!InventoryMatches(assignment.Inventory, Array.Empty<PostItRuntimeData>()) ||
+                    !TryAddInitialAssignmentItems(assignment))
+                {
+                    RollBackInitialAssignments(preparedAssignments, mutatedAssignmentCount);
+                    return false;
+                }
+            }
 
-        return allAddsSucceeded;
+            if (isNewRoundRevision && !ServerClearWorldDrops())
+            {
+                RollBackInitialAssignments(preparedAssignments, mutatedAssignmentCount);
+                LogAuthorityError("Initial assignment failed because world drops could not be cleared.");
+                return false;
+            }
+
+            _nextPostItId = nextPostItId;
+            _lastInitialAssignmentRoundRevision = roundRevision;
+            for (int assignmentIndex = 0;
+                 assignmentIndex < preparedAssignments.Count;
+                 assignmentIndex++)
+            {
+                _initialAssignmentRevisionByOwner[
+                    preparedAssignments[assignmentIndex].OwnerClientId] = roundRevision;
+            }
+
+            if (explicitRevision)
+            {
+                _lastExplicitInitialAssignmentRoundRevision = roundRevision;
+            }
+
+            Log(
+                $"Assigned Initial PostIts\nRound={roundRevision}\n" +
+                $"Players={preparedAssignments.Count}\n" +
+                $"TotalPostIts={preparedAssignments.Count * desiredCount}");
+            return true;
+        }
+        finally
+        {
+            _initialAssignmentInProgress = false;
+        }
     }
 
     public bool ServerAssignInitialPostItsFromScene()
     {
         PlayerPostItInventory[] inventories = FindObjectsByType<PlayerPostItInventory>(FindObjectsSortMode.None);
         return ServerAssignInitialPostIts(inventories);
+    }
+
+    public bool ServerAssignInitialPostItsFromScene(int roundRevision)
+    {
+        PlayerPostItInventory[] inventories =
+            FindObjectsByType<PlayerPostItInventory>(FindObjectsSortMode.None);
+        return ServerAssignInitialPostIts(inventories, roundRevision);
     }
 
     public PostItRuntimeData[] BuildRoundSnapshot(IEnumerable<PlayerPostItInventory> inventories)
@@ -1718,6 +1972,192 @@ public class PostItRoundManager : NetworkBehaviour
         return ulong.MaxValue;
     }
 
+    private bool TryBuildInitialAssignmentCatalog(
+        out List<PostItVisualCatalogSO.Entry> drawingEntries,
+        out List<PostItVisualCatalogSO.Entry> effectEntries,
+        out string validationError)
+    {
+        drawingEntries = new List<PostItVisualCatalogSO.Entry>();
+        effectEntries = new List<PostItVisualCatalogSO.Entry>();
+        validationError = null;
+
+        if (!visualCatalog.ValidateCatalog(out validationError))
+        {
+            return false;
+        }
+
+        IReadOnlyList<PostItVisualCatalogSO.Entry> entries = visualCatalog.Entries;
+        for (int entryIndex = 0; entryIndex < entries.Count; entryIndex++)
+        {
+            PostItVisualCatalogSO.Entry entry = entries[entryIndex];
+            if (!entry.Enabled)
+            {
+                continue;
+            }
+
+            if (entry.Type == PostItType.Drawing &&
+                PostItVisualCatalogSO.IsSupportedDrawingTopic(entry.TopicId))
+            {
+                drawingEntries.Add(entry);
+                continue;
+            }
+
+            if ((entry.Type == PostItType.Bonus || entry.Type == PostItType.Penalty) &&
+                entry.TopicId == PostItTopicId.None)
+            {
+                effectEntries.Add(entry);
+            }
+        }
+
+        drawingEntries.Sort(CompareCatalogEntriesByVisualId);
+        effectEntries.Sort(CompareCatalogEntriesByVisualId);
+        return true;
+    }
+
+    private static int CompareCatalogEntriesByVisualId(
+        PostItVisualCatalogSO.Entry left,
+        PostItVisualCatalogSO.Entry right)
+    {
+        return left.VisualId.CompareTo(right.VisualId);
+    }
+
+    private static int CompareInitialAssignmentsByOwnerClientId(
+        PreparedInitialAssignment left,
+        PreparedInitialAssignment right)
+    {
+        return left.OwnerClientId.CompareTo(right.OwnerClientId);
+    }
+
+    private static uint ComputeStableAssignmentHash(
+        int roundRevision,
+        ulong ownerClientId,
+        int ordinal,
+        uint categorySalt)
+    {
+        unchecked
+        {
+            uint hash = 2166136261u;
+            hash = (hash ^ (uint)roundRevision) * 16777619u;
+            hash = (hash ^ (uint)ownerClientId) * 16777619u;
+            hash = (hash ^ (uint)(ownerClientId >> 32)) * 16777619u;
+            hash = (hash ^ (uint)ordinal) * 16777619u;
+            hash = (hash ^ categorySalt) * 16777619u;
+            return hash;
+        }
+    }
+
+    private static bool TryReserveNextPostItId(
+        HashSet<int> reservedPostItIds,
+        ref int nextPostItId,
+        out int postItId)
+    {
+        postItId = -1;
+        while (reservedPostItIds.Contains(nextPostItId))
+        {
+            if (nextPostItId == int.MaxValue)
+            {
+                return false;
+            }
+
+            nextPostItId++;
+        }
+
+        if (nextPostItId == int.MaxValue)
+        {
+            return false;
+        }
+
+        postItId = nextPostItId;
+        reservedPostItIds.Add(postItId);
+        nextPostItId++;
+        return true;
+    }
+
+    private bool TryAddInitialAssignmentItems(PreparedInitialAssignment assignment)
+    {
+        for (int itemIndex = 0; itemIndex < assignment.DesiredItems.Length; itemIndex++)
+        {
+            PostItRuntimeData desiredItem = assignment.DesiredItems[itemIndex];
+            if (!assignment.Inventory.ServerTryAddPostIt(
+                    desiredItem,
+                    out PostItRuntimeData assignedItem) ||
+                !assignedItem.Equals(desiredItem))
+            {
+                LogAuthorityError(
+                    $"Failed to write initial Post-it. ownerClientId={assignment.OwnerClientId}, " +
+                    $"postItId={desiredItem.PostItId}");
+                return false;
+            }
+        }
+
+        return InventoryMatches(assignment.Inventory, assignment.DesiredItems);
+    }
+
+    private void RollBackInitialAssignments(
+        IReadOnlyList<PreparedInitialAssignment> assignments,
+        int mutatedAssignmentCount)
+    {
+        bool rollbackSucceeded = true;
+        for (int assignmentIndex = mutatedAssignmentCount - 1;
+             assignmentIndex >= 0;
+             assignmentIndex--)
+        {
+            PreparedInitialAssignment assignment = assignments[assignmentIndex];
+            assignment.Inventory.ServerClearPostIts();
+            if (!InventoryMatches(assignment.Inventory, Array.Empty<PostItRuntimeData>()))
+            {
+                rollbackSucceeded = false;
+                continue;
+            }
+
+            for (int itemIndex = 0;
+                 itemIndex < assignment.PreviousItems.Length;
+                 itemIndex++)
+            {
+                PostItRuntimeData previousItem = assignment.PreviousItems[itemIndex];
+                if (!assignment.Inventory.ServerTryAddPostIt(previousItem, out PostItRuntimeData restoredItem) ||
+                    !restoredItem.Equals(previousItem))
+                {
+                    rollbackSucceeded = false;
+                    break;
+                }
+            }
+
+            if (!InventoryMatches(assignment.Inventory, assignment.PreviousItems))
+            {
+                rollbackSucceeded = false;
+            }
+        }
+
+        if (!rollbackSucceeded)
+        {
+            Debug.LogError(
+                $"[{nameof(PostItRoundManager)}] Failed to roll back initial Post-it assignment.",
+                this);
+        }
+    }
+
+    private static bool InventoryMatches(
+        PlayerPostItInventory inventory,
+        IReadOnlyList<PostItRuntimeData> expectedItems)
+    {
+        PostItRuntimeData[] currentItems = inventory.GetSnapshot();
+        if (currentItems.Length != expectedItems.Count)
+        {
+            return false;
+        }
+
+        for (int itemIndex = 0; itemIndex < currentItems.Length; itemIndex++)
+        {
+            if (!currentItems[itemIndex].Equals(expectedItems[itemIndex]))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
     private int CountAuthoritativePostItLocations(int postItId)
     {
         int count = _worldDropPayloads.ContainsKey(postItId) ? 1 : 0;
@@ -1959,23 +2399,6 @@ public class PostItRoundManager : NetworkBehaviour
         return true;
     }
 
-    private PostItTopicId ResolveTopicByIndex(int index)
-    {
-        switch (index % 5)
-        {
-            case 0:
-                return PostItTopicId.Animal;
-            case 1:
-                return PostItTopicId.Food;
-            case 2:
-                return PostItTopicId.Object;
-            case 3:
-                return PostItTopicId.Emotion;
-            default:
-                return PostItTopicId.Free;
-        }
-    }
-
     private ulong ResolveInventoryOwnerClientId(PlayerPostItInventory inventory)
     {
         if (inventory != null && inventory.NetworkObject != null && inventory.NetworkObject.IsSpawned)
@@ -1988,7 +2411,10 @@ public class PostItRoundManager : NetworkBehaviour
 
     private void OnValidate()
     {
+        initialDrawingPostItCountPerPlayer = Mathf.Max(0, initialDrawingPostItCountPerPlayer);
+        initialEffectPostItCountPerPlayer = Mathf.Max(0, initialEffectPostItCountPerPlayer);
         initialPostItCountPerPlayer = Mathf.Max(0, initialPostItCountPerPlayer);
+        defaultVisualId = Mathf.Max(0, defaultVisualId);
         guessingDurationSeconds = Mathf.Max(0.1f, guessingDurationSeconds);
         worldDropGroundProbeHeight = Mathf.Max(0.1f, worldDropGroundProbeHeight);
         worldDropGroundProbeDistance = Mathf.Max(0.2f, worldDropGroundProbeDistance);
