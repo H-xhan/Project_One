@@ -11,7 +11,8 @@ public class GameStateManager : NetworkBehaviour
         Lobby = 0,
         Countdown = 1,
         Playing = 2,
-        Results = 3
+        Results = 3,
+        Guessing = 4
     }
 
     [Header("Refs")]
