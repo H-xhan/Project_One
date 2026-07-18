@@ -11,6 +11,7 @@ public sealed class HamsterMotorShellSpinDashAdapter : MonoBehaviour
     private const string DashReason = "SpinDash:Dashing";
     private const string DizzyReason = "SpinDash:Dizzy";
     private const string CooldownReason = "SpinDash:Cooldown";
+    private const string GameplayPhaseLockReason = "GameState:GuessingResults";
 
     private enum SpinDashState
     {
@@ -93,6 +94,7 @@ public sealed class HamsterMotorShellSpinDashAdapter : MonoBehaviour
     [SerializeField] private bool debugSpinDashLogs = false;
 
     private NetworkObject _ownerNetworkObject;
+    private GameStateManager _gameStateManager;
     private Transform _targetRoot;
     private SpinDashState _state;
     private Vector3 _dashDirection = Vector3.forward;
@@ -127,6 +129,12 @@ public sealed class HamsterMotorShellSpinDashAdapter : MonoBehaviour
 
         CacheReferences();
 
+        if (IsGameplayPhaseLocked())
+        {
+            CancelSpinDash(GameplayPhaseLockReason);
+            return;
+        }
+
         if (blockDuringRecovery && IsRecoveryActive())
         {
             CancelSpinDash("RecoveryActive");
@@ -154,6 +162,12 @@ public sealed class HamsterMotorShellSpinDashAdapter : MonoBehaviour
         if (!IsTargetRoot() || _state != SpinDashState.Dashing)
             return;
 
+        if (IsGameplayPhaseLocked())
+        {
+            CancelSpinDash(GameplayPhaseLockReason);
+            return;
+        }
+
         if (blockDuringRecovery && IsRecoveryActive())
         {
             CancelSpinDash("RecoveryActiveFixed");
@@ -177,6 +191,9 @@ public sealed class HamsterMotorShellSpinDashAdapter : MonoBehaviour
             _ownerNetworkObject = GetComponent<NetworkObject>();
         if (_ownerNetworkObject == null)
             _ownerNetworkObject = GetComponentInParent<NetworkObject>();
+
+        if (_gameStateManager == null)
+            _gameStateManager = FindFirstObjectByType<GameStateManager>();
 
         if (motor == null && _targetRoot != null)
             motor = _targetRoot.GetComponentInChildren<HamsterFullRagdollMotor>(true);
@@ -210,6 +227,19 @@ public sealed class HamsterMotorShellSpinDashAdapter : MonoBehaviour
             visualClipStateDriver = _targetRoot.GetComponentInChildren<HamsterVisualClipStateDriver>(true);
         if (faceAdapter == null && _targetRoot != null)
             faceAdapter = _targetRoot.GetComponentInChildren<HamsterMotorShellFaceExpressionAdapter>(true);
+    }
+
+    private bool IsGameplayPhaseLocked()
+    {
+        if (_gameStateManager == null)
+            _gameStateManager = FindFirstObjectByType<GameStateManager>();
+
+        if (_gameStateManager == null)
+            return false;
+
+        GameStateManager.GameState state = _gameStateManager.GetState();
+        return state == GameStateManager.GameState.Guessing ||
+               state == GameStateManager.GameState.Results;
     }
 
     private bool CanReadOwnerInput()
