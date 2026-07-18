@@ -972,7 +972,7 @@ public class PostItRoundManager : NetworkBehaviour
 
         _guessSubmissionOpen = totalEligibleCount > 0;
         if (totalEligibleCount == 0 &&
-            !TryFinalizeGuessingCore(roundRevision, guessRevision, true))
+            !TryFinalizeGuessingCore(roundRevision, guessRevision, true, false))
         {
             LogAuthorityError("Failed to finalize a zero-candidate Guessing snapshot.");
             if (!ServerClearGuessStateCore(inventoryList))
@@ -1169,7 +1169,32 @@ public class PostItRoundManager : NetworkBehaviour
         _guessMutationInProgress = true;
         try
         {
-            return TryFinalizeGuessingCore(roundRevision, guessRevision, false);
+            return TryFinalizeGuessingCore(roundRevision, guessRevision, false, false);
+        }
+        finally
+        {
+            _guessMutationInProgress = false;
+        }
+    }
+
+    public bool ServerFinalizeGuessingImmediately(
+        int roundRevision,
+        int guessRevision)
+    {
+        if (_guessMutationInProgress)
+        {
+            return false;
+        }
+
+        _guessMutationInProgress = true;
+        try
+        {
+            if (!IsGuessingState())
+            {
+                return false;
+            }
+
+            return TryFinalizeGuessingCore(roundRevision, guessRevision, false, true);
         }
         finally
         {
@@ -1393,7 +1418,8 @@ public class PostItRoundManager : NetworkBehaviour
     private bool TryFinalizeGuessingCore(
         int roundRevision,
         int guessRevision,
-        bool allowOutsideGuessingForZeroCandidates)
+        bool allowOutsideGuessingForZeroCandidates,
+        bool allowBeforeDeadline)
     {
         if (!CanMutateServerState() ||
             roundRevision != _roundRevision ||
@@ -1423,7 +1449,9 @@ public class PostItRoundManager : NetworkBehaviour
             return false;
         }
 
-        if (hasPendingEntries && serverTime < _guessDeadlineServerTime)
+        if (hasPendingEntries &&
+            !allowBeforeDeadline &&
+            serverTime < _guessDeadlineServerTime)
         {
             return false;
         }
