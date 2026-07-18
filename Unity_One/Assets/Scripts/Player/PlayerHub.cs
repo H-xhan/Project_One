@@ -8,6 +8,7 @@ public class PlayerHub : NetworkBehaviour
 {
     private const string InputRouteTargetName = "Hamster_JointFreeMotorShell_MainScenes";
     private const float InputRouteLogInterval = 0.5f;
+    private const string GameplayPhaseJumpLockReason = "GameState:GuessingResults";
     private const string RuntimeMainCameraTag = "MainCamera";
     private const string SceneMainCameraName = "Main Camera";
     private const float PostItWorldRecoveryEndpointGroundMinUpDot = 0.35f;
@@ -242,6 +243,8 @@ public class PlayerHub : NetworkBehaviour
     private float _pitchDelta;
     private bool _jumpPressed;
     private bool _sprintHeld;
+    private bool _gameplayPhaseLockedServer;
+    private bool _isGameplayStateChangeSubscribed;
     private float _nextInputRouteOwnerLogTime;
     private float _nextInputRouteServerLogTime;
     private float _nextMotorShellCameraLogTime;
@@ -274,6 +277,7 @@ public class PlayerHub : NetworkBehaviour
         CacheCameraDefaults();
         ApplyOwnerVisuals();
         ApplyDefaultCameraPitchImmediate();
+        SubscribeGameplayStateChanges();
 
         if (!IsOwner && inputModule != null)
             inputModule.enabled = false;
@@ -293,6 +297,8 @@ public class PlayerHub : NetworkBehaviour
 
     public override void OnNetworkDespawn()
     {
+        UnsubscribeGameplayStateChanges();
+        ReleaseOwnedGameplayPhaseJumpLock();
         ResetCameraPositionSmoothingState();
         base.OnNetworkDespawn();
     }
@@ -304,6 +310,8 @@ public class PlayerHub : NetworkBehaviour
 
     private void OnDestroy()
     {
+        UnsubscribeGameplayStateChanges();
+        ReleaseOwnedGameplayPhaseJumpLock();
         ResetCameraPositionSmoothingState();
     }
 
@@ -427,17 +435,20 @@ public class PlayerHub : NetworkBehaviour
 
     private bool CanMoveNow()
     {
-        return statusModule == null || statusModule.CanMove;
+        return !IsGameplayPhaseLocked() &&
+               (statusModule == null || statusModule.CanMove);
     }
 
     private bool CanAttackNow()
     {
-        return statusModule == null || statusModule.CanAttack;
+        return !IsGameplayPhaseLocked() &&
+               (statusModule == null || statusModule.CanAttack);
     }
 
     private bool CanInteractNow()
     {
-        return statusModule == null || statusModule.CanInteract;
+        return !IsGameplayPhaseLocked() &&
+               (statusModule == null || statusModule.CanInteract);
     }
     private bool IsPlayingState()
     {
@@ -492,6 +503,145 @@ public class PlayerHub : NetworkBehaviour
         return true;
     }
 
+    private bool IsGameplayPhaseLocked()
+    {
+        return TryGetGameState(out GameStateManager.GameState state) &&
+               IsGameplayPhaseLocked(state);
+    }
+
+    private static bool IsGameplayPhaseLocked(GameStateManager.GameState state)
+    {
+        return state == GameStateManager.GameState.Guessing ||
+               state == GameStateManager.GameState.Results;
+    }
+
+    private void SubscribeGameplayStateChanges()
+    {
+        if (_isGameplayStateChangeSubscribed ||
+            !IsSpawned ||
+            (!IsOwner && !IsServer))
+        {
+            return;
+        }
+
+        if (gameStateManager == null)
+            gameStateManager = FindFirstObjectByType<GameStateManager>();
+
+        if (gameStateManager == null)
+            return;
+
+        gameStateManager.StateValue.OnValueChanged += HandleGameplayStateChanged;
+        _isGameplayStateChangeSubscribed = true;
+        ApplyCurrentGameplayPhaseLock();
+    }
+
+    private void UnsubscribeGameplayStateChanges()
+    {
+        if (!_isGameplayStateChangeSubscribed)
+            return;
+
+        if (gameStateManager != null)
+        {
+            gameStateManager.StateValue.OnValueChanged -=
+                HandleGameplayStateChanged;
+        }
+
+        _isGameplayStateChangeSubscribed = false;
+    }
+
+    private void HandleGameplayStateChanged(
+        int previousStateValue,
+        int newStateValue)
+    {
+        GameStateManager.GameState newState =
+            (GameStateManager.GameState)newStateValue;
+        bool gameplayLocked = IsGameplayPhaseLocked(newState);
+        if (gameplayLocked)
+            ClearPendingGameplayInput();
+
+        if (IsServer)
+            ApplyGameplayPhaseLockServer(gameplayLocked);
+    }
+
+    private void ApplyCurrentGameplayPhaseLock()
+    {
+        bool gameplayLocked = IsGameplayPhaseLocked();
+        if (gameplayLocked)
+            ClearPendingGameplayInput();
+
+        if (IsServer)
+            ApplyGameplayPhaseLockServer(gameplayLocked);
+    }
+
+    private void ApplyGameplayPhaseLockServer(bool gameplayLocked)
+    {
+        if (!IsServer)
+            return;
+
+        if (gameplayLocked)
+        {
+            ClearPendingGameplayInput();
+            _attackBufferedServer = false;
+            _attackBufferedAtServer = 0f;
+            ApplyOwnedGameplayPhaseJumpLock();
+        }
+
+        if (_gameplayPhaseLockedServer == gameplayLocked)
+            return;
+
+        _gameplayPhaseLockedServer = gameplayLocked;
+        if (!gameplayLocked)
+        {
+            ReleaseOwnedGameplayPhaseJumpLock();
+            return;
+        }
+
+        if (interactModule != null && interactModule.IsCharacterGrabBusy)
+            interactModule.ServerReleaseCharacterGrab("GameplayPhaseLock");
+
+        if (locomotionModule != null && locomotionModule.IsSpinDashing)
+            locomotionModule.ServerCancelSpinDash(false);
+    }
+
+    private void ClearPendingGameplayInput()
+    {
+        _moveInput = Vector2.zero;
+        _yawDelta = 0f;
+        _pitchDelta = 0f;
+        _jumpPressed = false;
+        _sprintHeld = false;
+        _postItPeelEvaluatedFrame = -1;
+        _postItPeelConsumedInEvaluatedFrame = false;
+    }
+
+    private void ApplyOwnedGameplayPhaseJumpLock()
+    {
+        HamsterFullRagdollMotor motorShellMotor = ResolveMotorShellMotor();
+        if (motorShellMotor == null)
+            return;
+
+        if (!motorShellMotor.IsExternalJumpLocked ||
+            motorShellMotor.ExternalJumpLockReason == GameplayPhaseJumpLockReason)
+        {
+            motorShellMotor.SetExternalJumpLock(
+                true,
+                GameplayPhaseJumpLockReason);
+        }
+    }
+
+    private void ReleaseOwnedGameplayPhaseJumpLock()
+    {
+        HamsterFullRagdollMotor motorShellMotor = _motorShellMotor;
+        if (motorShellMotor == null ||
+            !motorShellMotor.IsExternalJumpLocked ||
+            motorShellMotor.ExternalJumpLockReason != GameplayPhaseJumpLockReason)
+        {
+            return;
+        }
+
+        motorShellMotor.SetExternalJumpLock(false, "GameState:Restore");
+    }
+
     private ReadySystem ResolveReadySystem()
     {
         if (_readySystem == null)
@@ -502,6 +652,7 @@ public class PlayerHub : NetworkBehaviour
 
     private void Update()
     {
+        SubscribeGameplayStateChanges();
         if (IsOwner) TickOwner();
         if (IsServer) TickServer();
     }
@@ -529,6 +680,19 @@ public class PlayerHub : NetworkBehaviour
         bool rawSprintHeld = sprintHeld;
         float rawYawDelta = yawDelta;
         float rawPitchDelta = pitchDelta;
+        bool gameplayPhaseLocked = IsGameplayPhaseLocked();
+        if (gameplayPhaseLocked)
+        {
+            move = Vector2.zero;
+            yawDelta = 0f;
+            pitchDelta = 0f;
+            jumpPressed = false;
+            sprintHeld = false;
+            attackPressed = false;
+            interactPressed = false;
+            dropPressed = false;
+        }
+
         float cameraPivotYawBefore = GetTransformYawForLog(cameraRoot != null ? cameraRoot.transform : null);
         Camera playerCameraBefore = PlayerCamera;
         float playerCameraPitchBefore = GetTransformPitchForLog(playerCameraBefore != null ? playerCameraBefore.transform : null);
@@ -659,6 +823,12 @@ public class PlayerHub : NetworkBehaviour
     [ServerRpc]
     private void DropItemServerRpc()
     {
+        if (IsGameplayPhaseLocked())
+        {
+            ClearPendingGameplayInput();
+            return;
+        }
+
         if (interactModule != null && interactModule.IsGrabbingCharacter)
         {
             interactModule.ServerReleaseCharacterGrab("DropInput");
@@ -673,6 +843,9 @@ public class PlayerHub : NetworkBehaviour
     private void RequestSpinDashServerRpc(ServerRpcParams rpcParams = default)
     {
         if (rpcParams.Receive.SenderClientId != OwnerClientId)
+            return;
+
+        if (IsGameplayPhaseLocked())
             return;
 
         if (locomotionModule == null)
@@ -1407,7 +1580,9 @@ public class PlayerHub : NetworkBehaviour
 
     private void RequestCharacterGrab(PlayerStatusModule targetStatus)
     {
-        if (interactModule == null || targetStatus == null)
+        if (IsGameplayPhaseLocked() ||
+            interactModule == null ||
+            targetStatus == null)
             return;
 
         if (IsServer)
@@ -1426,6 +1601,9 @@ public class PlayerHub : NetworkBehaviour
     private void RequestCharacterGrabServerRpc(NetworkObjectReference targetReference, ServerRpcParams rpcParams = default)
     {
         if (rpcParams.Receive.SenderClientId != OwnerClientId)
+            return;
+
+        if (IsGameplayPhaseLocked())
             return;
 
         if (interactModule == null)
@@ -2292,6 +2470,8 @@ public class PlayerHub : NetworkBehaviour
 
     private void TickServer()
     {
+        ApplyGameplayPhaseLockServer(IsGameplayPhaseLocked());
+
         if (TryTickMotorShellServer())
             return;
 
@@ -2362,6 +2542,12 @@ public class PlayerHub : NetworkBehaviour
     [ServerRpc(Delivery = RpcDelivery.Unreliable)]
     private void SubmitInputServerRpc(Vector2 move, float yawDelta, bool sprintHeld)
     {
+        if (IsGameplayPhaseLocked())
+        {
+            ClearPendingGameplayInput();
+            return;
+        }
+
         _moveInput = move;
         _yawDelta = yawDelta;
         _sprintHeld = sprintHeld;
@@ -2439,6 +2625,12 @@ public class PlayerHub : NetworkBehaviour
     [ServerRpc(Delivery = RpcDelivery.Reliable)]
     private void QueueJumpServerRpc()
     {
+        if (IsGameplayPhaseLocked())
+        {
+            _jumpPressed = false;
+            return;
+        }
+
         if (interactModule != null && interactModule.IsGrabbedByCharacter)
         {
             interactModule.ServerRegisterCharacterGrabEscapeTap(OwnerClientId);
@@ -2456,6 +2648,13 @@ public class PlayerHub : NetworkBehaviour
         InvokePermission = RpcInvokePermission.Owner)]
     private void AttackServerRpc()
     {
+        if (IsGameplayPhaseLocked())
+        {
+            _attackBufferedServer = false;
+            _attackBufferedAtServer = 0f;
+            return;
+        }
+
         if (TryConsumeCharacterThrowOrBlockAttackServer())
         {
             _attackBufferedServer = false;
@@ -2483,6 +2682,13 @@ public class PlayerHub : NetworkBehaviour
 
     private void StartAttackServerInternal()
     {
+        if (IsGameplayPhaseLocked())
+        {
+            _attackBufferedServer = false;
+            _attackBufferedAtServer = 0f;
+            return;
+        }
+
         if (TryConsumeCharacterThrowOrBlockAttackServer())
             return;
 
@@ -2656,6 +2862,13 @@ public class PlayerHub : NetworkBehaviour
     {
         _attackLockedServer = false;
 
+        if (IsGameplayPhaseLocked())
+        {
+            _attackBufferedServer = false;
+            _attackBufferedAtServer = 0f;
+            return;
+        }
+
         if (!_attackBufferedServer)
             return;
 
@@ -2696,6 +2909,7 @@ public class PlayerHub : NetworkBehaviour
     [ServerRpc]
     private void TryPickupServerRpc(NetworkObjectReference target)
     {
+        if (IsGameplayPhaseLocked()) return;
         if (!CanInteractNow()) return;
         if (interactModule == null) return;
         if (!interactModule.ServerTryPickup(target)) return;
