@@ -1,0 +1,51 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: a06496795e4143499f9b7a56b39b8cdb, type: 3}
+  m_Name: PostItVisualCatalog
+  m_EditorClassIdentifier:
+  entries:
+  - VisualId: 1001
+    TopicId: 1
+    Type: 1
+    PreviewSprite: {fileID: 21300000, guid: 938bfbd0b29631e4ebbccdf8b8dfe0e4, type: 3}
+    DisplayName: Animal
+    Enabled: 1
+  - VisualId: 1002
+    TopicId: 2
+    Type: 1
+    PreviewSprite: {fileID: 21300000, guid: 4532f08e97dd33c4eada9c0b0e2497d0, type: 3}
+    DisplayName: Food
+    Enabled: 1
+  - VisualId: 1003
+    TopicId: 3
+    Type: 1
+    PreviewSprite: {fileID: 21300000, guid: 76d1f3d131f498748ad95d5f7ac64ad2, type: 3}
+    DisplayName: Object
+    Enabled: 1
+  - VisualId: 1004
+    TopicId: 4
+    Type: 1
+    PreviewSprite: {fileID: 21300000, guid: e001cded3f481474a89ddc2ac2402954, type: 3}
+    DisplayName: Emotion
+    Enabled: 1
+  - VisualId: 2001
+    TopicId: 0
+    Type: 3
+    PreviewSprite: {fileID: 21300000, guid: d2d71afea1d97f7499938b0e449947d0, type: 3}
+    DisplayName: Guard
+    Enabled: 1
+  - VisualId: 3001
+    TopicId: 0
+    Type: 4
+    PreviewSprite: {fileID: 21300000, guid: b90b2b057863f1f4bbfc9792ba1cd0b9, type: 3}
+    DisplayName: Heavy
+    Enabled: 1
