@@ -775,6 +775,7 @@ MonoBehaviour:
   acquiredTint: {r: 1, g: 0.46, b: 0.12, a: 1}
   acquiredTintStrength: 0.35
   debugLogs: 0
+  visualCatalog: {fileID: 11400000, guid: 102eeac9b02c4caa9ccbc6da4eb34a3a, type: 2}
 --- !u!1 &1594514674284813732
 GameObject:
   m_ObjectHideFlags: 0
