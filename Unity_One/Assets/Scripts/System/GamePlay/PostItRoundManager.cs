@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using Unity.Netcode;
 using UnityEngine;
 
+[DefaultExecutionOrder(-100)]
 public class PostItRoundManager : NetworkBehaviour
 {
     private const int InitialMapDrawingPostItCount = 2;
@@ -44,9 +45,15 @@ public class PostItRoundManager : NetworkBehaviour
     private readonly HashSet<int> _claimedWorldDropIds = new HashSet<int>();
     private readonly Dictionary<ulong, int> _initialAssignmentRevisionByOwner =
         new Dictionary<ulong, int>();
+    private readonly Dictionary<ulong, ulong> _initialAssignmentPlayerObjectIdByOwner =
+        new Dictionary<ulong, ulong>();
+    private readonly Dictionary<ulong, int> _zeroPostItEliminationRevisionByOwner =
+        new Dictionary<ulong, int>();
+    private readonly List<ulong> _zeroPostItPollClientIds = new List<ulong>();
     private int _lastInitialAssignmentRoundRevision = -1;
     private int _lastExplicitInitialAssignmentRoundRevision = -1;
     private bool _initialAssignmentInProgress;
+    private int _zeroPostItEliminationArmedRoundRevision = -1;
     private readonly List<PostItGuessPlayerScoreData> _guessScores =
         new List<PostItGuessPlayerScoreData>();
     private NetworkList<PostItWorldDropData> _networkWorldDrops;
@@ -123,6 +130,7 @@ public class PostItRoundManager : NetworkBehaviour
     {
         public PlayerPostItInventory Inventory;
         public ulong OwnerClientId;
+        public ulong PlayerNetworkObjectId;
         public PostItRuntimeData[] PreviousItems;
         public PostItRuntimeData[] DesiredItems;
     }
@@ -169,6 +177,14 @@ public class PostItRoundManager : NetworkBehaviour
         NotifyGuessScoresChanged();
     }
 
+    private void Update()
+    {
+        if (!IsServer || !IsSpawned)
+            return;
+
+        ServerFlushZeroPostItEliminations();
+    }
+
     public override void OnNetworkDespawn()
     {
         BeginWorldDropMutation();
@@ -207,9 +223,13 @@ public class PostItRoundManager : NetworkBehaviour
             {
                 _worldDropPayloads.Clear();
                 _initialAssignmentRevisionByOwner.Clear();
+                _initialAssignmentPlayerObjectIdByOwner.Clear();
+                _zeroPostItEliminationRevisionByOwner.Clear();
+                _zeroPostItPollClientIds.Clear();
                 _lastInitialAssignmentRoundRevision = -1;
                 _lastExplicitInitialAssignmentRoundRevision = -1;
                 _initialAssignmentInProgress = false;
+                _zeroPostItEliminationArmedRoundRevision = -1;
                 ClearServerGuessSnapshotState();
             }
 
@@ -294,6 +314,10 @@ public class PostItRoundManager : NetworkBehaviour
         }
 
         bool isNewRoundRevision = roundRevision > _lastInitialAssignmentRoundRevision;
+        if (isNewRoundRevision)
+        {
+            _zeroPostItEliminationArmedRoundRevision = -1;
+        }
 
         if (visualCatalog == null)
         {
@@ -358,10 +382,23 @@ public class PostItRoundManager : NetworkBehaviour
                 return false;
             }
 
+            ulong playerNetworkObjectId = ResolveInventoryNetworkObjectId(inventory);
+            if (playerNetworkObjectId == ulong.MaxValue)
+            {
+                LogAuthorityError(
+                    $"Cannot assign initial Post-its without a spawned Player NetworkObject. " +
+                    $"ownerClientId={ownerClientId}");
+                return false;
+            }
+
             if (_initialAssignmentRevisionByOwner.TryGetValue(
                     ownerClientId,
                     out int assignedRevision) &&
-                assignedRevision == roundRevision)
+                assignedRevision == roundRevision &&
+                _initialAssignmentPlayerObjectIdByOwner.TryGetValue(
+                    ownerClientId,
+                    out ulong assignedPlayerNetworkObjectId) &&
+                assignedPlayerNetworkObjectId == playerNetworkObjectId)
             {
                 continue;
             }
@@ -370,6 +407,7 @@ public class PostItRoundManager : NetworkBehaviour
             {
                 Inventory = inventory,
                 OwnerClientId = ownerClientId,
+                PlayerNetworkObjectId = playerNetworkObjectId,
                 PreviousItems = inventory.GetSnapshot()
             });
         }
@@ -581,7 +619,15 @@ public class PostItRoundManager : NetworkBehaviour
             {
                 _initialAssignmentRevisionByOwner[
                     preparedAssignments[assignmentIndex].OwnerClientId] = roundRevision;
+                _initialAssignmentPlayerObjectIdByOwner[
+                    preparedAssignments[assignmentIndex].OwnerClientId] =
+                    preparedAssignments[assignmentIndex].PlayerNetworkObjectId;
             }
+
+            if (isNewRoundRevision)
+                _zeroPostItEliminationRevisionByOwner.Clear();
+
+            _zeroPostItEliminationArmedRoundRevision = roundRevision;
 
             if (explicitRevision)
             {
@@ -617,6 +663,174 @@ public class PostItRoundManager : NetworkBehaviour
         PlayerPostItInventory[] inventories =
             FindObjectsByType<PlayerPostItInventory>(FindObjectsSortMode.None);
         return ServerAssignInitialPostIts(inventories, roundRevision);
+    }
+
+    public bool ServerFlushZeroPostItEliminations()
+    {
+        if (!CanEvaluateZeroPostItEliminations() || NetworkManager == null)
+            return false;
+
+        return ServerPollZeroPostItEliminations();
+    }
+
+    private bool ServerPollZeroPostItEliminations()
+    {
+        if (!CanEvaluateZeroPostItEliminations() || NetworkManager == null)
+            return false;
+
+        bool allZeroInventoriesResolved = true;
+        _zeroPostItPollClientIds.Clear();
+        try
+        {
+            _zeroPostItPollClientIds.AddRange(NetworkManager.ConnectedClientsIds);
+            _zeroPostItPollClientIds.Sort();
+            for (int clientIndex = 0;
+                 clientIndex < _zeroPostItPollClientIds.Count;
+                 clientIndex++)
+            {
+                ulong clientId = _zeroPostItPollClientIds[clientIndex];
+                if (!NetworkManager.ConnectedClients.TryGetValue(clientId, out var client) ||
+                    client == null ||
+                    client.PlayerObject == null ||
+                    !client.PlayerObject.IsSpawned)
+                {
+                    continue;
+                }
+
+                PlayerPostItInventory inventory =
+                    client.PlayerObject.GetComponentInChildren<PlayerPostItInventory>(true);
+                ServerTryHandleZeroPostItEliminationSafely(inventory);
+                if (IsValidServerInventory(inventory) && inventory.Count == 0)
+                {
+                    allZeroInventoriesResolved = false;
+                }
+            }
+        }
+        catch (Exception exception)
+        {
+            Debug.LogException(exception, this);
+            allZeroInventoriesResolved = false;
+        }
+        finally
+        {
+            _zeroPostItPollClientIds.Clear();
+        }
+
+        return allZeroInventoriesResolved;
+    }
+
+    private bool CanEvaluateZeroPostItEliminations()
+    {
+        return CanMutateServerState() &&
+               NetworkManager != null &&
+               NetworkManager.IsListening &&
+               IsPlayingState() &&
+               !_initialAssignmentInProgress &&
+               !_isResettingWorldDrops &&
+               _worldDropMutationDepth == 0 &&
+               !_guessMutationInProgress &&
+               _zeroPostItEliminationArmedRoundRevision >= 0 &&
+               _zeroPostItEliminationArmedRoundRevision ==
+               _lastInitialAssignmentRoundRevision;
+    }
+
+    private bool ServerTryHandleZeroPostItElimination(
+        PlayerPostItInventory inventory)
+    {
+        if (!CanEvaluateZeroPostItEliminations() ||
+            inventory == null ||
+            !IsValidServerInventory(inventory) ||
+            inventory.Count != 0)
+        {
+            return false;
+        }
+
+        NetworkObject playerObject = inventory.GetComponentInParent<NetworkObject>();
+        if (playerObject == null ||
+            !playerObject.IsSpawned ||
+            inventory.NetworkObject != playerObject)
+        {
+            return false;
+        }
+
+        ulong ownerClientId = playerObject.OwnerClientId;
+        if (ownerClientId == ulong.MaxValue ||
+            inventory.OwnerClientId != ownerClientId ||
+            NetworkManager == null ||
+            !NetworkManager.ConnectedClients.TryGetValue(ownerClientId, out var client) ||
+            client == null ||
+            client.PlayerObject != playerObject ||
+            !_initialAssignmentRevisionByOwner.TryGetValue(
+                ownerClientId,
+                out int assignedRoundRevision) ||
+            assignedRoundRevision != _zeroPostItEliminationArmedRoundRevision ||
+            !_initialAssignmentPlayerObjectIdByOwner.TryGetValue(
+                ownerClientId,
+                out ulong assignedPlayerNetworkObjectId) ||
+            assignedPlayerNetworkObjectId != playerObject.NetworkObjectId ||
+            (_zeroPostItEliminationRevisionByOwner.TryGetValue(
+                 ownerClientId,
+                 out int handledRoundRevision) &&
+             handledRoundRevision == _zeroPostItEliminationArmedRoundRevision))
+        {
+            return false;
+        }
+
+        PlayerStatusModule status =
+            playerObject.GetComponentInChildren<PlayerStatusModule>(true);
+        if (status == null ||
+            !status.IsServer ||
+            !status.IsSpawned ||
+            status.IsEliminated ||
+            status.GetComponentInParent<NetworkObject>() != playerObject)
+        {
+            return false;
+        }
+
+        int roundRevision = _zeroPostItEliminationArmedRoundRevision;
+        _zeroPostItEliminationRevisionByOwner[ownerClientId] = roundRevision;
+
+        bool eliminated = false;
+        try
+        {
+            eliminated = status.ServerEliminateForPostItDepletion();
+        }
+        catch (Exception exception)
+        {
+            Debug.LogException(exception, this);
+            eliminated = status != null && status.IsEliminated;
+        }
+
+        if (eliminated)
+        {
+            Log(
+                $"Eliminated player for zero Post-its. " +
+                $"round={roundRevision}, ownerClientId={ownerClientId}");
+            return true;
+        }
+
+        if (_zeroPostItEliminationRevisionByOwner.TryGetValue(
+                ownerClientId,
+                out int reservedRoundRevision) &&
+            reservedRoundRevision == roundRevision)
+        {
+            _zeroPostItEliminationRevisionByOwner.Remove(ownerClientId);
+        }
+
+        return false;
+    }
+
+    private void ServerTryHandleZeroPostItEliminationSafely(
+        PlayerPostItInventory inventory)
+    {
+        try
+        {
+            ServerTryHandleZeroPostItElimination(inventory);
+        }
+        catch (Exception exception)
+        {
+            Debug.LogException(exception, this);
+        }
     }
 
     public PostItRuntimeData[] BuildRoundSnapshot(IEnumerable<PlayerPostItInventory> inventories)
@@ -2023,11 +2237,21 @@ public class PostItRoundManager : NetworkBehaviour
         droppedData = PostItWorldDropData.Invalid;
 
         if (!CanMutateServerState() ||
-            !IsNetworkWorldStorageActive() ||
             !IsPlayingState() ||
-            _isResettingWorldDrops ||
             sourceInventory == null ||
-            !IsValidServerInventory(sourceInventory) ||
+            !IsValidServerInventory(sourceInventory))
+        {
+            return false;
+        }
+
+        if (sourceInventory.Count == 0)
+        {
+            ServerTryHandleZeroPostItEliminationSafely(sourceInventory);
+            return false;
+        }
+
+        if (!IsNetworkWorldStorageActive() ||
+            _isResettingWorldDrops ||
             !IsFiniteVector(authoritativePosition) ||
             (hasFallbackPosition && !IsFiniteVector(fallbackPosition)))
         {
@@ -2035,7 +2259,10 @@ public class PostItRoundManager : NetworkBehaviour
         }
 
         if (!TrySelectHighestAcquiredPostIt(sourceInventory, out PostItRuntimeData selectedData))
+        {
+            ServerTryHandleZeroPostItEliminationSafely(sourceInventory);
             return false;
+        }
 
         if (CountAuthoritativePostItLocations(selectedData.PostItId) != 1)
         {
@@ -2105,6 +2332,7 @@ public class PostItRoundManager : NetworkBehaviour
         finally
         {
             EndWorldDropMutation();
+            ServerTryHandleZeroPostItEliminationSafely(sourceInventory);
         }
     }
 

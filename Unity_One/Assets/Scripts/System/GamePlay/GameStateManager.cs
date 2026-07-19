@@ -411,6 +411,9 @@ public class GameStateManager : NetworkBehaviour
         if (now < _nextSurvivorCheckTime)
             return;
 
+        if (!TryFlushZeroPostItEliminationsServer())
+            return;
+
         _nextSurvivorCheckTime = now + Mathf.Max(0f, survivorCheckInterval);
 
         int aliveCount = CountAliveParticipantsServer(out ulong lastAliveClientId);
@@ -505,6 +508,9 @@ public class GameStateManager : NetworkBehaviour
 
     private void RequestPlayingEndAfterTimerServer()
     {
+        if (!TryFlushZeroPostItEliminationsServer())
+            return;
+
         int aliveCount = CountAliveParticipantsServer(out ulong lastAliveClientId);
         if (aliveCount == 1)
         {
@@ -544,6 +550,12 @@ public class GameStateManager : NetworkBehaviour
         _roundEndTransitionInProgress = true;
         try
         {
+            if (reason == PlayingEndReason.NoSurvivors)
+            {
+                ResolveRoundDrawServer();
+                return;
+            }
+
             PostItRoundManager postItRoundManager = ResolvePostItRoundManager();
             if (!IsValidServerPostItRoundManager(postItRoundManager) ||
                 !TryBuildRoundParticipantInventoriesServer(
@@ -790,7 +802,14 @@ public class GameStateManager : NetworkBehaviour
              participantIndex++)
         {
             ulong clientId = _roundParticipantClientIds[participantIndex];
-            if (!NetworkManager.ConnectedClients.ContainsKey(clientId))
+            if (!NetworkManager.ConnectedClients.TryGetValue(clientId, out var client))
+                continue;
+
+            if (client == null)
+                return false;
+
+            NetworkObject playerObject = client.PlayerObject;
+            if (playerObject == null || !playerObject.IsSpawned)
                 continue;
 
             if (!TryResolveConnectedPlayerInventory(
@@ -818,9 +837,20 @@ public class GameStateManager : NetworkBehaviour
         clientIds.Sort();
         for (int clientIndex = 0; clientIndex < clientIds.Count; clientIndex++)
         {
+            ulong clientId = clientIds[clientIndex];
+            if (!NetworkManager.ConnectedClients.TryGetValue(clientId, out var client) ||
+                client == null)
+            {
+                return false;
+            }
+
+            NetworkObject playerObject = client.PlayerObject;
+            if (playerObject == null || !playerObject.IsSpawned)
+                continue;
+
             if (!TryResolveConnectedPlayerInventory(
                     NetworkManager,
-                    clientIds[clientIndex],
+                    clientId,
                     out PlayerPostItInventory inventory))
             {
                 return false;
@@ -830,6 +860,13 @@ public class GameStateManager : NetworkBehaviour
         }
 
         return true;
+    }
+
+    private bool TryFlushZeroPostItEliminationsServer()
+    {
+        PostItRoundManager postItRoundManager = ResolvePostItRoundManager();
+        return IsValidServerPostItRoundManager(postItRoundManager) &&
+               postItRoundManager.ServerFlushZeroPostItEliminations();
     }
 
     private static bool TryResolveConnectedPlayerInventory(
