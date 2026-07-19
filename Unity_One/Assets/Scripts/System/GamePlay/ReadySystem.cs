@@ -23,11 +23,13 @@ public class ReadySystem : NetworkBehaviour
 
     public int GetReadyCount()
     {
+        if (readyClients == null) return 0;
         return readyClients.Count;
     }
 
     public bool IsClientReady(ulong clientId)
     {
+        if (readyClients == null) return false;
         return readyClients.Contains(clientId);
     }
 
