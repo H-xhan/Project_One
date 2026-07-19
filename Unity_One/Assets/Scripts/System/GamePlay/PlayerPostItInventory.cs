@@ -10,6 +10,11 @@ public class PlayerPostItInventory : NetworkBehaviour
     private const int MaximumGuardCharges = 1;
     private const double HeavyDurationSeconds = 4d;
     private const float HeavyMovementScale = 0.65f;
+    private const float HeavyTargetSelectionDistance = 6f;
+    private const float HeavyServerDistance = 2f;
+    private const float HeavyTargetRayRadius = 0.2f;
+    private const float HeavyAimDirectionMinDot = 0.9f;
+    private const float HeavyMinForwardDot = 0.25f;
 
     [SerializeField] private int maxPostItSlots = 6;
     [SerializeField] private bool debugLogs = false;
@@ -282,6 +287,91 @@ public class PlayerPostItInventory : NetworkBehaviour
             postItId,
             selectedTopicId,
             out _);
+    }
+
+    public bool TryGetFirstGuardCard(out PostItRuntimeData data)
+    {
+        return TrySelectFirstEffectCard(
+            PostItType.Bonus,
+            GuardVisualId,
+            out data);
+    }
+
+    public bool TryGetFirstHeavyCard(out PostItRuntimeData data)
+    {
+        return TrySelectFirstEffectCard(
+            PostItType.Penalty,
+            HeavyVisualId,
+            out data);
+    }
+
+    public void RequestActivateGuard(int expectedPostItId)
+    {
+        if (!IsOwner || !IsSpawnedNetworkSession() || expectedPostItId < 0)
+        {
+            return;
+        }
+
+        RequestActivateGuardServerRpc(expectedPostItId);
+    }
+
+    public void RequestApplyHeavy(
+        int expectedPostItId,
+        NetworkObjectReference targetReference,
+        Vector3 aimDirection)
+    {
+        if (!IsOwner ||
+            !IsSpawnedNetworkSession() ||
+            expectedPostItId < 0 ||
+            !IsFiniteVector3(aimDirection))
+        {
+            return;
+        }
+
+        RequestApplyHeavyServerRpc(
+            expectedPostItId,
+            targetReference,
+            aimDirection);
+    }
+
+    [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Owner)]
+    private void RequestActivateGuardServerRpc(
+        int expectedPostItId,
+        RpcParams rpcParams = default)
+    {
+        if (!ServerTryValidateEffectSourceRequest(
+                rpcParams.Receive.SenderClientId,
+                expectedPostItId,
+                PostItType.Bonus,
+                GuardVisualId))
+        {
+            return;
+        }
+
+        ServerTryActivateGuard();
+    }
+
+    [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Owner)]
+    private void RequestApplyHeavyServerRpc(
+        int expectedPostItId,
+        NetworkObjectReference targetReference,
+        Vector3 aimDirection,
+        RpcParams rpcParams = default)
+    {
+        if (!ServerTryValidateEffectSourceRequest(
+                rpcParams.Receive.SenderClientId,
+                expectedPostItId,
+                PostItType.Penalty,
+                HeavyVisualId) ||
+            !ServerTryResolveHeavyTarget(
+                targetReference,
+                aimDirection,
+                out PlayerPostItInventory targetInventory))
+        {
+            return;
+        }
+
+        ServerTryApplyHeavy(targetInventory);
     }
 
     public bool ContainsPostIt(int postItId)
@@ -1631,6 +1721,409 @@ public class PlayerPostItInventory : NetworkBehaviour
         }
 
         return found;
+    }
+
+    private bool ServerTryValidateEffectSourceRequest(
+        ulong senderClientId,
+        int expectedPostItId,
+        PostItType requiredType,
+        int requiredVisualId)
+    {
+        if (!IsServer ||
+            !IsSpawnedNetworkSession() ||
+            NetworkObject == null ||
+            !NetworkObject.IsSpawned ||
+            senderClientId != OwnerClientId ||
+            expectedPostItId < 0 ||
+            !IsPlayingState())
+        {
+            return false;
+        }
+
+        if (NetworkManager == null ||
+            !NetworkManager.ConnectedClients.TryGetValue(
+                OwnerClientId,
+                out NetworkClient sourceClient) ||
+            sourceClient.PlayerObject != NetworkObject)
+        {
+            return false;
+        }
+
+        PlayerStatusModule sourceStatus =
+            NetworkObject.GetComponentInChildren<PlayerStatusModule>(true);
+        if (sourceStatus == null ||
+            sourceStatus.IsEliminated ||
+            !sourceStatus.CanInteract ||
+            HasEffectInputBlocker(NetworkObject))
+        {
+            return false;
+        }
+
+        return TrySelectFirstEffectCard(
+                   requiredType,
+                   requiredVisualId,
+                   out PostItRuntimeData expectedCard) &&
+               expectedCard.PostItId == expectedPostItId;
+    }
+
+    private bool ServerTryResolveHeavyTarget(
+        NetworkObjectReference targetReference,
+        Vector3 requestedAimDirection,
+        out PlayerPostItInventory targetInventory)
+    {
+        targetInventory = null;
+
+        NetworkObject requesterNetworkObject = NetworkObject;
+        if (requesterNetworkObject == null ||
+            !requesterNetworkObject.IsSpawned ||
+            !targetReference.TryGet(out NetworkObject targetNetworkObject) ||
+            targetNetworkObject == null ||
+            !targetNetworkObject.IsSpawned ||
+            targetNetworkObject == requesterNetworkObject ||
+            targetNetworkObject.OwnerClientId == OwnerClientId ||
+            NetworkManager == null ||
+            !NetworkManager.ConnectedClients.TryGetValue(
+                targetNetworkObject.OwnerClientId,
+                out NetworkClient targetClient) ||
+            targetClient.PlayerObject != targetNetworkObject)
+        {
+            return false;
+        }
+
+        PlayerStatusModule targetStatus =
+            targetNetworkObject.GetComponentInChildren<PlayerStatusModule>(true);
+        if (targetStatus == null || targetStatus.IsEliminated)
+        {
+            return false;
+        }
+
+        targetInventory =
+            targetNetworkObject.GetComponentInChildren<PlayerPostItInventory>(true);
+        if (targetInventory == null ||
+            targetInventory == this ||
+            targetInventory.GetComponentInParent<NetworkObject>() != targetNetworkObject ||
+            targetInventory.NetworkManager != NetworkManager ||
+            !ServerTryResolveHeavyAimRay(requestedAimDirection, out Ray serverAimRay) ||
+            !TryFindHeavyTargetFromRay(
+                serverAimRay,
+                out NetworkObject serverSelectedTarget) ||
+            serverSelectedTarget != targetNetworkObject ||
+            !ServerValidateHeavyGeometry(
+                requesterNetworkObject,
+                targetNetworkObject,
+                serverAimRay.origin))
+        {
+            targetInventory = null;
+            return false;
+        }
+
+        return true;
+    }
+
+    private bool ServerTryResolveHeavyAimRay(
+        Vector3 requestedAimDirection,
+        out Ray aimRay)
+    {
+        aimRay = default;
+        if (!IsFiniteVector3(requestedAimDirection) ||
+            requestedAimDirection.sqrMagnitude <= 0.0001f)
+        {
+            return false;
+        }
+
+        Vector3 normalizedAimDirection = requestedAimDirection.normalized;
+        if (Mathf.Abs(normalizedAimDirection.y) > 0.98f ||
+            !TryResolveEffectServerForward(out Vector3 serverPlanarForward))
+        {
+            return false;
+        }
+
+        Vector3 requestedPlanarForward =
+            Vector3.ProjectOnPlane(normalizedAimDirection, Vector3.up);
+        if (requestedPlanarForward.sqrMagnitude <= 0.0001f ||
+            Vector3.Dot(
+                requestedPlanarForward.normalized,
+                serverPlanarForward) < HeavyAimDirectionMinDot)
+        {
+            return false;
+        }
+
+        Camera playerCamera = ResolveEffectCamera();
+        if (playerCamera == null ||
+            !IsFiniteVector3(playerCamera.transform.position))
+        {
+            return false;
+        }
+
+        aimRay = new Ray(
+            playerCamera.transform.position,
+            normalizedAimDirection);
+        return true;
+    }
+
+    private bool TryFindHeavyTargetFromRay(
+        Ray ray,
+        out NetworkObject targetNetworkObject)
+    {
+        targetNetworkObject = null;
+        RaycastHit[] hits = Physics.SphereCastAll(
+            ray,
+            HeavyTargetRayRadius,
+            HeavyTargetSelectionDistance,
+            Physics.DefaultRaycastLayers,
+            QueryTriggerInteraction.Collide);
+        Array.Sort(hits, (left, right) => left.distance.CompareTo(right.distance));
+
+        NetworkObject requesterNetworkObject = NetworkObject;
+        for (int i = 0; i < hits.Length; i++)
+        {
+            Collider hitCollider = hits[i].collider;
+            if (hitCollider == null)
+            {
+                continue;
+            }
+
+            NetworkObject hitNetworkObject =
+                hitCollider.GetComponentInParent<NetworkObject>();
+            if (hitNetworkObject == requesterNetworkObject)
+            {
+                continue;
+            }
+
+            if (hitNetworkObject != null)
+            {
+                PlayerPostItInventory hitInventory =
+                    hitNetworkObject.GetComponentInChildren<PlayerPostItInventory>(true);
+                PlayerStatusModule hitStatus =
+                    hitNetworkObject.GetComponentInChildren<PlayerStatusModule>(true);
+                if (hitInventory != null &&
+                    hitStatus != null &&
+                    !hitStatus.IsEliminated &&
+                    hitInventory.GetComponentInParent<NetworkObject>() == hitNetworkObject)
+                {
+                    targetNetworkObject = hitNetworkObject;
+                    return true;
+                }
+
+                if (hitCollider.isTrigger)
+                {
+                    continue;
+                }
+
+                return false;
+            }
+
+            if (!hitCollider.isTrigger)
+            {
+                return false;
+            }
+        }
+
+        return false;
+    }
+
+    private bool ServerValidateHeavyGeometry(
+        NetworkObject requesterNetworkObject,
+        NetworkObject targetNetworkObject,
+        Vector3 visibilityOrigin)
+    {
+        Vector3 requesterCenter = ResolveEffectBodyCenter(requesterNetworkObject);
+        Vector3 targetCenter = ResolveEffectBodyCenter(targetNetworkObject);
+        Vector3 toTarget = targetCenter - requesterCenter;
+        float distanceSqr = toTarget.sqrMagnitude;
+        if (distanceSqr <= 0.0001f ||
+            distanceSqr > HeavyServerDistance * HeavyServerDistance ||
+            !TryResolveEffectServerForward(out Vector3 serverPlanarForward))
+        {
+            return false;
+        }
+
+        Vector3 planarToTarget = Vector3.ProjectOnPlane(toTarget, Vector3.up);
+        if (planarToTarget.sqrMagnitude > 0.0001f &&
+            Vector3.Dot(
+                serverPlanarForward,
+                planarToTarget.normalized) < HeavyMinForwardDot)
+        {
+            return false;
+        }
+
+        return HasHeavyLineOfSight(
+            visibilityOrigin,
+            targetCenter,
+            requesterNetworkObject,
+            targetNetworkObject);
+    }
+
+    private bool TryResolveEffectServerForward(out Vector3 planarForward)
+    {
+        HamsterFullRagdollMotor motor =
+            GetComponentInChildren<HamsterFullRagdollMotor>(true);
+        if (motor != null &&
+            TryNormalizePlanarDirection(
+                motor.CameraPlanarForward,
+                out planarForward))
+        {
+            return true;
+        }
+
+        Camera playerCamera = ResolveEffectCamera();
+        if (playerCamera != null &&
+            TryNormalizePlanarDirection(
+                playerCamera.transform.forward,
+                out planarForward))
+        {
+            return true;
+        }
+
+        return TryNormalizePlanarDirection(
+            transform.forward,
+            out planarForward);
+    }
+
+    private Camera ResolveEffectCamera()
+    {
+        PlayerHub playerHub = GetComponentInParent<PlayerHub>();
+        if (playerHub == null)
+        {
+            playerHub = GetComponentInChildren<PlayerHub>(true);
+        }
+
+        Camera playerCamera = playerHub != null ? playerHub.PlayerCamera : null;
+        return playerCamera != null
+            ? playerCamera
+            : GetComponentInChildren<Camera>(true);
+    }
+
+    private static bool HasEffectInputBlocker(NetworkObject playerNetworkObject)
+    {
+        if (playerNetworkObject == null)
+        {
+            return true;
+        }
+
+        PlayerInteractModule interact =
+            playerNetworkObject.GetComponentInChildren<PlayerInteractModule>(true);
+        if (interact != null &&
+            (interact.HasHeldItem() || interact.IsCharacterGrabBusy))
+        {
+            return true;
+        }
+
+        HamsterMotorShellItemAdapter itemAdapter =
+            playerNetworkObject.GetComponentInChildren<HamsterMotorShellItemAdapter>(true);
+        if (itemAdapter != null && itemAdapter.HasHeldItem)
+        {
+            return true;
+        }
+
+        HamsterRagdollGrabber ragdollGrabber =
+            playerNetworkObject.GetComponentInChildren<HamsterRagdollGrabber>(true);
+        return ragdollGrabber != null &&
+               (ragdollGrabber.IsHolding ||
+                ragdollGrabber.HasPendingGrab ||
+                ragdollGrabber.HasPendingThrow);
+    }
+
+    private static bool TryNormalizePlanarDirection(
+        Vector3 direction,
+        out Vector3 normalizedDirection)
+    {
+        normalizedDirection = Vector3.ProjectOnPlane(direction, Vector3.up);
+        if (!IsFiniteVector3(normalizedDirection) ||
+            normalizedDirection.sqrMagnitude <= 0.0001f)
+        {
+            normalizedDirection = Vector3.zero;
+            return false;
+        }
+
+        normalizedDirection.Normalize();
+        return true;
+    }
+
+    private static Vector3 ResolveEffectBodyCenter(
+        NetworkObject playerNetworkObject)
+    {
+        if (playerNetworkObject == null)
+        {
+            return Vector3.zero;
+        }
+
+        Collider[] colliders =
+            playerNetworkObject.GetComponentsInChildren<Collider>(true);
+        for (int i = 0; i < colliders.Length; i++)
+        {
+            Collider candidate = colliders[i];
+            if (candidate != null &&
+                candidate.enabled &&
+                candidate.gameObject.activeInHierarchy &&
+                candidate.gameObject.name == "BodyHurtbox")
+            {
+                return candidate.bounds.center;
+            }
+        }
+
+        return playerNetworkObject.transform.position + Vector3.up * 0.4f;
+    }
+
+    private static bool HasHeavyLineOfSight(
+        Vector3 origin,
+        Vector3 targetPosition,
+        NetworkObject requesterNetworkObject,
+        NetworkObject targetNetworkObject)
+    {
+        Vector3 toTarget = targetPosition - origin;
+        float distance = toTarget.magnitude;
+        if (!IsFiniteVector3(origin) ||
+            !IsFiniteVector3(targetPosition) ||
+            distance <= 0.0001f)
+        {
+            return false;
+        }
+
+        RaycastHit[] hits = Physics.RaycastAll(
+            origin,
+            toTarget / distance,
+            distance,
+            Physics.DefaultRaycastLayers,
+            QueryTriggerInteraction.Collide);
+        Array.Sort(hits, (left, right) => left.distance.CompareTo(right.distance));
+
+        for (int i = 0; i < hits.Length; i++)
+        {
+            Collider hitCollider = hits[i].collider;
+            if (hitCollider == null)
+            {
+                continue;
+            }
+
+            NetworkObject hitNetworkObject =
+                hitCollider.GetComponentInParent<NetworkObject>();
+            if (hitNetworkObject == requesterNetworkObject)
+            {
+                continue;
+            }
+
+            if (hitNetworkObject == targetNetworkObject)
+            {
+                return true;
+            }
+
+            if (hitCollider.isTrigger)
+            {
+                continue;
+            }
+
+            return false;
+        }
+
+        return true;
+    }
+
+    private static bool IsFiniteVector3(Vector3 value)
+    {
+        return float.IsFinite(value.x) &&
+               float.IsFinite(value.y) &&
+               float.IsFinite(value.z);
     }
 
     private bool IsOwnedEffectCard(
