@@ -31,6 +31,7 @@ public class PlayerPostItInventory : NetworkBehaviour
     private bool _hasSubscribedToNetworkPublicVisuals;
     private bool _hasSubscribedToNetworkGuessItems;
     private bool _hasSubscribedToEffects;
+    private readonly HashSet<int> _serverTransferPostItIds = new HashSet<int>();
 
     public event Action PostItsChanged;
     public event Action PublicVisualsChanged;
@@ -163,6 +164,7 @@ public class PlayerPostItInventory : NetworkBehaviour
 
     public override void OnNetworkDespawn()
     {
+        _serverTransferPostItIds.Clear();
         UnsubscribeFromNetworkPostIts();
         UnsubscribeFromNetworkPublicVisuals();
         UnsubscribeFromNetworkGuessItems();
@@ -906,36 +908,442 @@ public class PlayerPostItInventory : NetworkBehaviour
     {
         transferredData = PostItRuntimeData.Invalid;
 
-        if (!CanMutateServerState())
+        if (!CanMutateServerState() ||
+            targetInventory == null ||
+            targetInventory == this ||
+            targetInventory.NetworkManager != NetworkManager ||
+            !targetInventory.CanMutateServerState())
         {
-            LogWarning("Blocked post-it transfer on non-server instance.");
+            LogWarning("Blocked post-it transfer because the server inventories are invalid.");
             return false;
         }
 
-        if (targetInventory == null)
+        if (!_serverTransferPostItIds.Add(postItId))
         {
-            LogWarning($"Rejected post-it transfer because target inventory is null. postItId={postItId}");
+            LogWarning($"Rejected reentrant post-it transfer. postItId={postItId}");
             return false;
         }
 
-        if (!ServerTryRemovePostIt(postItId, out PostItRuntimeData removedData))
+        bool targetTransferReserved = false;
+        try
+        {
+            targetTransferReserved =
+                targetInventory._serverTransferPostItIds.Add(postItId);
+            if (!targetTransferReserved)
+            {
+                LogWarning(
+                    $"Rejected post-it transfer because the target is already mutating it. " +
+                    $"postItId={postItId}");
+                return false;
+            }
+
+            bool transferSucceeded = ServerTryTransferPostItToCore(
+                targetInventory,
+                postItId,
+                out transferredData);
+
+            bool sourceProjectionMatches = TryEnsureServerPublicProjection();
+            bool targetProjectionMatches =
+                targetInventory.TryEnsureServerPublicProjection();
+            if (!sourceProjectionMatches || !targetProjectionMatches)
+            {
+                if (transferSucceeded)
+                {
+                    LogIrrecoverableTransferInvariant(
+                        "public visual projection mismatch after transfer",
+                        postItId);
+                }
+
+                transferredData = PostItRuntimeData.Invalid;
+                return false;
+            }
+
+            return transferSucceeded;
+        }
+        finally
+        {
+            try
+            {
+                if (targetTransferReserved)
+                {
+                    targetInventory._serverTransferPostItIds.Remove(postItId);
+                }
+            }
+            finally
+            {
+                _serverTransferPostItIds.Remove(postItId);
+            }
+        }
+    }
+
+    private bool ServerTryTransferPostItToCore(
+        PlayerPostItInventory targetInventory,
+        int postItId,
+        out PostItRuntimeData transferredData)
+    {
+        transferredData = PostItRuntimeData.Invalid;
+        if (postItId < 0 ||
+            !TryGetPostIt(postItId, out PostItRuntimeData sourceSnapshot) ||
+            !sourceSnapshot.IsValid ||
+            targetInventory.ContainsPostIt(postItId) ||
+            targetInventory.IsFull)
         {
             return false;
         }
 
-        if (targetInventory.ServerTryAddPostIt(removedData, out transferredData))
+        try
+        {
+            ServerTryRemovePostIt(postItId, out _);
+        }
+        catch (Exception exception)
+        {
+            Debug.LogException(exception, this);
+        }
+
+        if (TryGetPostIt(postItId, out PostItRuntimeData sourceAfterRemove))
+        {
+            if (!IsExpectedTransferSource(sourceSnapshot, sourceAfterRemove))
+            {
+                LogIrrecoverableTransferInvariant(
+                    "source changed during remove",
+                    postItId);
+            }
+
+            return false;
+        }
+
+        if (targetInventory.TryGetPostIt(
+                postItId,
+                out PostItRuntimeData targetAfterRemove))
+        {
+            return TryAcceptObservedTransferDestination(
+                targetInventory,
+                sourceSnapshot,
+                targetAfterRemove,
+                out transferredData);
+        }
+
+        try
+        {
+            targetInventory.ServerTryAddPostIt(sourceSnapshot, out _);
+        }
+        catch (Exception exception)
+        {
+            Debug.LogException(exception, targetInventory);
+        }
+
+        if (TryReconcileTransferAfterDestinationAttempt(
+                targetInventory,
+                sourceSnapshot,
+                out transferredData))
         {
             Log($"Transferred post-it. postItId={transferredData.PostItId}");
             return true;
         }
 
-        if (!ServerTryAddPostIt(removedData, out _))
-        {
-            LogWarning($"Failed to roll back post-it transfer. postItId={removedData.PostItId}");
-        }
-
         transferredData = PostItRuntimeData.Invalid;
         return false;
+    }
+
+    private bool TryReconcileTransferAfterDestinationAttempt(
+        PlayerPostItInventory targetInventory,
+        PostItRuntimeData sourceSnapshot,
+        out PostItRuntimeData transferredData)
+    {
+        transferredData = PostItRuntimeData.Invalid;
+        bool sourceHasItem = TryGetPostIt(
+            sourceSnapshot.PostItId,
+            out PostItRuntimeData sourceObserved);
+        bool targetHasItem = targetInventory.TryGetPostIt(
+            sourceSnapshot.PostItId,
+            out PostItRuntimeData targetObserved);
+
+        if ((sourceHasItem && !IsExpectedTransferSource(
+                sourceSnapshot,
+                sourceObserved)) ||
+            (targetHasItem && !IsExpectedTransferDestination(
+                targetInventory,
+                sourceSnapshot,
+                targetObserved)))
+        {
+            LogIrrecoverableTransferInvariant(
+                "observed mismatched PostItId payload",
+                sourceSnapshot.PostItId);
+            return false;
+        }
+
+        if (targetHasItem)
+        {
+            if (sourceHasItem &&
+                !TryRemoveDuplicateTransferSource(
+                    targetInventory,
+                    sourceSnapshot,
+                    targetObserved))
+            {
+                return false;
+            }
+
+            transferredData = targetObserved;
+            return true;
+        }
+
+        if (sourceHasItem)
+        {
+            return false;
+        }
+
+        if (TryRestoreTransferSource(sourceSnapshot))
+        {
+            return false;
+        }
+
+        bool sourceExistsBeforeFallback = TryGetPostIt(
+            sourceSnapshot.PostItId,
+            out PostItRuntimeData sourceBeforeFallback);
+        bool targetExistsBeforeFallback = targetInventory.TryGetPostIt(
+            sourceSnapshot.PostItId,
+            out PostItRuntimeData targetBeforeFallback);
+        if (sourceExistsBeforeFallback || targetExistsBeforeFallback)
+        {
+            if (!sourceExistsBeforeFallback &&
+                IsExpectedTransferDestination(
+                    targetInventory,
+                    sourceSnapshot,
+                    targetBeforeFallback))
+            {
+                transferredData = targetBeforeFallback;
+                LogAuthorityTransferRecovery(
+                    "destination observed before fallback",
+                    sourceSnapshot.PostItId);
+                return true;
+            }
+
+            if (sourceExistsBeforeFallback &&
+                !targetExistsBeforeFallback &&
+                IsExpectedTransferSource(
+                    sourceSnapshot,
+                    sourceBeforeFallback))
+            {
+                return false;
+            }
+
+            LogIrrecoverableTransferInvariant(
+                "an unexpected location appeared before destination fallback",
+                sourceSnapshot.PostItId);
+            return false;
+        }
+
+        try
+        {
+            targetInventory.ServerTryAddPostIt(sourceSnapshot, out _);
+        }
+        catch (Exception exception)
+        {
+            Debug.LogException(exception, targetInventory);
+        }
+
+        if (targetInventory.TryGetPostIt(
+                sourceSnapshot.PostItId,
+                out targetObserved) &&
+            IsExpectedTransferDestination(
+                targetInventory,
+                sourceSnapshot,
+                targetObserved) &&
+            !ContainsPostIt(sourceSnapshot.PostItId))
+        {
+            transferredData = targetObserved;
+            LogAuthorityTransferRecovery(
+                "destination fallback",
+                sourceSnapshot.PostItId);
+            return true;
+        }
+
+        LogIrrecoverableTransferInvariant(
+            "could not restore source or destination",
+            sourceSnapshot.PostItId);
+        return false;
+    }
+
+    private bool TryAcceptObservedTransferDestination(
+        PlayerPostItInventory targetInventory,
+        PostItRuntimeData sourceSnapshot,
+        PostItRuntimeData targetObserved,
+        out PostItRuntimeData transferredData)
+    {
+        transferredData = PostItRuntimeData.Invalid;
+        if (!IsExpectedTransferDestination(
+                targetInventory,
+                sourceSnapshot,
+                targetObserved))
+        {
+            LogIrrecoverableTransferInvariant(
+                "destination changed during source remove",
+                sourceSnapshot.PostItId);
+            return false;
+        }
+
+        transferredData = targetObserved;
+        LogAuthorityTransferRecovery(
+            "destination observed after source remove",
+            sourceSnapshot.PostItId);
+        return true;
+    }
+
+    private bool TryRemoveDuplicateTransferSource(
+        PlayerPostItInventory targetInventory,
+        PostItRuntimeData sourceSnapshot,
+        PostItRuntimeData targetObserved)
+    {
+        try
+        {
+            ServerTryRemovePostIt(sourceSnapshot.PostItId, out _);
+        }
+        catch (Exception exception)
+        {
+            Debug.LogException(exception, this);
+        }
+
+        if (!ContainsPostIt(sourceSnapshot.PostItId) &&
+            targetInventory.TryGetPostIt(
+                sourceSnapshot.PostItId,
+                out PostItRuntimeData targetAfterCleanup) &&
+            targetAfterCleanup.Equals(targetObserved))
+        {
+            LogAuthorityTransferRecovery(
+                "duplicate source cleanup",
+                sourceSnapshot.PostItId);
+            return true;
+        }
+
+        LogIrrecoverableTransferInvariant(
+            "source and destination both contain the transfer item",
+            sourceSnapshot.PostItId);
+        return false;
+    }
+
+    private bool TryRestoreTransferSource(PostItRuntimeData sourceSnapshot)
+    {
+        if (TryGetPostIt(
+                sourceSnapshot.PostItId,
+                out PostItRuntimeData sourceObserved))
+        {
+            return IsExpectedTransferSource(sourceSnapshot, sourceObserved);
+        }
+
+        if (!IsFull && !IsSlotOccupied(sourceSnapshot.SlotIndex))
+        {
+            try
+            {
+                AddToAuthoritativeStorage(sourceSnapshot);
+            }
+            catch (Exception exception)
+            {
+                Debug.LogException(exception, this);
+            }
+
+            if (TryGetPostIt(
+                    sourceSnapshot.PostItId,
+                    out sourceObserved) &&
+                sourceObserved.Equals(sourceSnapshot))
+            {
+                LogAuthorityTransferRecovery(
+                    "exact source rollback",
+                    sourceSnapshot.PostItId);
+                return true;
+            }
+        }
+
+        try
+        {
+            ServerTryAddPostIt(sourceSnapshot, out _);
+        }
+        catch (Exception exception)
+        {
+            Debug.LogException(exception, this);
+        }
+
+        if (TryGetPostIt(
+                sourceSnapshot.PostItId,
+                out sourceObserved) &&
+            IsExpectedTransferSource(sourceSnapshot, sourceObserved))
+        {
+            LogAuthorityTransferRecovery(
+                "source rollback with reassigned slot",
+                sourceSnapshot.PostItId);
+            return true;
+        }
+
+        return false;
+    }
+
+    private bool IsExpectedTransferSource(
+        PostItRuntimeData sourceSnapshot,
+        PostItRuntimeData sourceObserved)
+    {
+        return sourceObserved.IsValid &&
+               IsSameTransferPayload(sourceSnapshot, sourceObserved) &&
+               HasExpectedTransferHolder(
+                   this,
+                   sourceSnapshot,
+                   sourceObserved) &&
+               sourceObserved.SlotIndex >= 0;
+    }
+
+    private static bool IsExpectedTransferDestination(
+        PlayerPostItInventory targetInventory,
+        PostItRuntimeData sourceSnapshot,
+        PostItRuntimeData targetObserved)
+    {
+        return targetInventory != null &&
+               targetObserved.IsValid &&
+               IsSameTransferPayload(sourceSnapshot, targetObserved) &&
+               HasExpectedTransferHolder(
+                   targetInventory,
+                   sourceSnapshot,
+                   targetObserved) &&
+               targetObserved.SlotIndex >= 0;
+    }
+
+    private static bool HasExpectedTransferHolder(
+        PlayerPostItInventory inventory,
+        PostItRuntimeData sourceSnapshot,
+        PostItRuntimeData observed)
+    {
+        if (inventory.TryResolveOwnerClientId(out ulong ownerClientId))
+        {
+            return observed.HolderClientId == ownerClientId;
+        }
+
+        return (inventory.NetworkManager == null ||
+                !inventory.NetworkManager.IsListening) &&
+               observed.HolderClientId == sourceSnapshot.HolderClientId;
+    }
+
+    private static bool IsSameTransferPayload(
+        PostItRuntimeData source,
+        PostItRuntimeData candidate)
+    {
+        return source.PostItId == candidate.PostItId &&
+               source.Type == candidate.Type &&
+               source.TopicId == candidate.TopicId &&
+               source.VisualId == candidate.VisualId &&
+               source.OriginalOwnerClientId == candidate.OriginalOwnerClientId;
+    }
+
+    private void LogAuthorityTransferRecovery(string operation, int postItId)
+    {
+        Debug.LogError(
+            $"[{nameof(PlayerPostItInventory)}] Reconciled Post-it transfer from observed " +
+            $"server state. operation={operation}, postItId={postItId}",
+            this);
+    }
+
+    private void LogIrrecoverableTransferInvariant(string reason, int postItId)
+    {
+        Debug.LogError(
+            $"[{nameof(PlayerPostItInventory)}] Post-it transfer invariant failed. " +
+            $"reason={reason}, postItId={postItId}",
+            this);
     }
 
     private bool IsNetworkStorageActive()
@@ -1061,7 +1469,16 @@ public class PlayerPostItInventory : NetworkBehaviour
 
         if (IsServer)
         {
-            ProjectNetworkPostItChangeToPublicVisuals(changeEvent);
+            try
+            {
+                ProjectNetworkPostItChangeToPublicVisuals(changeEvent);
+            }
+            catch (Exception exception)
+            {
+                Debug.LogException(exception, this);
+            }
+
+            TryEnsureServerPublicProjection();
         }
 
         NotifyPostItsChanged();
@@ -1176,22 +1593,41 @@ public class PlayerPostItInventory : NetworkBehaviour
 
     private void NotifyPostItsChanged()
     {
-        PostItsChanged?.Invoke();
+        InvokeSafely(PostItsChanged);
     }
 
     private void NotifyPublicVisualsChanged()
     {
-        PublicVisualsChanged?.Invoke();
+        InvokeSafely(PublicVisualsChanged);
     }
 
     private void NotifyGuessItemsChanged()
     {
-        GuessItemsChanged?.Invoke();
+        InvokeSafely(GuessItemsChanged);
     }
 
     private void NotifyEffectsChanged()
     {
-        EffectsChanged?.Invoke();
+        InvokeSafely(EffectsChanged);
+    }
+
+    private void InvokeSafely(Action handlers)
+    {
+        if (handlers == null)
+            return;
+
+        Delegate[] invocationList = handlers.GetInvocationList();
+        for (int i = 0; i < invocationList.Length; i++)
+        {
+            try
+            {
+                ((Action)invocationList[i]).Invoke();
+            }
+            catch (Exception exception)
+            {
+                Debug.LogException(exception, this);
+            }
+        }
     }
 
     private bool ValidateGuessReplacement(IReadOnlyList<PostItGuessOwnerData> guessItems)
@@ -1518,18 +1954,84 @@ public class PlayerPostItInventory : NetworkBehaviour
 
         if (_networkPublicVisuals.Count > 0)
         {
-            _networkPublicVisuals.Clear();
+            try
+            {
+                _networkPublicVisuals.Clear();
+            }
+            catch (Exception exception)
+            {
+                Debug.LogException(exception, this);
+            }
+
+            if (_networkPublicVisuals.Count > 0)
+            {
+                LogWarning("Failed to clear stale public visual state.");
+                return;
+            }
         }
 
         for (int i = 0; i < _networkPostIts.Count; i++)
         {
-            _networkPublicVisuals.Add(CreatePublicVisualData(_networkPostIts[i]));
+            PostItPublicVisualData projectedData =
+                CreatePublicVisualData(_networkPostIts[i]);
+            try
+            {
+                _networkPublicVisuals.Add(projectedData);
+            }
+            catch (Exception exception)
+            {
+                Debug.LogException(exception, this);
+            }
+
+            if (_networkPublicVisuals.Count != i + 1 ||
+                !_networkPublicVisuals[i].Equals(projectedData))
+            {
+                LogWarning("Failed to append reconciled public visual state.");
+                return;
+            }
         }
 
         if (!PublicProjectionMatchesPrivate())
         {
             LogWarning("Failed to reconcile public visual state from private inventory.");
         }
+    }
+
+    private bool TryEnsureServerPublicProjection()
+    {
+        if (!IsNetworkStorageActive())
+        {
+            return !IsSpawnedNetworkSession();
+        }
+
+        try
+        {
+            ReconcileServerPublicVisualsFromPrivate();
+        }
+        catch (Exception exception)
+        {
+            Debug.LogException(exception, this);
+        }
+
+        bool projectionMatches = false;
+        try
+        {
+            projectionMatches = PublicProjectionMatchesPrivate();
+        }
+        catch (Exception exception)
+        {
+            Debug.LogException(exception, this);
+        }
+
+        if (!projectionMatches)
+        {
+            Debug.LogError(
+                $"[{nameof(PlayerPostItInventory)}] Public visual projection could not be " +
+                "reconciled with private inventory state.",
+                this);
+        }
+
+        return projectionMatches;
     }
 
     private bool PublicProjectionMatchesPrivate()
