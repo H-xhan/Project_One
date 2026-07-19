@@ -253,11 +253,11 @@ public class PostItRoundManager : NetworkBehaviour
 
     public bool ServerAssignInitialPostIts(IEnumerable<PlayerPostItInventory> inventories)
     {
-        if (IsSpawnedNetworkSession() && !IsPlayingState())
+        if (HasListeningNetworkSession())
         {
             LogWarning(
-                "The no-revision initial assignment API is restricted to Playing. " +
-                "Use the revision overload during Countdown.");
+                "The no-revision initial assignment API is unavailable in a network session. " +
+                "Use the explicit revision overload before Playing.");
             return false;
         }
 
@@ -282,7 +282,61 @@ public class PostItRoundManager : NetworkBehaviour
         IEnumerable<PlayerPostItInventory> inventories,
         int roundRevision)
     {
+        if (HasListeningNetworkSession() && !IsInitialAssignmentState())
+        {
+            LogWarning("Blocked initial assignment outside Lobby or Countdown.");
+            return false;
+        }
+
         return ServerAssignInitialPostItsCore(inventories, roundRevision, true);
+    }
+
+    public bool ServerIsCurrentPlayingParticipant(
+        PlayerPostItInventory inventory)
+    {
+        if (!CanMutateServerState() ||
+            !IsPlayingState() ||
+            inventory == null ||
+            !IsValidServerInventory(inventory))
+        {
+            return false;
+        }
+
+        if (!HasListeningNetworkSession())
+            return true;
+
+        if (!IsSpawnedNetworkSession())
+            return false;
+
+        NetworkObject playerObject = inventory.NetworkObject;
+        if (NetworkManager == null ||
+            playerObject == null ||
+            !playerObject.IsSpawned ||
+            inventory.NetworkManager != NetworkManager ||
+            inventory.GetComponentInParent<NetworkObject>() != playerObject)
+        {
+            return false;
+        }
+
+        ulong ownerClientId = playerObject.OwnerClientId;
+        return ownerClientId != ulong.MaxValue &&
+               inventory.OwnerClientId == ownerClientId &&
+               NetworkManager.ConnectedClients.TryGetValue(
+                   ownerClientId,
+                   out NetworkClient client) &&
+               client != null &&
+               client.PlayerObject == playerObject &&
+               _lastInitialAssignmentRoundRevision >= 0 &&
+               _zeroPostItEliminationArmedRoundRevision ==
+               _lastInitialAssignmentRoundRevision &&
+               _initialAssignmentRevisionByOwner.TryGetValue(
+                   ownerClientId,
+                   out int assignedRoundRevision) &&
+               assignedRoundRevision == _lastInitialAssignmentRoundRevision &&
+               _initialAssignmentPlayerObjectIdByOwner.TryGetValue(
+                   ownerClientId,
+                   out ulong assignedPlayerNetworkObjectId) &&
+               assignedPlayerNetworkObjectId == playerObject.NetworkObjectId;
     }
 
     private bool ServerAssignInitialPostItsCore(
@@ -2479,7 +2533,8 @@ public class PostItRoundManager : NetworkBehaviour
         if (!CanMutateServerState() ||
             !IsPlayingState() ||
             sourceInventory == null ||
-            !IsValidServerInventory(sourceInventory))
+            !IsValidServerInventory(sourceInventory) ||
+            !ServerIsCurrentPlayingParticipant(sourceInventory))
         {
             return false;
         }
@@ -2589,6 +2644,7 @@ public class PostItRoundManager : NetworkBehaviour
             _isResettingWorldDrops ||
             requesterInventory == null ||
             !IsValidServerInventory(requesterInventory) ||
+            !ServerIsCurrentPlayingParticipant(requesterInventory) ||
             requesterInventory.IsFull ||
             postItId < 0 ||
             CountAuthoritativePostItLocations(postItId) != 1 ||
@@ -4453,6 +4509,11 @@ public class PostItRoundManager : NetworkBehaviour
                IsSpawned;
     }
 
+    private bool HasListeningNetworkSession()
+    {
+        return NetworkManager != null && NetworkManager.IsListening;
+    }
+
     private bool IsValidServerInventory(PlayerPostItInventory inventory)
     {
         if (inventory == null)
@@ -4471,6 +4532,17 @@ public class PostItRoundManager : NetworkBehaviour
     {
         GameStateManager manager = FindFirstObjectByType<GameStateManager>();
         return manager != null && manager.GetState() == GameStateManager.GameState.Playing;
+    }
+
+    private static bool IsInitialAssignmentState()
+    {
+        GameStateManager manager = FindFirstObjectByType<GameStateManager>();
+        if (manager == null)
+            return false;
+
+        GameStateManager.GameState state = manager.GetState();
+        return state == GameStateManager.GameState.Lobby ||
+               state == GameStateManager.GameState.Countdown;
     }
 
     private static bool IsGuessingState()
