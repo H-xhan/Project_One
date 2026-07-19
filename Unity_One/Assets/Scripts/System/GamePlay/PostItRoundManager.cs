@@ -72,6 +72,8 @@ public class PostItRoundManager : NetworkBehaviour
         new Dictionary<ulong, ulong>();
     private readonly HashSet<ulong> _serverDisconnectedGuessOwners =
         new HashSet<ulong>();
+    private readonly HashSet<ulong> _serverZeroScoreGuessOwners =
+        new HashSet<ulong>();
     private int _roundRevision = -1;
     private int _guessRevision = -1;
     private double _guessDeadlineServerTime;
@@ -906,6 +908,7 @@ public class PostItRoundManager : NetworkBehaviour
 
     private bool TryPrepareServerGuessSnapshot(
         IEnumerable<PlayerPostItInventory> inventories,
+        IEnumerable<ulong> zeroScoreOwnerClientIds,
         int roundRevision,
         int guessRevision,
         double absoluteDeadline,
@@ -920,6 +923,7 @@ public class PostItRoundManager : NetworkBehaviour
         }
 
         if (inventories == null ||
+            zeroScoreOwnerClientIds == null ||
             roundRevision < 0 ||
             guessRevision < 0 ||
             double.IsNaN(absoluteDeadline) ||
@@ -974,6 +978,22 @@ public class PostItRoundManager : NetworkBehaviour
                 return false;
             }
 
+            if (_lastInitialAssignmentRoundRevision >= 0 &&
+                (!_initialAssignmentRevisionByOwner.TryGetValue(
+                     ownerClientId,
+                     out int assignedRoundRevision) ||
+                 assignedRoundRevision != roundRevision ||
+                 !_initialAssignmentPlayerObjectIdByOwner.TryGetValue(
+                     ownerClientId,
+                     out ulong assignedPlayerNetworkObjectId) ||
+                 assignedPlayerNetworkObjectId != playerNetworkObjectId))
+            {
+                LogAuthorityError(
+                    $"Cannot prepare guess snapshot for a non-current Player assignment. " +
+                    $"ownerClientId={ownerClientId}");
+                return false;
+            }
+
             orderedParticipants.Add(new PreparedGuessParticipant
             {
                 Inventory = inventory,
@@ -982,13 +1002,56 @@ public class PostItRoundManager : NetworkBehaviour
             });
         }
 
-        if (orderedParticipants.Count == 0)
+        List<ulong> orderedZeroScoreOwnerClientIds = new List<ulong>();
+        foreach (ulong ownerClientId in zeroScoreOwnerClientIds)
         {
-            LogWarning("Rejected guess snapshot preparation because no valid inventories were found.");
+            if (ownerClientId == ulong.MaxValue ||
+                !includedOwnerClientIds.Add(ownerClientId) ||
+                !_initialAssignmentRevisionByOwner.TryGetValue(
+                    ownerClientId,
+                    out int assignedRoundRevision) ||
+                assignedRoundRevision != roundRevision ||
+                !_initialAssignmentPlayerObjectIdByOwner.ContainsKey(ownerClientId))
+            {
+                LogAuthorityError(
+                    $"Rejected invalid or duplicate zero-score owner. " +
+                    $"ownerClientId={ownerClientId}");
+                return false;
+            }
+
+            if (NetworkManager != null &&
+                NetworkManager.IsListening &&
+                NetworkManager.ConnectedClients.TryGetValue(
+                    ownerClientId,
+                    out NetworkClient client))
+            {
+                if (client == null)
+                {
+                    return false;
+                }
+
+                NetworkObject playerObject = client.PlayerObject;
+                if (playerObject != null && playerObject.IsSpawned)
+                {
+                    LogAuthorityError(
+                        $"Cannot freeze a spawned Player as zero-score. " +
+                        $"ownerClientId={ownerClientId}");
+                    return false;
+                }
+            }
+
+            orderedZeroScoreOwnerClientIds.Add(ownerClientId);
+        }
+
+        if (orderedParticipants.Count == 0 &&
+            orderedZeroScoreOwnerClientIds.Count == 0)
+        {
+            LogWarning("Rejected guess snapshot preparation because no round participants were found.");
             return false;
         }
 
         orderedParticipants.Sort(CompareGuessParticipantsByOwnerClientId);
+        orderedZeroScoreOwnerClientIds.Sort();
         List<PlayerPostItInventory> orderedInventories =
             new List<PlayerPostItInventory>(orderedParticipants.Count);
         for (int participantIndex = 0;
@@ -1112,6 +1175,29 @@ public class PostItRoundManager : NetworkBehaviour
             totalEligibleCount += eligibleCount;
         }
 
+        for (int ownerIndex = 0;
+             ownerIndex < orderedZeroScoreOwnerClientIds.Count;
+             ownerIndex++)
+        {
+            ulong ownerClientId = orderedZeroScoreOwnerClientIds[ownerIndex];
+            PostItGuessPlayerScoreData zeroScore = new PostItGuessPlayerScoreData(
+                roundRevision,
+                guessRevision,
+                ownerClientId,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0);
+            if (!zeroScore.IsValid)
+            {
+                return false;
+            }
+
+            preparedScores.Add(ownerClientId, zeroScore);
+        }
+
         int publishedOwnerCount = 0;
         for (int stateIndex = 0; stateIndex < preparedOwnerStates.Count; stateIndex++)
         {
@@ -1147,6 +1233,14 @@ public class PostItRoundManager : NetworkBehaviour
             _serverParticipantPlayerObjectIds.Add(pair.Key, pair.Value);
         }
         _serverDisconnectedGuessOwners.Clear();
+        _serverZeroScoreGuessOwners.Clear();
+        for (int ownerIndex = 0;
+             ownerIndex < orderedZeroScoreOwnerClientIds.Count;
+             ownerIndex++)
+        {
+            _serverZeroScoreGuessOwners.Add(
+                orderedZeroScoreOwnerClientIds[ownerIndex]);
+        }
 
         _roundRevision = roundRevision;
         _guessRevision = guessRevision;
@@ -1156,13 +1250,30 @@ public class PostItRoundManager : NetworkBehaviour
 
         GuessLog(
             $"Prepared frozen guess snapshot. round={roundRevision}, " +
-            $"guess={guessRevision}, players={preparedOwnerStates.Count}, " +
+            $"guess={guessRevision}, players={preparedScores.Count}, " +
             $"eligible={totalEligibleCount}");
         return true;
     }
 
     public bool ServerBeginGuessing(
         IEnumerable<PlayerPostItInventory> inventories,
+        int roundRevision,
+        int guessRevision,
+        out int totalEligibleCount,
+        out double absoluteDeadlineServerTime)
+    {
+        return ServerBeginGuessing(
+            inventories,
+            Array.Empty<ulong>(),
+            roundRevision,
+            guessRevision,
+            out totalEligibleCount,
+            out absoluteDeadlineServerTime);
+    }
+
+    public bool ServerBeginGuessing(
+        IEnumerable<PlayerPostItInventory> inventories,
+        IEnumerable<ulong> zeroScoreOwnerClientIds,
         int roundRevision,
         int guessRevision,
         out int totalEligibleCount,
@@ -1180,6 +1291,7 @@ public class PostItRoundManager : NetworkBehaviour
         {
             return ServerBeginGuessingCore(
                 inventories,
+                zeroScoreOwnerClientIds,
                 roundRevision,
                 guessRevision,
                 out totalEligibleCount,
@@ -1193,6 +1305,7 @@ public class PostItRoundManager : NetworkBehaviour
 
     private bool ServerBeginGuessingCore(
         IEnumerable<PlayerPostItInventory> inventories,
+        IEnumerable<ulong> zeroScoreOwnerClientIds,
         int roundRevision,
         int guessRevision,
         out int totalEligibleCount,
@@ -1206,7 +1319,10 @@ public class PostItRoundManager : NetworkBehaviour
             return false;
         }
 
-        if (inventories == null || roundRevision < 0 || guessRevision < 0)
+        if (inventories == null ||
+            zeroScoreOwnerClientIds == null ||
+            roundRevision < 0 ||
+            guessRevision < 0)
         {
             LogWarning("Rejected invalid Guessing begin request.");
             return false;
@@ -1259,6 +1375,7 @@ public class PostItRoundManager : NetworkBehaviour
             serverTime + Math.Max(0.1d, guessingDurationSeconds);
         if (!TryPrepareServerGuessSnapshot(
                 inventoryList,
+                zeroScoreOwnerClientIds,
                 roundRevision,
                 guessRevision,
                 absoluteDeadlineServerTime,
@@ -1539,9 +1656,21 @@ public class PostItRoundManager : NetworkBehaviour
             roundRevision != _roundRevision ||
             guessRevision != _guessRevision ||
             (!_serverParticipantPlayerObjectIds.ContainsKey(ownerClientId) &&
-             !_serverDisconnectedGuessOwners.Contains(ownerClientId)))
+             !_serverDisconnectedGuessOwners.Contains(ownerClientId) &&
+             !_serverZeroScoreGuessOwners.Contains(ownerClientId)))
         {
             return false;
+        }
+
+        if (_serverZeroScoreGuessOwners.Contains(ownerClientId))
+        {
+            allSubmissionsResolved = !HasPendingGuessEntries();
+            if (allSubmissionsResolved)
+            {
+                _guessSubmissionOpen = false;
+            }
+
+            return true;
         }
 
         _serverParticipantPlayerObjectIds.Remove(ownerClientId);
@@ -1639,7 +1768,14 @@ public class PostItRoundManager : NetworkBehaviour
         foreach (KeyValuePair<ulong, ulong> participant in
                  _serverParticipantPlayerObjectIds)
         {
-            if (!IsGuessClientConnected(participant.Key))
+            if (!TryGetGuessClientPlayerObjectState(
+                    participant.Key,
+                    out bool hasSpawnedPlayerObject))
+            {
+                return false;
+            }
+
+            if (!hasSpawnedPlayerObject)
             {
                 continue;
             }
@@ -1912,6 +2048,8 @@ public class PostItRoundManager : NetworkBehaviour
             PostItGuessPlayerScoreData frozenScore = _serverGuessScores[ownerClientId];
             int submittedCount = submittedCounts[ownerClientId];
             int correctCount = correctCounts[ownerClientId];
+            bool isZeroScoreOwner =
+                _serverZeroScoreGuessOwners.Contains(ownerClientId);
             if (!frozenScore.IsValid ||
                 frozenScore.RoundRevision != _roundRevision ||
                 frozenScore.GuessRevision != _guessRevision ||
@@ -1919,7 +2057,11 @@ public class PostItRoundManager : NetworkBehaviour
                 frozenScore.SubmittedCount != submittedCount ||
                 frozenScore.CorrectCount != 0 ||
                 frozenScore.GuessBonusScore != 0 ||
-                frozenScore.FinalRoundScore != 0)
+                frozenScore.FinalRoundScore != 0 ||
+                (isZeroScoreOwner &&
+                 (!HasZeroRoundScoreValues(frozenScore) ||
+                  submittedCount != 0 ||
+                  correctCount != 0)))
             {
                 LogAuthorityError(
                     $"Frozen Guess score invariant failed. ownerClientId={ownerClientId}");
@@ -2011,10 +2153,20 @@ public class PostItRoundManager : NetworkBehaviour
             }
 
             if (_serverDisconnectedGuessOwners.Contains(score.OwnerClientId) ||
-                !IsGuessClientConnected(score.OwnerClientId))
+                _serverZeroScoreGuessOwners.Contains(score.OwnerClientId))
             {
                 continue;
             }
+
+            if (!TryGetGuessClientPlayerObjectState(
+                    score.OwnerClientId,
+                    out bool hasSpawnedPlayerObject))
+            {
+                return false;
+            }
+
+            if (!hasSpawnedPlayerObject)
+                continue;
 
             if (!TryResolveConnectedGuessParticipant(
                     score.OwnerClientId,
@@ -2125,7 +2277,9 @@ public class PostItRoundManager : NetworkBehaviour
                 score.CorrectCount != correctCounts[ownerClientId] ||
                 score.GuessBonusScore != correctCounts[ownerClientId] ||
                 score.FinalRoundScore !=
-                    (long)score.HeldPostItCount + score.CorrectCount)
+                    (long)score.HeldPostItCount + score.CorrectCount ||
+                (_serverZeroScoreGuessOwners.Contains(ownerClientId) &&
+                 !HasZeroRoundScoreValues(score)))
             {
                 return false;
             }
@@ -3453,6 +3607,7 @@ public class PostItRoundManager : NetworkBehaviour
         _serverGuessScores.Clear();
         _serverParticipantPlayerObjectIds.Clear();
         _serverDisconnectedGuessOwners.Clear();
+        _serverZeroScoreGuessOwners.Clear();
         _roundRevision = -1;
         _guessRevision = -1;
         _guessDeadlineServerTime = 0d;
@@ -3507,7 +3662,8 @@ public class PostItRoundManager : NetworkBehaviour
     private bool ValidateFrozenGuessParticipantSets()
     {
         if (_serverParticipantPlayerObjectIds.Count +
-                _serverDisconnectedGuessOwners.Count !=
+                _serverDisconnectedGuessOwners.Count +
+                _serverZeroScoreGuessOwners.Count !=
             _serverGuessScores.Count)
         {
             return false;
@@ -3516,6 +3672,7 @@ public class PostItRoundManager : NetworkBehaviour
         foreach (ulong ownerClientId in _serverParticipantPlayerObjectIds.Keys)
         {
             if (_serverDisconnectedGuessOwners.Contains(ownerClientId) ||
+                _serverZeroScoreGuessOwners.Contains(ownerClientId) ||
                 !_serverGuessScores.ContainsKey(ownerClientId))
             {
                 return false;
@@ -3524,13 +3681,38 @@ public class PostItRoundManager : NetworkBehaviour
 
         foreach (ulong ownerClientId in _serverDisconnectedGuessOwners)
         {
-            if (!_serverGuessScores.ContainsKey(ownerClientId))
+            if (_serverZeroScoreGuessOwners.Contains(ownerClientId) ||
+                !_serverGuessScores.ContainsKey(ownerClientId))
+            {
+                return false;
+            }
+        }
+
+        foreach (ulong ownerClientId in _serverZeroScoreGuessOwners)
+        {
+            if (_serverParticipantPlayerObjectIds.ContainsKey(ownerClientId) ||
+                _serverDisconnectedGuessOwners.Contains(ownerClientId) ||
+                !_serverGuessScores.TryGetValue(
+                    ownerClientId,
+                    out PostItGuessPlayerScoreData zeroScore) ||
+                !HasZeroRoundScoreValues(zeroScore))
             {
                 return false;
             }
         }
 
         return true;
+    }
+
+    private static bool HasZeroRoundScoreValues(
+        PostItGuessPlayerScoreData score)
+    {
+        return score.HeldPostItCount == 0 &&
+               score.EligibleCount == 0 &&
+               score.SubmittedCount == 0 &&
+               score.CorrectCount == 0 &&
+               score.GuessBonusScore == 0 &&
+               score.FinalRoundScore == 0;
     }
 
     private int FindUniqueServerGuessEntryIndex(ulong ownerClientId, int postItId)
@@ -3595,11 +3777,30 @@ public class PostItRoundManager : NetworkBehaviour
         return true;
     }
 
-    private bool IsGuessClientConnected(ulong ownerClientId)
+    private bool TryGetGuessClientPlayerObjectState(
+        ulong ownerClientId,
+        out bool hasSpawnedPlayerObject)
     {
-        return NetworkManager != null &&
-               NetworkManager.IsListening &&
-               NetworkManager.ConnectedClients.ContainsKey(ownerClientId);
+        hasSpawnedPlayerObject = false;
+        if (NetworkManager == null || !NetworkManager.IsListening)
+            return false;
+
+        if (!NetworkManager.ConnectedClients.TryGetValue(
+                ownerClientId,
+                out NetworkClient client))
+        {
+            return true;
+        }
+
+        if (client == null)
+            return false;
+
+        NetworkObject playerObject = client.PlayerObject;
+        if (playerObject == null || !playerObject.IsSpawned)
+            return false;
+
+        hasSpawnedPlayerObject = true;
+        return true;
     }
 
     private double GetAuthoritativeServerTime()

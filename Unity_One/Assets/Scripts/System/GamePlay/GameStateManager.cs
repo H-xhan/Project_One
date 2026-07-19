@@ -125,6 +125,8 @@ public class GameStateManager : NetworkBehaviour
         );
 
     private readonly List<ulong> _roundParticipantClientIds = new List<ulong>();
+    private readonly HashSet<ulong> _frozenZeroScoreParticipantClientIds =
+        new HashSet<ulong>();
     private float _nextSurvivorCheckTime;
     private float _nextCursorLockRefreshAt;
     private Coroutine _playingCursorLockRetryRoutine;
@@ -177,6 +179,9 @@ public class GameStateManager : NetworkBehaviour
         StopPlayingCursorLockRetry("network-despawn");
         if (unlockCursorOutsidePlaying)
             SetCursorLocked(false, "network-despawn");
+
+        _roundParticipantClientIds.Clear();
+        _frozenZeroScoreParticipantClientIds.Clear();
 
         base.OnNetworkDespawn();
     }
@@ -400,6 +405,7 @@ public class GameStateManager : NetworkBehaviour
         _roundEndTransitionInProgress = false;
         _activePlayingEndReason = PlayingEndReason.Timer;
         _pendingSurvivorWinnerClientId = invalidWinnerClientId;
+        _frozenZeroScoreParticipantClientIds.Clear();
     }
 
     private void TickRoundEndCheckServer()
@@ -414,9 +420,14 @@ public class GameStateManager : NetworkBehaviour
         if (!TryFlushZeroPostItEliminationsServer())
             return;
 
-        _nextSurvivorCheckTime = now + Mathf.Max(0f, survivorCheckInterval);
+        if (!TryCountAliveParticipantsServer(
+                out int aliveCount,
+                out ulong lastAliveClientId))
+        {
+            return;
+        }
 
-        int aliveCount = CountAliveParticipantsServer(out ulong lastAliveClientId);
+        _nextSurvivorCheckTime = now + Mathf.Max(0f, survivorCheckInterval);
         if (aliveCount == 1)
         {
             RequestPlayingEndServer(
@@ -431,35 +442,35 @@ public class GameStateManager : NetworkBehaviour
         }
     }
 
-    private bool TryGetPlayerStatusForClient(ulong clientId, out PlayerStatusModule status)
+    private bool TryCountAliveParticipantsServer(
+        out int aliveCount,
+        out ulong lastAliveClientId)
     {
-        status = null;
-
-        NetworkManager networkManager = NetworkManager.Singleton;
-        if (networkManager == null)
-            return false;
-
-        if (!networkManager.ConnectedClients.TryGetValue(clientId, out var client) || client == null)
-            return false;
-
-        NetworkObject playerObject = client.PlayerObject;
-        if (playerObject == null || !playerObject.IsSpawned)
-            return false;
-
-        status = playerObject.GetComponentInChildren<PlayerStatusModule>(true);
-        return status != null && status.IsSpawned;
-    }
-
-    private int CountAliveParticipantsServer(out ulong lastAliveClientId)
-    {
+        aliveCount = 0;
         lastAliveClientId = invalidWinnerClientId;
-        int aliveCount = 0;
+        if (!IsServer || NetworkManager == null || !NetworkManager.IsListening)
+            return false;
 
         for (int i = 0; i < _roundParticipantClientIds.Count; i++)
         {
             ulong clientId = _roundParticipantClientIds[i];
-            if (!TryGetPlayerStatusForClient(clientId, out PlayerStatusModule status))
+            if (!NetworkManager.ConnectedClients.TryGetValue(clientId, out var client))
                 continue;
+
+            if (client == null)
+                return false;
+
+            NetworkObject playerObject = client.PlayerObject;
+            if (playerObject == null || !playerObject.IsSpawned)
+                continue;
+
+            if (!TryResolveSpawnedPlayerStatus(
+                    playerObject,
+                    clientId,
+                    out PlayerStatusModule status))
+            {
+                return false;
+            }
 
             if (status.IsEliminated)
                 continue;
@@ -468,7 +479,7 @@ public class GameStateManager : NetworkBehaviour
             lastAliveClientId = clientId;
         }
 
-        return aliveCount;
+        return true;
     }
 
     private void ResolveRoundWinnerServer(ulong winnerClientId)
@@ -511,7 +522,12 @@ public class GameStateManager : NetworkBehaviour
         if (!TryFlushZeroPostItEliminationsServer())
             return;
 
-        int aliveCount = CountAliveParticipantsServer(out ulong lastAliveClientId);
+        if (!TryCountAliveParticipantsServer(
+                out int aliveCount,
+                out ulong lastAliveClientId))
+        {
+            return;
+        }
         if (aliveCount == 1)
         {
             RequestPlayingEndServer(
@@ -550,16 +566,13 @@ public class GameStateManager : NetworkBehaviour
         _roundEndTransitionInProgress = true;
         try
         {
-            if (reason == PlayingEndReason.NoSurvivors)
-            {
-                ResolveRoundDrawServer();
-                return;
-            }
-
             PostItRoundManager postItRoundManager = ResolvePostItRoundManager();
             if (!IsValidServerPostItRoundManager(postItRoundManager) ||
-                !TryBuildRoundParticipantInventoriesServer(
-                    out List<PlayerPostItInventory> inventories))
+                !TryBuildRoundParticipantScoreInputsServer(
+                    out List<PlayerPostItInventory> inventories,
+                    out List<ulong> zeroScoreOwnerClientIds) ||
+                (reason == PlayingEndReason.LastSurvivor &&
+                 zeroScoreOwnerClientIds.Contains(survivorWinnerClientId)))
             {
                 Log("[GameStateManager] Playing end snapshot preparation failed.");
                 return;
@@ -568,6 +581,7 @@ public class GameStateManager : NetworkBehaviour
             int guessRevision = _roundRevision;
             if (!postItRoundManager.ServerBeginGuessing(
                     inventories,
+                    zeroScoreOwnerClientIds,
                     _roundRevision,
                     guessRevision,
                     out int totalEligibleCount,
@@ -578,6 +592,14 @@ public class GameStateManager : NetworkBehaviour
             }
 
             _guessRevision = guessRevision;
+            _frozenZeroScoreParticipantClientIds.Clear();
+            for (int ownerIndex = 0;
+                 ownerIndex < zeroScoreOwnerClientIds.Count;
+                 ownerIndex++)
+            {
+                _frozenZeroScoreParticipantClientIds.Add(
+                    zeroScoreOwnerClientIds[ownerIndex]);
+            }
             _activePlayingEndReason = reason;
             _pendingSurvivorWinnerClientId = reason == PlayingEndReason.LastSurvivor
                 ? survivorWinnerClientId
@@ -698,9 +720,14 @@ public class GameStateManager : NetworkBehaviour
             return false;
         }
 
+        if (!ValidateFinalScoreSetForRound(scores))
+            return false;
+
         if (_activePlayingEndReason == PlayingEndReason.LastSurvivor)
         {
-            if (!ContainsFinalScoreForOwner(
+            if (_frozenZeroScoreParticipantClientIds.Contains(
+                    _pendingSurvivorWinnerClientId) ||
+                !ContainsFinalScoreForOwner(
                     scores,
                     _pendingSurvivorWinnerClientId))
             {
@@ -713,6 +740,12 @@ public class GameStateManager : NetworkBehaviour
 
         if (_activePlayingEndReason == PlayingEndReason.NoSurvivors)
         {
+            if (_frozenZeroScoreParticipantClientIds.Count !=
+                _roundParticipantClientIds.Count)
+            {
+                return false;
+            }
+
             ResolveRoundDrawServer();
             return _roundResultResolved;
         }
@@ -790,10 +823,66 @@ public class GameStateManager : NetworkBehaviour
         return false;
     }
 
-    private bool TryBuildRoundParticipantInventoriesServer(
-        out List<PlayerPostItInventory> inventories)
+    private bool ValidateFinalScoreSetForRound(
+        PostItGuessPlayerScoreData[] scores)
+    {
+        if (scores == null ||
+            _roundParticipantClientIds.Count == 0 ||
+            scores.Length != _roundParticipantClientIds.Count)
+        {
+            return false;
+        }
+
+        HashSet<ulong> expectedOwners =
+            new HashSet<ulong>(_roundParticipantClientIds);
+        if (expectedOwners.Count != _roundParticipantClientIds.Count)
+            return false;
+
+        foreach (ulong ownerClientId in _frozenZeroScoreParticipantClientIds)
+        {
+            if (!expectedOwners.Contains(ownerClientId))
+                return false;
+        }
+
+        for (int scoreIndex = 0; scoreIndex < scores.Length; scoreIndex++)
+        {
+            PostItGuessPlayerScoreData score = scores[scoreIndex];
+            long expectedFinalRoundScore =
+                (long)score.HeldPostItCount + score.CorrectCount;
+            if (!score.IsValid ||
+                score.RoundRevision != _roundRevision ||
+                score.GuessRevision != _guessRevision ||
+                !expectedOwners.Remove(score.OwnerClientId) ||
+                score.GuessBonusScore != score.CorrectCount ||
+                score.FinalRoundScore != expectedFinalRoundScore ||
+                (_frozenZeroScoreParticipantClientIds.Contains(
+                     score.OwnerClientId) &&
+                 !HasZeroScoreValues(score)))
+            {
+                return false;
+            }
+        }
+
+        return expectedOwners.Count == 0;
+    }
+
+    private static bool HasZeroScoreValues(
+        PostItGuessPlayerScoreData score)
+    {
+        return score.HeldPostItCount == 0 &&
+               score.EligibleCount == 0 &&
+               score.SubmittedCount == 0 &&
+               score.CorrectCount == 0 &&
+               score.GuessBonusScore == 0 &&
+               score.FinalRoundScore == 0;
+    }
+
+    private bool TryBuildRoundParticipantScoreInputsServer(
+        out List<PlayerPostItInventory> inventories,
+        out List<ulong> zeroScoreOwnerClientIds)
     {
         inventories = new List<PlayerPostItInventory>();
+        zeroScoreOwnerClientIds = new List<ulong>();
         if (!IsServer || NetworkManager == null || !NetworkManager.IsListening)
             return false;
 
@@ -803,14 +892,29 @@ public class GameStateManager : NetworkBehaviour
         {
             ulong clientId = _roundParticipantClientIds[participantIndex];
             if (!NetworkManager.ConnectedClients.TryGetValue(clientId, out var client))
+            {
+                zeroScoreOwnerClientIds.Add(clientId);
                 continue;
+            }
 
             if (client == null)
                 return false;
 
             NetworkObject playerObject = client.PlayerObject;
             if (playerObject == null || !playerObject.IsSpawned)
+            {
+                zeroScoreOwnerClientIds.Add(clientId);
                 continue;
+            }
+
+            if (!TryResolveSpawnedPlayerStatus(
+                    playerObject,
+                    clientId,
+                    out PlayerStatusModule status) ||
+                status.IsEliminated)
+            {
+                return false;
+            }
 
             if (!TryResolveConnectedPlayerInventory(
                     NetworkManager,
@@ -823,7 +927,9 @@ public class GameStateManager : NetworkBehaviour
             inventories.Add(inventory);
         }
 
-        return inventories.Count > 0;
+        return _roundParticipantClientIds.Count > 0 &&
+               inventories.Count + zeroScoreOwnerClientIds.Count ==
+               _roundParticipantClientIds.Count;
     }
 
     private bool TryBuildConnectedInventoriesServer(
@@ -867,6 +973,26 @@ public class GameStateManager : NetworkBehaviour
         PostItRoundManager postItRoundManager = ResolvePostItRoundManager();
         return IsValidServerPostItRoundManager(postItRoundManager) &&
                postItRoundManager.ServerFlushZeroPostItEliminations();
+    }
+
+    private static bool TryResolveSpawnedPlayerStatus(
+        NetworkObject playerObject,
+        ulong clientId,
+        out PlayerStatusModule status)
+    {
+        status = null;
+        if (playerObject == null ||
+            !playerObject.IsSpawned ||
+            playerObject.OwnerClientId != clientId)
+        {
+            return false;
+        }
+
+        status = playerObject.GetComponentInChildren<PlayerStatusModule>(true);
+        return status != null &&
+               status.IsSpawned &&
+               status.IsServer &&
+               status.GetComponentInParent<NetworkObject>() == playerObject;
     }
 
     private static bool TryResolveConnectedPlayerInventory(
