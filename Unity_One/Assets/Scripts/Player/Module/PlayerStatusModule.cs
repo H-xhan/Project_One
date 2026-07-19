@@ -262,7 +262,12 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
 
     private bool isKnocked;
     private bool isStandingUp;
-    private bool isEliminated;
+    private readonly NetworkVariable<bool> _isEliminated =
+        new NetworkVariable<bool>(
+            false,
+            NetworkVariableReadPermission.Everyone,
+            NetworkVariableWritePermission.Server);
+    private bool _isPostItDepletionElimination;
     private bool _hasHandledPostItDropForCurrentFallTransition;
     private float knockTimer;
     private float nextHitReactionAt;
@@ -311,7 +316,7 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
 
     public bool IsKnocked => isKnocked;
     public bool IsStandingUp => isStandingUp;
-    public bool IsEliminated => isEliminated;
+    public bool IsEliminated => _isEliminated.Value;
     public bool IsTemporaryControlLocked => IsTemporaryControlLockActive();
     public float TemporaryControlLockRemainingSeconds
     {
@@ -323,14 +328,14 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
             return Mathf.Max(0f, _temporaryControlLockUntil - Time.time);
         }
     }
-    public bool CanMove => !isKnocked && !isStandingUp && !IsStandUpVisualControlLocked && !isEliminated && !ShouldBlockMoveByTemporaryLock();
-    public bool CanAttack => !isKnocked && !isStandingUp && !IsStandUpVisualControlLocked && !isEliminated && !ShouldBlockAttackByTemporaryLock();
-    public bool CanInteract => !isKnocked && !isStandingUp && !IsStandUpVisualControlLocked && !isEliminated && !ShouldBlockInteractByTemporaryLock();
+    public bool CanMove => !isKnocked && !isStandingUp && !IsStandUpVisualControlLocked && !IsEliminated && !ShouldBlockMoveByTemporaryLock();
+    public bool CanAttack => !isKnocked && !isStandingUp && !IsStandUpVisualControlLocked && !IsEliminated && !ShouldBlockAttackByTemporaryLock();
+    public bool CanInteract => !isKnocked && !isStandingUp && !IsStandUpVisualControlLocked && !IsEliminated && !ShouldBlockInteractByTemporaryLock();
     public bool HasRecentCombatFallContributor => false;
 
     public bool ServerEliminateForPostItDepletion()
     {
-        if (!IsServer || !IsSpawned || isEliminated)
+        if (!IsServer || !IsSpawned || IsEliminated)
             return false;
 
         if (rootNetObj == null || !rootNetObj.IsSpawned)
@@ -352,8 +357,35 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
             return false;
         }
 
-        HandleElimination();
-        return isEliminated;
+        HandleElimination(true);
+        return IsEliminated;
+    }
+
+    public bool ServerResetPostItRoundElimination()
+    {
+        if (!IsServer || !IsSpawned)
+            return false;
+
+        if (!IsEliminated)
+        {
+            _isPostItDepletionElimination = false;
+            return true;
+        }
+
+        if (!_isPostItDepletionElimination ||
+            !TryGetGameStateManager(out GameStateManager manager) ||
+            manager.GetState() == GameStateManager.GameState.Playing)
+        {
+            return false;
+        }
+
+        ResetStateForServerRespawn("PostItRoundReset");
+        _isEliminated.Value = false;
+        if (IsEliminated)
+            return false;
+
+        _isPostItDepletionElimination = false;
+        return true;
     }
 
     public bool ServerApplyTemporaryControlLock(float duration)
@@ -366,7 +398,7 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
         if (!IsServer)
             return false;
 
-        if (isEliminated)
+        if (IsEliminated)
             return false;
 
         if (!lockMove && !lockAttack && !lockInteract)
@@ -439,7 +471,7 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
     {
         if (!IsServer) return;
         RefreshTemporaryControlLock();
-        if (isEliminated) return;
+        if (IsEliminated) return;
 
         UpdateKnockState();
         UpdateStandUpState();
@@ -574,7 +606,7 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
     private void ApplyKnockbackServerInternal(Vector3 impulse, bool clearCombatContributor, ActiveRagdollImpactSource impactSource = ActiveRagdollImpactSource.General)
     {
         if (!IsServer) return;
-        if (isEliminated) return;
+        if (IsEliminated) return;
         if (isKnocked) return;
 
         if (rootRigidbody == null || charController == null)
@@ -595,7 +627,7 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
     public void ForceRecoverServer()
     {
         if (!IsServer) return;
-        if (isEliminated) return;
+        if (IsEliminated) return;
 
         if (isKnocked)
         {
@@ -779,7 +811,7 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
         if (!IsServer)
             return false;
 
-        if (isEliminated || isKnocked)
+        if (IsEliminated || isKnocked)
             return false;
 
         return rootRigidbody != null && charController != null;
@@ -896,7 +928,7 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
             if (TryHandleCoinFallRespawn())
                 return;
 
-            HandleElimination();
+            HandleElimination(true);
         }
     }
 
@@ -904,7 +936,7 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
     {
         if (!IsServer) return false;
         if (!useCoinRespawnOnFall) return false;
-        if (isEliminated) return false;
+        if (IsEliminated) return false;
 
         if (requirePlayingStateForCoinRespawn && !IsCoinFallRespawnAllowedByGameState())
             return false;
@@ -949,7 +981,7 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
         if (removedAmount <= 0)
             LogCoinFallRespawn("Coin fall respawn continuing with no removed coins.");
 
-        ResetStateForCoinFallRespawn();
+        ResetStateForServerRespawn("CoinFallRespawn");
 
         if (!matchManager.ServerTryRespawnPlayerToGameSpawn(ownerHub))
         {
@@ -1066,7 +1098,7 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
         if (!dropHeldItemOnKnockback)
             return;
 
-        if (isEliminated)
+        if (IsEliminated)
             return;
 
         if (Time.time < _nextDropHeldItemOnKnockbackAllowedAt)
@@ -1249,9 +1281,9 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
         return spawnedCount;
     }
 
-    private void ResetStateForCoinFallRespawn()
+    private void ResetStateForServerRespawn(string reason)
     {
-        ServerReleaseCharacterGrabForStatusEvent("CoinFallRespawn", true);
+        ServerReleaseCharacterGrabForStatusEvent(reason, true);
 
         isKnocked = false;
         isStandingUp = false;
@@ -1260,13 +1292,14 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
         _standUpStartedAt = 0f;
         _standUpFinishEventReceived = false;
         _standUpMinimumDelayLogged = false;
-        ClearStandUpControlLock("CoinFallRespawn");
-        ClearStandUpAnimatorExitLock("CoinFallRespawn");
-        ClearDeferredStandUpUprightSnap("CoinFallRespawn");
+        ClearStandUpControlLock(reason);
+        ClearStandUpAnimatorExitLock(reason);
+        ClearDeferredStandUpUprightSnap(reason);
         ResetStandUpGroundClearanceState();
         ClearTemporaryControlLockLocal();
         _didSyncRootFromRagdollForCurrentKnockback = false;
         _hasLastRagdollFocusForRootSync = false;
+        _hasHandledPostItDropForCurrentFallTransition = false;
         hasReachedSafePlayingPosition = false;
         hasLoggedEliminationGateState = false;
         if (locomotionModule != null)
@@ -1475,7 +1508,7 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
     {
         if (!IsServer) return;
         if (isStandingUp) return;
-        if (isEliminated) return;
+        if (IsEliminated) return;
 
         TrySyncRootToRagdollFocusBeforeStandUp("BeginStandUpBack");
 
@@ -1898,7 +1931,7 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
         if (_didSyncRootFromRagdollForCurrentKnockback)
             return false;
 
-        if (isEliminated || (!isKnocked && !isStandingUp))
+        if (IsEliminated || (!isKnocked && !isStandingUp))
             return false;
 
         if (!IsServer || !IsSpawned)
@@ -2262,13 +2295,14 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
         }
     }
 
-    private void HandleElimination()
+    private void HandleElimination(bool despawnPlayerObject)
     {
-        if (isEliminated) return;
+        if (IsEliminated) return;
 
         ServerReleaseCharacterGrabForStatusEvent("Elimination", true);
 
-        isEliminated = true;
+        _isPostItDepletionElimination = !despawnPlayerObject;
+        _isEliminated.Value = true;
         isKnocked = false;
         isStandingUp = false;
         standUpTimer = 0f;
@@ -2299,6 +2333,9 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
         if (charController != null && charController.enabled)
             charController.enabled = false;
 
+        if (!despawnPlayerObject)
+            return;
+
         if (rootNetObj != null && rootNetObj.IsSpawned)
         {
             rootNetObj.Despawn();
@@ -2312,7 +2349,7 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
     public void TakeDamage(float damage)
     {
         if (!IsServer) return;
-        if (isEliminated) return;
+        if (IsEliminated) return;
 
         Log($"[PlayerStatus] TakeDamage -> {name}, damage:{damage}");
         TryTriggerHitReaction();
