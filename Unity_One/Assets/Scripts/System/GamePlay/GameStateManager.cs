@@ -279,6 +279,12 @@ public class GameStateManager : NetworkBehaviour
 
     private void EnterLobby(bool isInitialSpawn)
     {
+        if (!isInitialSpawn && !TryResetPostItEliminationsBeforeLobbyServer())
+        {
+            Log("[GameStateManager] Post-it elimination reset failed. Lobby transition deferred.");
+            return;
+        }
+
         if (!isInitialSpawn && !TryClearGuessStateBeforeLobbyServer())
         {
             Log("[GameStateManager] Guess state clear failed. Lobby transition deferred.");
@@ -936,17 +942,21 @@ public class GameStateManager : NetworkBehaviour
                     playerObject,
                     clientId,
                     out PlayerStatusModule status) ||
-                status.IsEliminated)
-            {
-                return false;
-            }
-
-            if (!TryResolveConnectedPlayerInventory(
+                !TryResolveConnectedPlayerInventory(
                     NetworkManager,
                     clientId,
                     out PlayerPostItInventory inventory))
             {
                 return false;
+            }
+
+            if (status.IsEliminated)
+            {
+                if (inventory.Count != 0)
+                    return false;
+
+                zeroScoreOwnerClientIds.Add(clientId);
+                continue;
             }
 
             inventories.Add(inventory);
@@ -1084,6 +1094,52 @@ public class GameStateManager : NetworkBehaviour
                TryBuildConnectedInventoriesServer(
                    out List<PlayerPostItInventory> inventories) &&
                postItRoundManager.ServerClearGuessState(inventories);
+    }
+
+    private bool TryResetPostItEliminationsBeforeLobbyServer()
+    {
+        if (!IsServer || NetworkManager == null || !NetworkManager.IsListening)
+            return false;
+
+        for (int participantIndex = 0;
+             participantIndex < _roundParticipantClientIds.Count;
+             participantIndex++)
+        {
+            ulong clientId = _roundParticipantClientIds[participantIndex];
+            if (!NetworkManager.ConnectedClients.TryGetValue(clientId, out var client))
+                continue;
+
+            if (client == null)
+                return false;
+
+            NetworkObject playerObject = client.PlayerObject;
+            if (playerObject == null || !playerObject.IsSpawned)
+                continue;
+
+            if (!TryResolveSpawnedPlayerStatus(
+                    playerObject,
+                    clientId,
+                    out PlayerStatusModule status))
+            {
+                return false;
+            }
+
+            try
+            {
+                if (!status.ServerResetPostItRoundElimination() ||
+                    status.IsEliminated)
+                {
+                    return false;
+                }
+            }
+            catch (System.Exception exception)
+            {
+                Debug.LogException(exception, status);
+                return false;
+            }
+        }
+
+        return true;
     }
 
     private PostItRoundManager ResolvePostItRoundManager()
