@@ -1553,6 +1553,16 @@ public class PlayerHub : NetworkBehaviour
             return false;
         }
 
+        PostItRoundManager roundManager = ResolvePostItRoundManager();
+        if (roundManager == null ||
+            !roundManager.IsSpawned ||
+            !roundManager.IsServer ||
+            !roundManager.ServerIsCurrentPlayingParticipant(requesterInventory) ||
+            !roundManager.ServerIsCurrentPlayingParticipant(targetInventory))
+        {
+            return false;
+        }
+
         if (!targetInventory.TryGetPostIt(postItId, out PostItRuntimeData runtimeData) ||
             !runtimeData.IsValid ||
             runtimeData.HolderClientId != targetNetworkObject.OwnerClientId ||
@@ -1851,6 +1861,7 @@ public class PlayerHub : NetworkBehaviour
             !requesterInventory.IsSpawned ||
             !requesterInventory.IsServer ||
             requesterInventory.GetComponentInParent<NetworkObject>() != requesterNetworkObject ||
+            !roundManager.ServerIsCurrentPlayingParticipant(requesterInventory) ||
             requesterInventory.IsFull ||
             requesterInventory.ContainsPostIt(postItId))
         {
