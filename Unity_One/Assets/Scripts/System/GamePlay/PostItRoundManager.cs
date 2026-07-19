@@ -14,6 +14,7 @@ public class PostItRoundManager : NetworkBehaviour
         InitialMapBonusPostItCount +
         InitialMapPenaltyPostItCount;
     private const float MinimumMapSpawnSeparation = 0.5f;
+    private const float ZeroPostItPollIntervalSeconds = 0.25f;
 
     [SerializeField] private int initialDrawingPostItCountPerPlayer = 2;
     [SerializeField] private int initialEffectPostItCountPerPlayer = 1;
@@ -50,6 +51,8 @@ public class PostItRoundManager : NetworkBehaviour
     private readonly Dictionary<ulong, int> _zeroPostItEliminationRevisionByOwner =
         new Dictionary<ulong, int>();
     private readonly List<ulong> _zeroPostItPollClientIds = new List<ulong>();
+    private float _nextZeroPostItPollTime;
+    private GameStateManager _gameStateManager;
     private int _lastInitialAssignmentRoundRevision = -1;
     private int _lastExplicitInitialAssignmentRoundRevision = -1;
     private bool _initialAssignmentInProgress;
@@ -184,6 +187,11 @@ public class PostItRoundManager : NetworkBehaviour
         if (!IsServer || !IsSpawned)
             return;
 
+        float now = Time.unscaledTime;
+        if (now < _nextZeroPostItPollTime)
+            return;
+
+        _nextZeroPostItPollTime = now + ZeroPostItPollIntervalSeconds;
         ServerFlushZeroPostItEliminations();
     }
 
@@ -228,6 +236,8 @@ public class PostItRoundManager : NetworkBehaviour
                 _initialAssignmentPlayerObjectIdByOwner.Clear();
                 _zeroPostItEliminationRevisionByOwner.Clear();
                 _zeroPostItPollClientIds.Clear();
+                _nextZeroPostItPollTime = 0f;
+                _gameStateManager = null;
                 _lastInitialAssignmentRoundRevision = -1;
                 _lastExplicitInitialAssignmentRoundRevision = -1;
                 _initialAssignmentInProgress = false;
@@ -669,6 +679,12 @@ public class PostItRoundManager : NetworkBehaviour
 
             _nextPostItId = nextPostItId;
             _lastInitialAssignmentRoundRevision = roundRevision;
+            if (isNewRoundRevision)
+            {
+                _initialAssignmentRevisionByOwner.Clear();
+                _initialAssignmentPlayerObjectIdByOwner.Clear();
+            }
+
             for (int assignmentIndex = 0;
                  assignmentIndex < preparedAssignments.Count;
                  assignmentIndex++)
@@ -4528,15 +4544,23 @@ public class PostItRoundManager : NetworkBehaviour
                inventory.NetworkObject.IsSpawned;
     }
 
-    private static bool IsPlayingState()
+    private GameStateManager ResolveGameStateManager()
     {
-        GameStateManager manager = FindFirstObjectByType<GameStateManager>();
+        if (_gameStateManager == null || !_gameStateManager.isActiveAndEnabled)
+            _gameStateManager = FindFirstObjectByType<GameStateManager>();
+
+        return _gameStateManager;
+    }
+
+    private bool IsPlayingState()
+    {
+        GameStateManager manager = ResolveGameStateManager();
         return manager != null && manager.GetState() == GameStateManager.GameState.Playing;
     }
 
-    private static bool IsInitialAssignmentState()
+    private bool IsInitialAssignmentState()
     {
-        GameStateManager manager = FindFirstObjectByType<GameStateManager>();
+        GameStateManager manager = ResolveGameStateManager();
         if (manager == null)
             return false;
 
@@ -4545,9 +4569,9 @@ public class PostItRoundManager : NetworkBehaviour
                state == GameStateManager.GameState.Countdown;
     }
 
-    private static bool IsGuessingState()
+    private bool IsGuessingState()
     {
-        GameStateManager manager = FindFirstObjectByType<GameStateManager>();
+        GameStateManager manager = ResolveGameStateManager();
         return manager != null && manager.GetState() == GameStateManager.GameState.Guessing;
     }
 
