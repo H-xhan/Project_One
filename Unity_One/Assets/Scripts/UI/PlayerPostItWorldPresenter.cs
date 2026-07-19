@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using Unity.Netcode;
 using UnityEngine;
+using UnityEngine.Rendering;
 
 [DisallowMultipleComponent]
 public sealed class PlayerPostItWorldPresenter : MonoBehaviour
@@ -58,6 +59,20 @@ public sealed class PlayerPostItWorldPresenter : MonoBehaviour
     private static readonly int MainTextureScaleOffsetPropertyId = Shader.PropertyToID("_MainTex_ST");
     private static readonly int VisualIdPropertyId = Shader.PropertyToID("_PostItVisualId");
     private static readonly int TypePropertyId = Shader.PropertyToID("_PostItType");
+    private static readonly int SurfacePropertyId = Shader.PropertyToID("_Surface");
+    private static readonly int BlendPropertyId = Shader.PropertyToID("_Blend");
+    private static readonly int AlphaClipPropertyId = Shader.PropertyToID("_AlphaClip");
+    private static readonly int SrcBlendPropertyId = Shader.PropertyToID("_SrcBlend");
+    private static readonly int DstBlendPropertyId = Shader.PropertyToID("_DstBlend");
+    private static readonly int ZWritePropertyId = Shader.PropertyToID("_ZWrite");
+    private static readonly int CullPropertyId = Shader.PropertyToID("_Cull");
+
+    private const float PaperFlyDuration = 0.3f;
+    private const float PaperFlyMatchWindow = 0.5f;
+    private const float PaperFlyArcHeight = 0.18f;
+    private const float PaperFlyFadeStart = 0.55f;
+    private const int PaperFlyPoolCapacity = 4;
+    private const int PaperFlyMaxFrameSeparation = 1;
 
     private sealed class VisualSlot
     {
@@ -81,18 +96,64 @@ public sealed class PlayerPostItWorldPresenter : MonoBehaviour
         public bool HasData;
     }
 
+    private sealed class PaperFlyEndpoint
+    {
+        public PlayerPostItWorldPresenter Presenter;
+        public PostItPublicVisualData Data;
+        public Vector3 Position;
+        public Quaternion Rotation;
+        public Vector3 Scale;
+        public float ObservedAt;
+        public int ObservedFrame;
+    }
+
+    private sealed class PaperFlySlot
+    {
+        public GameObject Instance;
+        public Renderer[] Renderers;
+        public MaterialPropertyBlock PropertyBlock;
+        public bool SupportsCatalogPreview;
+        public CatalogWarningState WarningState;
+        public Color BaseColor;
+        public PlayerPostItWorldPresenter DestinationPresenter;
+        public int DestinationPostItId;
+        public Vector3 SourcePosition;
+        public Quaternion SourceRotation;
+        public Vector3 SourceScale;
+        public Vector3 DestinationPosition;
+        public Quaternion DestinationRotation;
+        public Vector3 DestinationScale;
+        public float StartedAt;
+        public bool Active;
+    }
+
+    private static readonly List<PaperFlyEndpoint> PendingPaperFlyRemovals =
+        new List<PaperFlyEndpoint>();
+    private static readonly List<PaperFlyEndpoint> PendingPaperFlyAdditions =
+        new List<PaperFlyEndpoint>();
+    private static int _lastPendingPaperFlyPruneFrame = -1;
+
     private PlayerPostItInventory _boundInventory;
     private PostItRoundManager _boundRoundManager;
     private Transform[] _resolvedAnchors = Array.Empty<Transform>();
     private VisualSlot[] _visualSlots = Array.Empty<VisualSlot>();
     private readonly List<WorldVisualSlot> _worldVisualSlots = new List<WorldVisualSlot>();
+    private readonly List<PostItPublicVisualData> _publicVisualSnapshot =
+        new List<PostItPublicVisualData>();
+    private readonly List<PaperFlySlot> _paperFlySlots = new List<PaperFlySlot>();
+    private readonly List<Material> _paperFlyRuntimeMaterials = new List<Material>();
     private Transform _worldVisualRoot;
+    private Transform _paperFlyRoot;
+    private GameStateManager _paperFlyGameStateManager;
     private bool _poolInitialized;
+    private bool _publicVisualSnapshotWasSpawned;
+    private bool _wasPaperFlyPlaying;
     private bool _hasWarnedMissingTemplate;
     private int _visibleCount;
     private int _worldVisibleCount;
     private int _lastOverflowCount = -1;
     private float _nextWorldManagerResolveTime;
+    private float _nextPaperFlyGameStateResolveTime;
 
     private const float WorldManagerResolveInterval = 0.5f;
     private const float PreviewAcquiredTintMultiplier = 0.25f;
@@ -102,6 +163,14 @@ public sealed class PlayerPostItWorldPresenter : MonoBehaviour
     public int AnchorCount => _resolvedAnchors.Length;
     public int VisibleCount => _visibleCount;
     public int WorldVisibleCount => _worldVisibleCount;
+
+    [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration)]
+    private static void ResetPaperFlyStatics()
+    {
+        PendingPaperFlyRemovals.Clear();
+        PendingPaperFlyAdditions.Clear();
+        _lastPendingPaperFlyPruneFrame = -1;
+    }
 
     private void Awake()
     {
@@ -113,19 +182,26 @@ public sealed class PlayerPostItWorldPresenter : MonoBehaviour
         ResolveReferences();
         InitializePool();
         BindInventory(targetInventory);
+        _wasPaperFlyPlaying = IsPaperFlyPlaying();
         TryBindWorldDropManager(true);
     }
 
     private void OnDisable()
     {
+        RemovePendingPaperFlyEndpoints(this);
+        StopAllPaperFlyAnimations();
+        DestroyPaperFlyPool();
         UnbindWorldDropManager();
         DestroyWorldDropPool();
         UnbindInventory();
         HideAllVisuals();
+        _wasPaperFlyPlaying = false;
     }
 
     private void Update()
     {
+        UpdatePaperFlyLifecycle();
+
         if (!CanPresentWorldDrops())
         {
             if (_boundRoundManager != null || _worldVisualRoot != null)
@@ -149,7 +225,8 @@ public sealed class PlayerPostItWorldPresenter : MonoBehaviour
 
     public void ForceRefresh()
     {
-        RefreshVisuals();
+        RemovePendingPaperFlyEndpoints(this);
+        RefreshVisuals(false);
         RefreshWorldDropVisuals();
     }
 
@@ -266,7 +343,7 @@ public sealed class PlayerPostItWorldPresenter : MonoBehaviour
     {
         if (_boundInventory == inventory)
         {
-            RefreshVisuals();
+            RefreshVisuals(false);
             return;
         }
 
@@ -279,12 +356,16 @@ public sealed class PlayerPostItWorldPresenter : MonoBehaviour
 
         _boundInventory = inventory;
         _boundInventory.PublicVisualsChanged += OnPublicVisualsChanged;
-        RefreshVisuals();
+        RefreshVisuals(false);
         Log($"Bound inventory. publicCount={_boundInventory.PublicVisualCount}");
     }
 
     private void UnbindInventory()
     {
+        RemovePendingPaperFlyEndpoints(this);
+        _publicVisualSnapshot.Clear();
+        _publicVisualSnapshotWasSpawned = false;
+
         if (_boundInventory == null)
         {
             return;
@@ -297,7 +378,35 @@ public sealed class PlayerPostItWorldPresenter : MonoBehaviour
 
     private void OnPublicVisualsChanged()
     {
-        RefreshVisuals();
+        bool refreshCompleted = false;
+        try
+        {
+            RefreshVisuals(true);
+            refreshCompleted = true;
+        }
+        catch (Exception exception)
+        {
+            LogWarning(
+                $"Paper-fly observation failed; preserving public visual refresh. " +
+                $"exception={exception.GetType().Name}");
+        }
+        finally
+        {
+            if (!refreshCompleted)
+            {
+                try
+                {
+                    RemovePendingPaperFlyEndpoints(this);
+                    RefreshVisuals(false);
+                }
+                catch (Exception exception)
+                {
+                    LogWarning(
+                        $"Public visual refresh failed after paper-fly fallback. " +
+                        $"exception={exception.GetType().Name}");
+                }
+            }
+        }
     }
 
     private bool CanPresentWorldDrops()
@@ -466,17 +575,35 @@ public sealed class PlayerPostItWorldPresenter : MonoBehaviour
                instance.GetComponentInChildren<PlayerPostItWorldPresenter>(true) != null;
     }
 
-    private void RefreshVisuals()
+    private void RefreshVisuals(bool observeTransferDelta = false)
     {
         InitializePool();
+        IReadOnlyList<PostItPublicVisualData> items =
+            _boundInventory != null
+                ? _boundInventory.PublicVisualItems
+                : null;
+        bool currentSnapshotWasSpawned =
+            _boundInventory != null && _boundInventory.IsSpawned;
+        bool canObserveTransfer =
+            observeTransferDelta &&
+            _publicVisualSnapshotWasSpawned &&
+            currentSnapshotWasSpawned &&
+            _wasPaperFlyPlaying &&
+            IsPaperFlyPlaying();
+
+        if (canObserveTransfer)
+        {
+            ObservePaperFlyRemovals(items);
+        }
+
         HideAllVisuals();
 
-        if (_boundInventory == null || _visualSlots.Length == 0)
+        if (items == null || _visualSlots.Length == 0)
         {
+            CapturePublicVisualSnapshot(items, currentSnapshotWasSpawned);
             return;
         }
 
-        IReadOnlyList<PostItPublicVisualData> items = _boundInventory.PublicVisualItems;
         int overflowCount = 0;
 
         for (int i = 0; i < items.Count; i++)
@@ -501,8 +628,679 @@ public sealed class PlayerPostItWorldPresenter : MonoBehaviour
             _visibleCount++;
         }
 
+        if (canObserveTransfer)
+        {
+            ObservePaperFlyAdditions(items);
+        }
+
+        CapturePublicVisualSnapshot(items, currentSnapshotWasSpawned);
         ReportOverflowIfChanged(overflowCount, items.Count);
         Log($"Refreshed visuals. visible={_visibleCount}, public={items.Count}, anchors={_visualSlots.Length}");
+    }
+
+    private void ObservePaperFlyRemovals(IReadOnlyList<PostItPublicVisualData> currentItems)
+    {
+        for (int i = 0; i < _publicVisualSnapshot.Count; i++)
+        {
+            PostItPublicVisualData previousData = _publicVisualSnapshot[i];
+            if (!previousData.IsValid || ContainsPostIt(currentItems, previousData.PostItId))
+                continue;
+
+            if (TryCaptureVisualPose(
+                    previousData.PostItId,
+                    out Vector3 position,
+                    out Quaternion rotation,
+                    out Vector3 scale))
+            {
+                QueuePaperFlyEndpoint(
+                    true,
+                    CreatePaperFlyEndpoint(previousData, position, rotation, scale));
+            }
+        }
+    }
+
+    private void ObservePaperFlyAdditions(IReadOnlyList<PostItPublicVisualData> currentItems)
+    {
+        for (int i = 0; i < currentItems.Count; i++)
+        {
+            PostItPublicVisualData currentData = currentItems[i];
+            if (!currentData.IsValid ||
+                ContainsPostIt(_publicVisualSnapshot, currentData.PostItId))
+            {
+                continue;
+            }
+
+            if (TryCaptureVisualPose(
+                    currentData.PostItId,
+                    out Vector3 position,
+                    out Quaternion rotation,
+                    out Vector3 scale))
+            {
+                QueuePaperFlyEndpoint(
+                    false,
+                    CreatePaperFlyEndpoint(currentData, position, rotation, scale));
+            }
+        }
+    }
+
+    private PaperFlyEndpoint CreatePaperFlyEndpoint(
+        PostItPublicVisualData data,
+        Vector3 position,
+        Quaternion rotation,
+        Vector3 scale)
+    {
+        return new PaperFlyEndpoint
+        {
+            Presenter = this,
+            Data = data,
+            Position = position,
+            Rotation = rotation,
+            Scale = scale,
+            ObservedAt = Time.unscaledTime,
+            ObservedFrame = Time.frameCount
+        };
+    }
+
+    private void CapturePublicVisualSnapshot(
+        IReadOnlyList<PostItPublicVisualData> items,
+        bool wasSpawned)
+    {
+        _publicVisualSnapshot.Clear();
+        if (items != null)
+        {
+            for (int i = 0; i < items.Count; i++)
+            {
+                _publicVisualSnapshot.Add(items[i]);
+            }
+        }
+
+        _publicVisualSnapshotWasSpawned = wasSpawned;
+    }
+
+    private static bool ContainsPostIt(
+        IReadOnlyList<PostItPublicVisualData> items,
+        int postItId)
+    {
+        if (items == null)
+            return false;
+
+        for (int i = 0; i < items.Count; i++)
+        {
+            if (items[i].PostItId == postItId)
+                return true;
+        }
+
+        return false;
+    }
+
+    private bool TryCaptureVisualPose(
+        int postItId,
+        out Vector3 position,
+        out Quaternion rotation,
+        out Vector3 scale)
+    {
+        position = default;
+        rotation = Quaternion.identity;
+        scale = Vector3.one;
+
+        for (int i = 0; i < _visualSlots.Length; i++)
+        {
+            VisualSlot slot = _visualSlots[i];
+            if (slot == null ||
+                !slot.HasData ||
+                slot.Data.PostItId != postItId ||
+                slot.Instance == null ||
+                !slot.Instance.activeInHierarchy)
+            {
+                continue;
+            }
+
+            Transform visualTransform = slot.Instance.transform;
+            position = visualTransform.position;
+            rotation = visualTransform.rotation;
+            scale = visualTransform.lossyScale;
+            return IsFiniteVector3(position) &&
+                   IsFiniteQuaternion(rotation) &&
+                   IsFiniteVector3(scale);
+        }
+
+        return false;
+    }
+
+    private static void QueuePaperFlyEndpoint(
+        bool isRemoval,
+        PaperFlyEndpoint endpoint)
+    {
+        if (!IsPaperFlyEndpointUsable(endpoint))
+            return;
+
+        PrunePendingPaperFlyEndpoints();
+        List<PaperFlyEndpoint> ownEndpoints = isRemoval
+            ? PendingPaperFlyRemovals
+            : PendingPaperFlyAdditions;
+        List<PaperFlyEndpoint> oppositeEndpoints = isRemoval
+            ? PendingPaperFlyAdditions
+            : PendingPaperFlyRemovals;
+        int matchingIndex = FindMatchingPaperFlyEndpoint(oppositeEndpoints, endpoint);
+        if (matchingIndex >= 0)
+        {
+            PaperFlyEndpoint opposite = oppositeEndpoints[matchingIndex];
+            oppositeEndpoints.RemoveAt(matchingIndex);
+
+            PaperFlyEndpoint removal = isRemoval ? endpoint : opposite;
+            PaperFlyEndpoint addition = isRemoval ? opposite : endpoint;
+            if (removal.Presenter == addition.Presenter)
+                return;
+
+            try
+            {
+                removal.Presenter.TryStartPaperFly(removal, addition);
+            }
+            catch (Exception exception)
+            {
+                if (removal.Presenter != null)
+                {
+                    removal.Presenter.LogWarning(
+                        $"Paper-fly start failed without affecting transfer state. " +
+                        $"postItId={removal.Data.PostItId}, " +
+                        $"exception={exception.GetType().Name}");
+                }
+            }
+
+            return;
+        }
+
+        for (int i = ownEndpoints.Count - 1; i >= 0; i--)
+        {
+            if (ownEndpoints[i].Data.PostItId == endpoint.Data.PostItId)
+            {
+                ownEndpoints.RemoveAt(i);
+            }
+        }
+
+        ownEndpoints.Add(endpoint);
+    }
+
+    private static int FindMatchingPaperFlyEndpoint(
+        List<PaperFlyEndpoint> candidates,
+        PaperFlyEndpoint endpoint)
+    {
+        for (int i = candidates.Count - 1; i >= 0; i--)
+        {
+            PaperFlyEndpoint candidate = candidates[i];
+            if (!IsPaperFlyEndpointUsable(candidate) ||
+                candidate.Data.PostItId != endpoint.Data.PostItId ||
+                candidate.Data.Type != endpoint.Data.Type ||
+                candidate.Data.VisualId != endpoint.Data.VisualId ||
+                Mathf.Abs(candidate.ObservedFrame - endpoint.ObservedFrame) >
+                    PaperFlyMaxFrameSeparation ||
+                Mathf.Abs(candidate.ObservedAt - endpoint.ObservedAt) > PaperFlyMatchWindow)
+            {
+                continue;
+            }
+
+            return i;
+        }
+
+        return -1;
+    }
+
+    private static bool IsPaperFlyEndpointUsable(PaperFlyEndpoint endpoint)
+    {
+        return endpoint != null &&
+               endpoint.Presenter != null &&
+               endpoint.Presenter.isActiveAndEnabled &&
+               endpoint.Presenter._boundInventory != null &&
+               endpoint.Presenter._boundInventory.IsSpawned &&
+               endpoint.Presenter._wasPaperFlyPlaying &&
+               endpoint.Presenter.IsPaperFlyPlaying() &&
+               Time.unscaledTime - endpoint.ObservedAt <= PaperFlyMatchWindow;
+    }
+
+    private static void PrunePendingPaperFlyEndpoints()
+    {
+        if (_lastPendingPaperFlyPruneFrame == Time.frameCount)
+            return;
+
+        _lastPendingPaperFlyPruneFrame = Time.frameCount;
+        PrunePendingPaperFlyEndpoints(PendingPaperFlyRemovals);
+        PrunePendingPaperFlyEndpoints(PendingPaperFlyAdditions);
+    }
+
+    private static void PrunePendingPaperFlyEndpoints(List<PaperFlyEndpoint> endpoints)
+    {
+        for (int i = endpoints.Count - 1; i >= 0; i--)
+        {
+            if (!IsPaperFlyEndpointUsable(endpoints[i]))
+            {
+                endpoints.RemoveAt(i);
+            }
+        }
+    }
+
+    private static void RemovePendingPaperFlyEndpoints(
+        PlayerPostItWorldPresenter presenter)
+    {
+        RemovePendingPaperFlyEndpoints(PendingPaperFlyRemovals, presenter);
+        RemovePendingPaperFlyEndpoints(PendingPaperFlyAdditions, presenter);
+    }
+
+    private static void RemovePendingPaperFlyEndpoints(
+        List<PaperFlyEndpoint> endpoints,
+        PlayerPostItWorldPresenter presenter)
+    {
+        for (int i = endpoints.Count - 1; i >= 0; i--)
+        {
+            if (endpoints[i].Presenter == presenter)
+            {
+                endpoints.RemoveAt(i);
+            }
+        }
+    }
+
+    private static void ClearPendingPaperFlyEndpoints()
+    {
+        PendingPaperFlyRemovals.Clear();
+        PendingPaperFlyAdditions.Clear();
+    }
+
+    private void UpdatePaperFlyLifecycle()
+    {
+        bool isPlaying = IsPaperFlyPlaying();
+        if (isPlaying != _wasPaperFlyPlaying)
+        {
+            ClearPendingPaperFlyEndpoints();
+            StopAllPaperFlyAnimations();
+            _wasPaperFlyPlaying = isPlaying;
+            CapturePublicVisualSnapshot(
+                _boundInventory != null ? _boundInventory.PublicVisualItems : null,
+                _boundInventory != null && _boundInventory.IsSpawned);
+        }
+
+        PrunePendingPaperFlyEndpoints();
+        if (!isPlaying)
+            return;
+
+        UpdatePaperFlyAnimations();
+    }
+
+    private bool IsPaperFlyPlaying()
+    {
+        if (_paperFlyGameStateManager == null &&
+            Time.unscaledTime >= _nextPaperFlyGameStateResolveTime)
+        {
+            _nextPaperFlyGameStateResolveTime =
+                Time.unscaledTime + WorldManagerResolveInterval;
+            _paperFlyGameStateManager = FindFirstObjectByType<GameStateManager>();
+        }
+
+        return _paperFlyGameStateManager != null &&
+               _paperFlyGameStateManager.GetState() == GameStateManager.GameState.Playing;
+    }
+
+    private void TryStartPaperFly(
+        PaperFlyEndpoint removal,
+        PaperFlyEndpoint addition)
+    {
+        if (removal == null ||
+            addition == null ||
+            removal.Presenter != this ||
+            !IsPaperFlyEndpointUsable(removal) ||
+            !IsPaperFlyEndpointUsable(addition) ||
+            !IsFiniteVector3(removal.Position) ||
+            !IsFiniteVector3(removal.Scale) ||
+            !IsFiniteVector3(addition.Position) ||
+            !IsFiniteVector3(addition.Scale))
+        {
+            return;
+        }
+
+        PaperFlySlot slot = AcquirePaperFlySlot();
+        if (slot == null)
+            return;
+
+        try
+        {
+            ApplyVisualProperties(
+                slot.Renderers,
+                slot.PropertyBlock,
+                addition.Data.PostItId,
+                addition.Data.Type,
+                addition.Data.VisualId,
+                addition.Data.IsOriginalOwnerItem,
+                slot.SupportsCatalogPreview,
+                ref slot.WarningState);
+
+            Color baseColor = slot.PropertyBlock.GetColor(BaseColorPropertyId);
+            baseColor.a = 1f;
+            slot.BaseColor = baseColor;
+            slot.DestinationPresenter = addition.Presenter;
+            slot.DestinationPostItId = addition.Data.PostItId;
+            slot.SourcePosition = removal.Position;
+            slot.SourceRotation = removal.Rotation;
+            slot.SourceScale = removal.Scale;
+            slot.DestinationPosition = addition.Position;
+            slot.DestinationRotation = addition.Rotation;
+            slot.DestinationScale = addition.Scale;
+            slot.StartedAt = Time.unscaledTime;
+            slot.Active = true;
+            slot.Instance.transform.SetPositionAndRotation(
+                slot.SourcePosition,
+                slot.SourceRotation);
+            slot.Instance.transform.localScale = slot.SourceScale;
+            slot.Instance.SetActive(true);
+        }
+        catch (Exception exception)
+        {
+            ReleasePaperFlySlot(slot);
+            LogWarning(
+                $"Paper-fly setup failed without affecting transfer state. " +
+                $"postItId={addition.Data.PostItId}, " +
+                $"exception={exception.GetType().Name}");
+        }
+    }
+
+    private PaperFlySlot AcquirePaperFlySlot()
+    {
+        for (int i = 0; i < _paperFlySlots.Count; i++)
+        {
+            PaperFlySlot slot = _paperFlySlots[i];
+            if (slot != null && !slot.Active && slot.Instance != null)
+                return slot;
+        }
+
+        if (_paperFlySlots.Count >= PaperFlyPoolCapacity)
+            return null;
+
+        return TryCreatePaperFlySlot();
+    }
+
+    private PaperFlySlot TryCreatePaperFlySlot()
+    {
+        if (visualTemplate == null)
+        {
+            WarnMissingTemplate();
+            return null;
+        }
+
+        if (_paperFlyRoot == null)
+        {
+            GameObject rootObject = new GameObject("PostItPaperFly_Local");
+            _paperFlyRoot = rootObject.transform;
+            _paperFlyRoot.SetPositionAndRotation(Vector3.zero, Quaternion.identity);
+            _paperFlyRoot.localScale = Vector3.one;
+        }
+
+        int poolIndex = _paperFlySlots.Count;
+        int runtimeMaterialStartIndex = _paperFlyRuntimeMaterials.Count;
+        GameObject instance = null;
+        try
+        {
+            instance = Instantiate(visualTemplate, _paperFlyRoot, false);
+            instance.name = $"{visualTemplate.name}_PaperFly_{poolIndex}";
+            if (HasForbiddenComponents(instance))
+            {
+                LogWarning(
+                    $"Rejected paper-fly template with gameplay or network components. " +
+                    $"poolIndex={poolIndex}");
+                Destroy(instance);
+                return null;
+            }
+
+            Renderer[] renderers = instance.GetComponentsInChildren<Renderer>(true);
+            if (renderers.Length == 0)
+            {
+                LogWarning($"Paper-fly template has no Renderer. poolIndex={poolIndex}");
+                Destroy(instance);
+                return null;
+            }
+
+            ClonePaperFlyMaterials(renderers);
+            instance.SetActive(false);
+            PaperFlySlot slot = new PaperFlySlot
+            {
+                Instance = instance,
+                Renderers = renderers,
+                PropertyBlock = new MaterialPropertyBlock(),
+                SupportsCatalogPreview = SupportsCatalogPreviewTextures(renderers)
+            };
+            _paperFlySlots.Add(slot);
+            return slot;
+        }
+        catch (Exception exception)
+        {
+            DestroyPaperFlyRuntimeMaterialsFrom(runtimeMaterialStartIndex);
+            if (instance != null)
+            {
+                Destroy(instance);
+            }
+
+            LogWarning(
+                $"Paper-fly pool creation failed. poolIndex={poolIndex}, " +
+                $"exception={exception.GetType().Name}");
+            return null;
+        }
+    }
+
+    private void ClonePaperFlyMaterials(Renderer[] renderers)
+    {
+        for (int rendererIndex = 0; rendererIndex < renderers.Length; rendererIndex++)
+        {
+            Renderer renderer = renderers[rendererIndex];
+            if (renderer == null)
+                continue;
+
+            Material[] sourceMaterials = renderer.sharedMaterials;
+            Material[] runtimeMaterials = new Material[sourceMaterials.Length];
+            for (int materialIndex = 0; materialIndex < sourceMaterials.Length; materialIndex++)
+            {
+                Material sourceMaterial = sourceMaterials[materialIndex];
+                if (sourceMaterial == null)
+                    continue;
+
+                Material runtimeMaterial = new Material(sourceMaterial)
+                {
+                    name = $"{sourceMaterial.name}_PaperFly_Runtime"
+                };
+                ConfigurePaperFlyMaterial(runtimeMaterial);
+                runtimeMaterials[materialIndex] = runtimeMaterial;
+                _paperFlyRuntimeMaterials.Add(runtimeMaterial);
+            }
+
+            renderer.sharedMaterials = runtimeMaterials;
+        }
+    }
+
+    private static void ConfigurePaperFlyMaterial(Material material)
+    {
+        material.SetOverrideTag("RenderType", "Transparent");
+        SetMaterialFloatIfPresent(material, SurfacePropertyId, 1f);
+        SetMaterialFloatIfPresent(material, BlendPropertyId, 0f);
+        SetMaterialFloatIfPresent(material, AlphaClipPropertyId, 0f);
+        SetMaterialFloatIfPresent(material, SrcBlendPropertyId, (float)BlendMode.SrcAlpha);
+        SetMaterialFloatIfPresent(
+            material,
+            DstBlendPropertyId,
+            (float)BlendMode.OneMinusSrcAlpha);
+        SetMaterialFloatIfPresent(material, ZWritePropertyId, 0f);
+        SetMaterialFloatIfPresent(material, CullPropertyId, (float)CullMode.Off);
+        material.DisableKeyword("_ALPHATEST_ON");
+        material.EnableKeyword("_SURFACE_TYPE_TRANSPARENT");
+        material.EnableKeyword("_ALPHABLEND_ON");
+        material.renderQueue = (int)RenderQueue.Transparent;
+    }
+
+    private static void SetMaterialFloatIfPresent(
+        Material material,
+        int propertyId,
+        float value)
+    {
+        if (material.HasProperty(propertyId))
+        {
+            material.SetFloat(propertyId, value);
+        }
+    }
+
+    private void UpdatePaperFlyAnimations()
+    {
+        float now = Time.unscaledTime;
+        for (int i = 0; i < _paperFlySlots.Count; i++)
+        {
+            PaperFlySlot slot = _paperFlySlots[i];
+            if (slot == null || !slot.Active)
+                continue;
+
+            try
+            {
+                if (slot.Instance == null)
+                {
+                    ReleasePaperFlySlot(slot);
+                    continue;
+                }
+
+                if (slot.DestinationPresenter == null ||
+                    !slot.DestinationPresenter.isActiveAndEnabled ||
+                    slot.DestinationPresenter._boundInventory == null ||
+                    !slot.DestinationPresenter._boundInventory.IsSpawned ||
+                    !slot.DestinationPresenter._wasPaperFlyPlaying)
+                {
+                    ReleasePaperFlySlot(slot);
+                    continue;
+                }
+
+                if (slot.DestinationPresenter.TryCaptureVisualPose(
+                        slot.DestinationPostItId,
+                        out Vector3 destinationPosition,
+                        out Quaternion destinationRotation,
+                        out Vector3 destinationScale))
+                {
+                    slot.DestinationPosition = destinationPosition;
+                    slot.DestinationRotation = destinationRotation;
+                    slot.DestinationScale = destinationScale;
+                }
+
+                float progress = Mathf.Clamp01(
+                    (now - slot.StartedAt) / Mathf.Max(0.01f, PaperFlyDuration));
+                if (progress >= 1f)
+                {
+                    ReleasePaperFlySlot(slot);
+                    continue;
+                }
+
+                float easedProgress = Mathf.SmoothStep(0f, 1f, progress);
+                Vector3 position = Vector3.Lerp(
+                    slot.SourcePosition,
+                    slot.DestinationPosition,
+                    easedProgress);
+                position += Vector3.up *
+                    (Mathf.Sin(progress * Mathf.PI) * PaperFlyArcHeight);
+                Quaternion rotation = Quaternion.Slerp(
+                    slot.SourceRotation,
+                    slot.DestinationRotation,
+                    easedProgress);
+                float fadeProgress = Mathf.InverseLerp(
+                    PaperFlyFadeStart,
+                    1f,
+                    progress);
+                float scaleMultiplier = Mathf.Lerp(1f, 0.8f, fadeProgress);
+                Vector3 scale = Vector3.Lerp(
+                    slot.SourceScale,
+                    slot.DestinationScale,
+                    easedProgress) * scaleMultiplier;
+
+                slot.Instance.transform.SetPositionAndRotation(position, rotation);
+                slot.Instance.transform.localScale = scale;
+                ApplyPaperFlyAlpha(slot, 1f - fadeProgress);
+            }
+            catch (Exception exception)
+            {
+                int failedPostItId = slot.DestinationPostItId;
+                ReleasePaperFlySlot(slot);
+                LogWarning(
+                    $"Paper-fly update failed without affecting transfer state. " +
+                    $"postItId={failedPostItId}, " +
+                    $"exception={exception.GetType().Name}");
+            }
+        }
+    }
+
+    private static void ApplyPaperFlyAlpha(PaperFlySlot slot, float alpha)
+    {
+        Color color = slot.BaseColor;
+        color.a = Mathf.Clamp01(alpha);
+        slot.PropertyBlock.SetColor(BaseColorPropertyId, color);
+        slot.PropertyBlock.SetColor(ColorPropertyId, color);
+        for (int i = 0; i < slot.Renderers.Length; i++)
+        {
+            Renderer renderer = slot.Renderers[i];
+            if (renderer != null)
+            {
+                renderer.SetPropertyBlock(slot.PropertyBlock);
+            }
+        }
+    }
+
+    private static void ReleasePaperFlySlot(PaperFlySlot slot)
+    {
+        if (slot == null)
+            return;
+
+        slot.Active = false;
+        slot.DestinationPresenter = null;
+        slot.DestinationPostItId = -1;
+        if (slot.Instance != null && slot.Instance.activeSelf)
+        {
+            slot.Instance.SetActive(false);
+        }
+    }
+
+    private void StopAllPaperFlyAnimations()
+    {
+        for (int i = 0; i < _paperFlySlots.Count; i++)
+        {
+            ReleasePaperFlySlot(_paperFlySlots[i]);
+        }
+    }
+
+    private void DestroyPaperFlyPool()
+    {
+        StopAllPaperFlyAnimations();
+        _paperFlySlots.Clear();
+        if (_paperFlyRoot != null)
+        {
+            Destroy(_paperFlyRoot.gameObject);
+            _paperFlyRoot = null;
+        }
+
+        DestroyPaperFlyRuntimeMaterialsFrom(0);
+    }
+
+    private void DestroyPaperFlyRuntimeMaterialsFrom(int startIndex)
+    {
+        for (int i = _paperFlyRuntimeMaterials.Count - 1; i >= startIndex; i--)
+        {
+            Material material = _paperFlyRuntimeMaterials[i];
+            _paperFlyRuntimeMaterials.RemoveAt(i);
+            if (material != null)
+            {
+                Destroy(material);
+            }
+        }
+    }
+
+    private static bool IsFiniteVector3(Vector3 value)
+    {
+        return float.IsFinite(value.x) &&
+               float.IsFinite(value.y) &&
+               float.IsFinite(value.z);
+    }
+
+    private static bool IsFiniteQuaternion(Quaternion value)
+    {
+        return float.IsFinite(value.x) &&
+               float.IsFinite(value.y) &&
+               float.IsFinite(value.z) &&
+               float.IsFinite(value.w);
     }
 
     private void RefreshWorldDropVisuals()
