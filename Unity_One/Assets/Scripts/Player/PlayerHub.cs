@@ -9,6 +9,7 @@ public class PlayerHub : NetworkBehaviour
     private const string InputRouteTargetName = "Hamster_JointFreeMotorShell_MainScenes";
     private const float InputRouteLogInterval = 0.5f;
     private const string GameplayPhaseJumpLockReason = "GameState:GuessingResults";
+    private const string PostItHeavyJumpLockReason = "PostIt:Heavy";
     private const string RuntimeMainCameraTag = "MainCamera";
     private const string SceneMainCameraName = "Main Camera";
     private const float PostItWorldRecoveryEndpointGroundMinUpDot = 0.35f;
@@ -239,6 +240,7 @@ public class PlayerHub : NetworkBehaviour
     public PlayerStaminaModule StaminaModule => staminaModule;
 
     private Vector2 _moveInput;
+    private Vector2 _ownerPresentationMoveInput;
     private float _yawDelta;
     private float _pitchDelta;
     private bool _jumpPressed;
@@ -253,6 +255,7 @@ public class PlayerHub : NetworkBehaviour
     private HamsterMotorShellItemAdapter _motorShellItemAdapter;
     private HamsterMotorShellSpinDashAdapter _motorShellSpinDashAdapter;
     private PlayerPostItInventory _postItInventory;
+    private PlayerPostItInventory _subscribedPostItEffectInventory;
     private PostItRoundManager _postItRoundManager;
     private int _postItPeelEvaluatedFrame = -1;
     private bool _postItPeelConsumedInEvaluatedFrame;
@@ -278,6 +281,7 @@ public class PlayerHub : NetworkBehaviour
         ApplyOwnerVisuals();
         ApplyDefaultCameraPitchImmediate();
         SubscribeGameplayStateChanges();
+        SubscribePostItEffectChanges();
 
         if (!IsOwner && inputModule != null)
             inputModule.enabled = false;
@@ -297,6 +301,8 @@ public class PlayerHub : NetworkBehaviour
 
     public override void OnNetworkDespawn()
     {
+        UnsubscribePostItEffectChanges();
+        ReleaseOwnedPostItHeavyJumpLock();
         UnsubscribeGameplayStateChanges();
         ReleaseOwnedGameplayPhaseJumpLock();
         ResetCameraPositionSmoothingState();
@@ -310,6 +316,8 @@ public class PlayerHub : NetworkBehaviour
 
     private void OnDestroy()
     {
+        UnsubscribePostItEffectChanges();
+        ReleaseOwnedPostItHeavyJumpLock();
         UnsubscribeGameplayStateChanges();
         ReleaseOwnedGameplayPhaseJumpLock();
         ResetCameraPositionSmoothingState();
@@ -606,6 +614,7 @@ public class PlayerHub : NetworkBehaviour
     private void ClearPendingGameplayInput()
     {
         _moveInput = Vector2.zero;
+        _ownerPresentationMoveInput = Vector2.zero;
         _yawDelta = 0f;
         _pitchDelta = 0f;
         _jumpPressed = false;
@@ -693,6 +702,10 @@ public class PlayerHub : NetworkBehaviour
             dropPressed = false;
         }
 
+        Vector2 requestedMove = move;
+        bool requestedSprintHeld = sprintHeld;
+        bool postItAllowsJump = ApplyOwnerPostItInputPresentation(ref move, ref sprintHeld);
+
         float cameraPivotYawBefore = GetTransformYawForLog(cameraRoot != null ? cameraRoot.transform : null);
         Camera playerCameraBefore = PlayerCamera;
         float playerCameraPitchBefore = GetTransformPitchForLog(playerCameraBefore != null ? playerCameraBefore.transform : null);
@@ -707,10 +720,9 @@ public class PlayerHub : NetworkBehaviour
         yawDelta = GetProcessedYawDelta(yawDelta, move, allowLook);
         ApplyInputRouteCameraYawOffset(yawDelta);
 
-        _moveInput = move;
+        _ownerPresentationMoveInput = move;
         _yawDelta = yawDelta;
         _pitchDelta = pitchDelta;
-        _sprintHeld = sprintHeld;
 
         ApplyInputRouteOwnerCameraHandoff();
 
@@ -726,13 +738,14 @@ public class PlayerHub : NetworkBehaviour
         bool canMoveNow = CanMoveNow();
         if (!canMoveNow)
         {
-            _moveInput = Vector2.zero;
+            _ownerPresentationMoveInput = Vector2.zero;
             _yawDelta = 0f;
-            _sprintHeld = false;
+            requestedMove = Vector2.zero;
+            requestedSprintHeld = false;
         }
 
-        SubmitInputServerRpc(_moveInput, _yawDelta, _sprintHeld);
-        LogInputRouteOwner(rawMove, _moveInput, jumpPressed, rawSprintHeld, _sprintHeld, allowLook, canMoveNow ? "submitted" : "CanMoveNow false");
+        SubmitInputServerRpc(requestedMove, _yawDelta, requestedSprintHeld);
+        LogInputRouteOwner(rawMove, _ownerPresentationMoveInput, jumpPressed, rawSprintHeld, sprintHeld, allowLook, canMoveNow ? "submitted" : "CanMoveNow false");
         Camera playerCameraAfter = PlayerCamera;
         LogMotorShellCameraInput(
             rawYawDelta,
@@ -748,7 +761,7 @@ public class PlayerHub : NetworkBehaviour
         {
             if (interactModule != null && interactModule.IsGrabbedByCharacter)
                 interactModule.RequestCharacterGrabEscapeTap();
-            else
+            else if (postItAllowsJump)
                 QueueJumpServerRpc();
         }
 
@@ -855,6 +868,9 @@ public class PlayerHub : NetworkBehaviour
             return;
 
         if (!CanMoveNow())
+            return;
+
+        if (TryGetPostItHeavyMovementScale(out _))
             return;
 
         locomotionModule.ServerTryStartSpinDash();
@@ -977,6 +993,106 @@ public class PlayerHub : NetworkBehaviour
 
         NetworkObject inventoryNetworkObject = _postItInventory.GetComponentInParent<NetworkObject>();
         return inventoryNetworkObject == NetworkObject ? _postItInventory : null;
+    }
+
+    private void SubscribePostItEffectChanges()
+    {
+        PlayerPostItInventory inventory = ResolvePostItInventory();
+        if (_subscribedPostItEffectInventory == inventory)
+            return;
+
+        UnsubscribePostItEffectChanges();
+        if (inventory == null)
+            return;
+
+        inventory.EffectsChanged += HandlePostItEffectsChanged;
+        _subscribedPostItEffectInventory = inventory;
+        HandlePostItEffectsChanged();
+    }
+
+    private void UnsubscribePostItEffectChanges()
+    {
+        if (_subscribedPostItEffectInventory == null)
+            return;
+
+        _subscribedPostItEffectInventory.EffectsChanged -= HandlePostItEffectsChanged;
+        _subscribedPostItEffectInventory = null;
+    }
+
+    private void HandlePostItEffectsChanged()
+    {
+        if (!IsServer)
+            return;
+
+        bool heavyActive = TryGetPostItHeavyMovementScale(out _);
+        if (heavyActive)
+            _jumpPressed = false;
+
+        ApplyOwnedPostItHeavyJumpLock(heavyActive);
+    }
+
+    private bool TryGetPostItHeavyMovementScale(out float movementScale)
+    {
+        movementScale = 1f;
+        PlayerPostItInventory inventory = ResolvePostItInventory();
+        if (inventory == null)
+            return false;
+
+        movementScale = inventory.ServerGetHeavyMovementScale();
+        return movementScale < 1f;
+    }
+
+    private bool ApplyOwnerPostItInputPresentation(ref Vector2 move, ref bool sprintHeld)
+    {
+        if (!TryGetPostItHeavyMovementScale(out float movementScale))
+            return true;
+
+        move *= movementScale;
+        sprintHeld = false;
+        return false;
+    }
+
+    private void ApplyOwnedPostItHeavyJumpLock(bool heavyActive)
+    {
+        HamsterFullRagdollMotor motorShellMotor = ResolveMotorShellMotor();
+        if (motorShellMotor == null)
+            return;
+
+        if (heavyActive)
+        {
+            if (!motorShellMotor.IsExternalJumpLocked ||
+                motorShellMotor.ExternalJumpLockReason == PostItHeavyJumpLockReason)
+            {
+                motorShellMotor.SetExternalJumpLock(
+                    true,
+                    PostItHeavyJumpLockReason);
+            }
+
+            return;
+        }
+
+        if (!motorShellMotor.IsExternalJumpLocked ||
+            motorShellMotor.ExternalJumpLockReason != PostItHeavyJumpLockReason)
+        {
+            return;
+        }
+
+        motorShellMotor.SetExternalJumpLock(false, "PostIt:HeavyExpired");
+        if (IsGameplayPhaseLocked())
+            ApplyOwnedGameplayPhaseJumpLock();
+    }
+
+    private void ReleaseOwnedPostItHeavyJumpLock()
+    {
+        HamsterFullRagdollMotor motorShellMotor = _motorShellMotor;
+        if (motorShellMotor == null ||
+            !motorShellMotor.IsExternalJumpLocked ||
+            motorShellMotor.ExternalJumpLockReason != PostItHeavyJumpLockReason)
+        {
+            return;
+        }
+
+        motorShellMotor.SetExternalJumpLock(false, "PostIt:HeavyRelease");
     }
 
     private PostItRoundManager ResolvePostItRoundManager()
@@ -1748,8 +1864,8 @@ public class PlayerHub : NetworkBehaviour
 
     private float GetCameraMoveFramingWeight()
     {
-        float moveMagnitude = Mathf.Clamp01(_moveInput.magnitude);
-        float forwardWeight = Mathf.Clamp01(_moveInput.y);
+        float moveMagnitude = Mathf.Clamp01(_ownerPresentationMoveInput.magnitude);
+        float forwardWeight = Mathf.Clamp01(_ownerPresentationMoveInput.y);
         return Mathf.Clamp01(moveMagnitude * 0.5f + forwardWeight * 0.5f);
     }
 
@@ -2503,9 +2619,18 @@ public class PlayerHub : NetworkBehaviour
 
     private void TickServer()
     {
+        bool heavyActive = TryGetPostItHeavyMovementScale(out float heavyMovementScale);
         ApplyGameplayPhaseLockServer(IsGameplayPhaseLocked());
+        ApplyOwnedPostItHeavyJumpLock(heavyActive);
 
-        if (TryTickMotorShellServer())
+        ResolveServerPostItInputRoute(
+            heavyActive,
+            heavyMovementScale,
+            out Vector2 routedMove,
+            out bool routedSprintHeld,
+            out bool routedJumpPressed);
+
+        if (TryTickMotorShellServer(routedMove, routedSprintHeld, routedJumpPressed))
             return;
 
         CharacterController characterController = CharacterController;
@@ -2519,7 +2644,7 @@ public class PlayerHub : NetworkBehaviour
         float serverYawDelta = AllowServerLookInput() ? _yawDelta : 0f;
 
         if (locomotionModule != null)
-            jumped = locomotionModule.TickServer(_moveInput, serverYawDelta, _jumpPressed, _sprintHeld);
+            jumped = locomotionModule.TickServer(routedMove, serverYawDelta, routedJumpPressed, routedSprintHeld);
 
         if (jumped && animModule != null) animModule.TriggerJump();
 
@@ -2532,14 +2657,34 @@ public class PlayerHub : NetworkBehaviour
         _yawDelta = 0f;
     }
 
-    private bool TryTickMotorShellServer()
+    private void ResolveServerPostItInputRoute(
+        bool heavyActive,
+        float heavyMovementScale,
+        out Vector2 move,
+        out bool sprintHeld,
+        out bool jumpPressed)
+    {
+        move = _moveInput;
+        sprintHeld = _sprintHeld;
+        jumpPressed = _jumpPressed;
+
+        if (!heavyActive)
+            return;
+
+        move *= heavyMovementScale;
+        sprintHeld = false;
+        jumpPressed = false;
+        _jumpPressed = false;
+    }
+
+    private bool TryTickMotorShellServer(Vector2 move, bool sprintHeld, bool jumpPressed)
     {
         HamsterFullRagdollMotor motorShellMotor = ResolveMotorShellMotor();
         if (motorShellMotor == null || !motorShellMotor.IsMainScenesInputRouteTarget)
             return false;
 
         float serverYawDelta = MirrorInputRouteCameraYawOnServer();
-        motorShellMotor.SetNetworkInput(_moveInput, _sprintHeld, _jumpPressed);
+        motorShellMotor.SetNetworkInput(move, sprintHeld, jumpPressed);
         LogInputRouteServer(false, serverYawDelta, motorShellMotor.isActiveAndEnabled ? "motor shell input routed" : "motor shell disabled");
 
         _jumpPressed = false;
@@ -2672,6 +2817,13 @@ public class PlayerHub : NetworkBehaviour
 
         if (!CanMoveNow())
             return;
+
+        if (TryGetPostItHeavyMovementScale(out _))
+        {
+            _jumpPressed = false;
+            ApplyOwnedPostItHeavyJumpLock(true);
+            return;
+        }
 
         _jumpPressed = true;
     }
