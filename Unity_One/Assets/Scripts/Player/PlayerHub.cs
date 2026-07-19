@@ -1100,6 +1100,39 @@ public class PlayerHub : NetworkBehaviour
             return;
         }
 
+        int guardChargesBefore = targetInventory.GuardCharges;
+        if (guardChargesBefore > 0)
+        {
+            bool guardConsumed =
+                targetInventory.ServerTryConsumeGuardAgainstPeel();
+            int guardChargesAfter = targetInventory.GuardCharges;
+            if (guardConsumed)
+            {
+                Debug.Log(
+                    $"[PlayerHub] Post-it Peel blocked by Guard. requester={OwnerClientId}, " +
+                    $"target={targetInventory.OwnerClientId}, postItId={postItId}",
+                    targetInventory);
+            }
+            else if (guardChargesAfter < guardChargesBefore)
+            {
+                Debug.LogError(
+                    $"[PlayerHub] Guard consumption was reconciled from observed state; " +
+                    $"Post-it Peel transfer was blocked. requester={OwnerClientId}, " +
+                    $"target={targetInventory.OwnerClientId}, postItId={postItId}",
+                    targetInventory);
+            }
+            else
+            {
+                Debug.LogError(
+                    $"[PlayerHub] Guard consumption failed; Post-it Peel transfer was blocked. " +
+                    $"requester={OwnerClientId}, target={targetInventory.OwnerClientId}, " +
+                    $"postItId={postItId}",
+                    targetInventory);
+            }
+
+            return;
+        }
+
         targetInventory.ServerTryTransferPostItTo(
             requesterInventory,
             postItId,
