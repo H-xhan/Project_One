@@ -1,4 +1,5 @@
 using System.Collections;
+using System.Collections.Generic;
 using Unity.Netcode;
 using UnityEngine;
 using UnityEngine.EventSystems;
@@ -22,6 +23,7 @@ public class PlayerHub : NetworkBehaviour
     private const string RuntimeMainCameraTag = "MainCamera";
     private const string SceneMainCameraName = "Main Camera";
     private const float PostItWorldRecoveryEndpointGroundMinUpDot = 0.35f;
+    private const int PostItPhysicsHitBufferSize = 64;
 
     [Header("Refs")]
     [Tooltip("로컬 소유자만 활성화할 카메라 루트")]
@@ -286,6 +288,9 @@ public class PlayerHub : NetworkBehaviour
     private PlayerPostItInventory _postItInventory;
     private PlayerPostItInventory _subscribedPostItEffectInventory;
     private PostItRoundManager _postItRoundManager;
+    private readonly RaycastHit[] _postItPhysicsHitBuffer =
+        new RaycastHit[PostItPhysicsHitBufferSize];
+    private readonly List<Collider> _postItBodyColliderBuffer = new List<Collider>(16);
     private int _postItPeelEvaluatedFrame = -1;
     private bool _postItPeelConsumedInEvaluatedFrame;
     private float _nextPostItPeelServerTime;
@@ -1352,25 +1357,29 @@ public class PlayerHub : NetworkBehaviour
             return false;
 
         float rayRadius = Mathf.Max(0f, postItPeelBodyRayRadius);
-        RaycastHit[] hits = rayRadius > 0f
-            ? Physics.SphereCastAll(
+        int hitCount = rayRadius > 0f
+            ? Physics.SphereCastNonAlloc(
                 ray,
                 rayRadius,
+                _postItPhysicsHitBuffer,
                 selectionDistance,
                 Physics.DefaultRaycastLayers,
                 QueryTriggerInteraction.Collide)
-            : Physics.RaycastAll(
+            : Physics.RaycastNonAlloc(
                 ray,
+                _postItPhysicsHitBuffer,
                 selectionDistance,
                 Physics.DefaultRaycastLayers,
                 QueryTriggerInteraction.Collide);
+        if (hitCount >= _postItPhysicsHitBuffer.Length)
+            return false;
 
-        System.Array.Sort(hits, (left, right) => left.distance.CompareTo(right.distance));
+        SortPostItPhysicsHitsByDistance(hitCount);
         NetworkObject requesterNetworkObject = NetworkObject;
 
-        for (int i = 0; i < hits.Length; i++)
+        for (int i = 0; i < hitCount; i++)
         {
-            Collider hitCollider = hits[i].collider;
+            Collider hitCollider = _postItPhysicsHitBuffer[i].collider;
             if (hitCollider == null)
                 continue;
 
@@ -1720,15 +1729,37 @@ public class PlayerHub : NetworkBehaviour
         return true;
     }
 
-    private static Vector3 ResolvePostItPeelBodyCenter(NetworkObject playerNetworkObject)
+    private void SortPostItPhysicsHitsByDistance(int hitCount)
+    {
+        for (int index = 1; index < hitCount; index++)
+        {
+            RaycastHit current = _postItPhysicsHitBuffer[index];
+            int insertionIndex = index - 1;
+            while (insertionIndex >= 0 &&
+                   _postItPhysicsHitBuffer[insertionIndex].distance > current.distance)
+            {
+                _postItPhysicsHitBuffer[insertionIndex + 1] =
+                    _postItPhysicsHitBuffer[insertionIndex];
+                insertionIndex--;
+            }
+
+            _postItPhysicsHitBuffer[insertionIndex + 1] = current;
+        }
+    }
+
+    private Vector3 ResolvePostItPeelBodyCenter(NetworkObject playerNetworkObject)
     {
         if (playerNetworkObject == null)
             return Vector3.zero;
 
-        Collider[] colliders = playerNetworkObject.GetComponentsInChildren<Collider>(true);
-        for (int i = 0; i < colliders.Length; i++)
+        Vector3 bodyCenter = playerNetworkObject.transform.position + Vector3.up * 0.4f;
+        _postItBodyColliderBuffer.Clear();
+        playerNetworkObject.GetComponentsInChildren<Collider>(
+            true,
+            _postItBodyColliderBuffer);
+        for (int i = 0; i < _postItBodyColliderBuffer.Count; i++)
         {
-            Collider candidate = colliders[i];
+            Collider candidate = _postItBodyColliderBuffer[i];
             if (candidate == null ||
                 !candidate.enabled ||
                 !candidate.gameObject.activeInHierarchy ||
@@ -1737,13 +1768,15 @@ public class PlayerHub : NetworkBehaviour
                 continue;
             }
 
-            return candidate.bounds.center;
+            bodyCenter = candidate.bounds.center;
+            break;
         }
 
-        return playerNetworkObject.transform.position + Vector3.up * 0.4f;
+        _postItBodyColliderBuffer.Clear();
+        return bodyCenter;
     }
 
-    private static bool HasPostItPeelLineOfSight(
+    private bool HasPostItPeelLineOfSight(
         Vector3 origin,
         Vector3 postItWorldPosition,
         NetworkObject requesterNetworkObject,
@@ -1755,17 +1788,21 @@ public class PlayerHub : NetworkBehaviour
         if (distance <= 0.0001f)
             return false;
 
-        RaycastHit[] hits = Physics.RaycastAll(
+        int hitCount = Physics.RaycastNonAlloc(
             origin,
             toPostIt / distance,
+            _postItPhysicsHitBuffer,
             distance,
             Physics.DefaultRaycastLayers,
             QueryTriggerInteraction.Collide);
-        System.Array.Sort(hits, (left, right) => left.distance.CompareTo(right.distance));
+        if (hitCount >= _postItPhysicsHitBuffer.Length)
+            return false;
 
-        for (int i = 0; i < hits.Length; i++)
+        SortPostItPhysicsHitsByDistance(hitCount);
+        for (int i = 0; i < hitCount; i++)
         {
-            Collider hitCollider = hits[i].collider;
+            RaycastHit hit = _postItPhysicsHitBuffer[i];
+            Collider hitCollider = hit.collider;
             if (hitCollider == null)
                 continue;
 
@@ -1775,7 +1812,7 @@ public class PlayerHub : NetworkBehaviour
 
             if (hitNetworkObject == targetNetworkObject)
             {
-                if (distance - hits[i].distance <= targetEndpointTolerance)
+                if (distance - hit.distance <= targetEndpointTolerance)
                     continue;
 
                 return false;
@@ -1924,7 +1961,7 @@ public class PlayerHub : NetworkBehaviour
             Mathf.Max(0f, postItPeelVisualRayTolerance));
     }
 
-    private static bool HasPostItWorldRecoveryLineOfSight(
+    private bool HasPostItWorldRecoveryLineOfSight(
         Vector3 origin,
         Vector3 postItWorldPosition,
         NetworkObject requesterNetworkObject,
@@ -1935,17 +1972,21 @@ public class PlayerHub : NetworkBehaviour
         if (distance <= 0.0001f)
             return false;
 
-        RaycastHit[] hits = Physics.RaycastAll(
+        int hitCount = Physics.RaycastNonAlloc(
             origin,
             toPostIt / distance,
+            _postItPhysicsHitBuffer,
             distance,
             Physics.DefaultRaycastLayers,
             QueryTriggerInteraction.Collide);
-        System.Array.Sort(hits, (left, right) => left.distance.CompareTo(right.distance));
+        if (hitCount >= _postItPhysicsHitBuffer.Length)
+            return false;
 
-        for (int i = 0; i < hits.Length; i++)
+        SortPostItPhysicsHitsByDistance(hitCount);
+        for (int i = 0; i < hitCount; i++)
         {
-            Collider hitCollider = hits[i].collider;
+            RaycastHit hit = _postItPhysicsHitBuffer[i];
+            Collider hitCollider = hit.collider;
             if (hitCollider == null)
                 continue;
 
@@ -1959,10 +2000,10 @@ public class PlayerHub : NetworkBehaviour
             if (hitCollider.isTrigger)
                 continue;
 
-            if (distance - hits[i].distance <= targetEndpointTolerance &&
-                IsFiniteVector3(hits[i].normal) &&
-                hits[i].normal.sqrMagnitude > 0.0001f &&
-                Vector3.Dot(hits[i].normal.normalized, Vector3.up) >=
+            if (distance - hit.distance <= targetEndpointTolerance &&
+                IsFiniteVector3(hit.normal) &&
+                hit.normal.sqrMagnitude > 0.0001f &&
+                Vector3.Dot(hit.normal.normalized, Vector3.up) >=
                     PostItWorldRecoveryEndpointGroundMinUpDot)
             {
                 continue;
