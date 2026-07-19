@@ -357,8 +357,8 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
             return false;
         }
 
-        HandleElimination(true);
-        return IsEliminated;
+        HandleElimination(false);
+        return IsEliminated && _isPostItDepletionElimination;
     }
 
     public bool ServerResetPostItRoundElimination()
