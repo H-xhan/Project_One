@@ -24,6 +24,7 @@ GameObject:
   - component: {fileID: 6100000000000000110}
   - component: {fileID: 6100000000000000111}
   - component: {fileID: 6100000000000000112}
+  - component: {fileID: 6100000000000000113}
   m_Layer: 6
   m_Name: Hamster_JointFreeMotorShell_MainScenes
   m_TagString: Player
@@ -776,6 +777,31 @@ MonoBehaviour:
   acquiredTintStrength: 0.35
   debugLogs: 0
   visualCatalog: {fileID: 11400000, guid: 102eeac9b02c4caa9ccbc6da4eb34a3a, type: 2}
+--- !u!114 &6100000000000000113
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 692270962315936511}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 241b86c8b4bf4cf2b0ae6bed0fe50efd, type: 3}
+  m_Name:
+  m_EditorClassIdentifier:
+  inventory: {fileID: 6100000000000000110}
+  playerHub: {fileID: 6100000000000000002}
+  interactModule: {fileID: 0}
+  statusModule: {fileID: 3943672698140307548}
+  itemAdapter: {fileID: 6100000000000000101}
+  ragdollGrabber: {fileID: 5469712445494703521}
+  ownerCamera: {fileID: 6100000000000000009}
+  guardKey: 19
+  heavyKey: 31
+  ignoreWhenUiFocused: 1
+  heavyTargetDistance: 2
+  heavyTargetRayRadius: 0.2
+  debugLogs: 0
 --- !u!1 &1594514674284813732
 GameObject:
   m_ObjectHideFlags: 0
