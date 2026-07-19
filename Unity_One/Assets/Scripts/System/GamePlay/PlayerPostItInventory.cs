@@ -499,6 +499,7 @@ public class PlayerPostItInventory : NetworkBehaviour
     {
         if (!CanUseServerEffectState() ||
             !IsPlayingState() ||
+            !HasCurrentPlayingParticipantAuthority() ||
             _guardCharges.Value >= MaximumGuardCharges ||
             !TrySelectFirstEffectCard(
                 PostItType.Bonus,
@@ -547,6 +548,7 @@ public class PlayerPostItInventory : NetworkBehaviour
     {
         if (!CanUseServerEffectState() ||
             !IsPlayingState() ||
+            !HasCurrentPlayingParticipantAuthority() ||
             _guardCharges.Value <= 0)
         {
             return false;
@@ -566,10 +568,12 @@ public class PlayerPostItInventory : NetworkBehaviour
     {
         if (!CanUseServerEffectState() ||
             !IsPlayingState() ||
+            !HasCurrentPlayingParticipantAuthority() ||
             targetInventory == null ||
             targetInventory == this ||
             targetInventory.NetworkManager != NetworkManager ||
             !targetInventory.CanUseServerEffectState() ||
+            !targetInventory.HasCurrentPlayingParticipantAuthority() ||
             !TrySelectFirstEffectCard(
                 PostItType.Penalty,
                 HeavyVisualId,
@@ -912,7 +916,9 @@ public class PlayerPostItInventory : NetworkBehaviour
             targetInventory == null ||
             targetInventory == this ||
             targetInventory.NetworkManager != NetworkManager ||
-            !targetInventory.CanMutateServerState())
+            !targetInventory.CanMutateServerState() ||
+            !HasCurrentPlayingParticipantAuthority() ||
+            !targetInventory.HasCurrentPlayingParticipantAuthority())
         {
             LogWarning("Blocked post-it transfer because the server inventories are invalid.");
             return false;
@@ -2237,7 +2243,8 @@ public class PlayerPostItInventory : NetworkBehaviour
             !NetworkObject.IsSpawned ||
             senderClientId != OwnerClientId ||
             expectedPostItId < 0 ||
-            !IsPlayingState())
+            !IsPlayingState() ||
+            !HasCurrentPlayingParticipantAuthority())
         {
             return false;
         }
@@ -2305,6 +2312,7 @@ public class PlayerPostItInventory : NetworkBehaviour
             targetInventory == this ||
             targetInventory.GetComponentInParent<NetworkObject>() != targetNetworkObject ||
             targetInventory.NetworkManager != NetworkManager ||
+            !targetInventory.HasCurrentPlayingParticipantAuthority() ||
             !ServerTryResolveHeavyAimRay(requestedAimDirection, out Ray serverAimRay) ||
             !TryFindHeavyTargetFromRay(
                 serverAimRay,
@@ -2869,6 +2877,18 @@ public class PlayerPostItInventory : NetworkBehaviour
     {
         GameStateManager manager = FindFirstObjectByType<GameStateManager>();
         return manager != null && manager.GetState() == GameStateManager.GameState.Playing;
+    }
+
+    private bool HasCurrentPlayingParticipantAuthority()
+    {
+        if (NetworkManager == null || !NetworkManager.IsListening)
+            return true;
+
+        PostItRoundManager roundManager = FindFirstObjectByType<PostItRoundManager>();
+        return roundManager != null &&
+               roundManager.IsSpawned &&
+               roundManager.IsServer &&
+               roundManager.ServerIsCurrentPlayingParticipant(this);
     }
 
     private bool NetworkListContainsPostIt(int postItId)
