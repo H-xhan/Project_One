@@ -104,6 +104,7 @@ public sealed class HamsterMotorShellSpinDashAdapter : MonoBehaviour
     private float _blendOutEndTime;
 
     public bool IsDizzyActive => _state == SpinDashState.Dizzy;
+    public bool IsSpinDashBusy => _state != SpinDashState.Idle;
 
     private void Awake()
     {

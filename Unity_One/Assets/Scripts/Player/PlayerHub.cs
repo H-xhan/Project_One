@@ -6,6 +6,15 @@ using UnityEngine.SceneManagement;
 
 public class PlayerHub : NetworkBehaviour
 {
+    public enum PostItPeelHoldState
+    {
+        Idle,
+        Tracking,
+        Completed,
+        Cancelled,
+        Cooldown
+    }
+
     private const string InputRouteTargetName = "Hamster_JointFreeMotorShell_MainScenes";
     private const float InputRouteLogInterval = 0.5f;
     private const string GameplayPhaseJumpLockReason = "GameState:GuessingResults";
@@ -200,6 +209,7 @@ public class PlayerHub : NetworkBehaviour
     [SerializeField, Range(-1f, 1f)] private float postItPeelAimDirectionMinDot = 0.9f;
     [SerializeField, Range(-1f, 1f)] private float postItPeelMinForwardDot = 0.25f;
     [SerializeField, Min(0f)] private float postItPeelCooldown = 0.2f;
+    [SerializeField, Min(0f)] private float postItPeelHoldDuration = 0.75f;
 
     [Header("Modules (자동 연결됨)")]
     [Tooltip("플레이어 입력을 읽는 모듈입니다. 비워두면 자식에서 자동 탐색합니다.")]
@@ -238,6 +248,22 @@ public class PlayerHub : NetworkBehaviour
     public Camera PlayerCamera => GetComponentInChildren<Camera>(true);
     public PlayerCoinWalletModule CoinWalletModule => coinWalletModule;
     public PlayerStaminaModule StaminaModule => staminaModule;
+    public PostItPeelHoldState CurrentPostItPeelHoldState => _postItPeelHoldState;
+    public bool IsPostItPeelTracking => _postItPeelHoldState == PostItPeelHoldState.Tracking;
+    public float PostItPeelHoldProgress01
+    {
+        get
+        {
+            if (_postItPeelHoldState == PostItPeelHoldState.Completed)
+                return 1f;
+
+            if (_postItPeelHoldState != PostItPeelHoldState.Tracking)
+                return 0f;
+
+            float duration = Mathf.Max(0.01f, postItPeelHoldDuration);
+            return Mathf.Clamp01((Time.unscaledTime - _postItPeelHoldStartedAt) / duration);
+        }
+    }
 
     private Vector2 _moveInput;
     private Vector2 _ownerPresentationMoveInput;
@@ -254,12 +280,20 @@ public class PlayerHub : NetworkBehaviour
     private HamsterMotorShellCombatAdapter _motorShellCombatAdapter;
     private HamsterMotorShellItemAdapter _motorShellItemAdapter;
     private HamsterMotorShellSpinDashAdapter _motorShellSpinDashAdapter;
+    private HamsterMotorShellRagdollRecoveryAdapter _motorShellRecoveryAdapter;
+    private HamsterRagdollGrabber _ragdollGrabber;
+    private HamsterRagdollGrabbable _ragdollGrabbable;
     private PlayerPostItInventory _postItInventory;
     private PlayerPostItInventory _subscribedPostItEffectInventory;
     private PostItRoundManager _postItRoundManager;
     private int _postItPeelEvaluatedFrame = -1;
     private bool _postItPeelConsumedInEvaluatedFrame;
     private float _nextPostItPeelServerTime;
+    private PostItPeelHoldState _postItPeelHoldState;
+    private ulong _postItPeelTrackedTargetNetworkObjectId = ulong.MaxValue;
+    private int _postItPeelTrackedPostItId = -1;
+    private float _postItPeelHoldStartedAt;
+    private float _postItPeelLocalCooldownUntil;
 
     private bool _attackLockedServer;
     private bool _attackBufferedServer;
@@ -301,6 +335,7 @@ public class PlayerHub : NetworkBehaviour
 
     public override void OnNetworkDespawn()
     {
+        ResetPostItPeelHoldState();
         UnsubscribePostItEffectChanges();
         ReleaseOwnedPostItHeavyJumpLock();
         UnsubscribeGameplayStateChanges();
@@ -311,11 +346,13 @@ public class PlayerHub : NetworkBehaviour
 
     private void OnDisable()
     {
+        ResetPostItPeelHoldState();
         ResetCameraPositionSmoothingState();
     }
 
     private void OnDestroy()
     {
+        ResetPostItPeelHoldState();
         UnsubscribePostItEffectChanges();
         ReleaseOwnedPostItHeavyJumpLock();
         UnsubscribeGameplayStateChanges();
@@ -386,6 +423,9 @@ public class PlayerHub : NetworkBehaviour
         if (_motorShellMotor == null) _motorShellMotor = GetComponentInChildren<HamsterFullRagdollMotor>(true);
         if (_motorShellItemAdapter == null) _motorShellItemAdapter = GetComponentInChildren<HamsterMotorShellItemAdapter>(true);
         if (_motorShellSpinDashAdapter == null) _motorShellSpinDashAdapter = GetComponentInChildren<HamsterMotorShellSpinDashAdapter>(true);
+        if (_motorShellRecoveryAdapter == null) _motorShellRecoveryAdapter = GetComponentInChildren<HamsterMotorShellRagdollRecoveryAdapter>(true);
+        if (_ragdollGrabber == null) _ragdollGrabber = GetComponentInChildren<HamsterRagdollGrabber>(true);
+        if (_ragdollGrabbable == null) _ragdollGrabbable = GetComponentInChildren<HamsterRagdollGrabbable>(true);
         if (_postItInventory == null) _postItInventory = GetComponentInChildren<PlayerPostItInventory>(true);
         ResolveMotorShellCombatAdapter();
         if (gameStateManager == null) gameStateManager = FindFirstObjectByType<GameStateManager>();
@@ -621,6 +661,7 @@ public class PlayerHub : NetworkBehaviour
         _sprintHeld = false;
         _postItPeelEvaluatedFrame = -1;
         _postItPeelConsumedInEvaluatedFrame = false;
+        CancelPostItPeelHold();
     }
 
     private void ApplyOwnedGameplayPhaseJumpLock()
@@ -670,6 +711,7 @@ public class PlayerHub : NetworkBehaviour
     {
         if (inputModule == null)
         {
+            CancelPostItPeelHold();
             LogInputRouteOwner(Vector2.zero, Vector2.zero, false, false, false, false, "inputModule null");
             return;
         }
@@ -734,6 +776,8 @@ public class PlayerHub : NetworkBehaviour
         {
             HandleCameraRotation(0f);
         }
+
+        TickPostItPeelHold();
 
         bool canMoveNow = CanMoveNow();
         if (!canMoveNow)
@@ -886,17 +930,107 @@ public class PlayerHub : NetworkBehaviour
 
         _postItPeelEvaluatedFrame = currentFrame;
         _postItPeelConsumedInEvaluatedFrame =
-            TryRequestPostItPeel() || TryRequestDroppedPostItRecovery();
+            TryBeginPostItPeelHold() || TryRequestDroppedPostItRecovery();
         return _postItPeelConsumedInEvaluatedFrame;
     }
 
-    private bool TryRequestPostItPeel()
+    private bool TryBeginPostItPeelHold()
     {
-        if (!IsOwner || !IsSpawned || !IsPlayingState() || !CanInteractNow())
+        if (_postItPeelHoldState != PostItPeelHoldState.Idle)
+            return true;
+
+        if (inputModule == null || !inputModule.IsInteractHeld())
             return false;
 
-        if (IsPostItPeelInputBlocked())
+        if (!TryResolvePostItPeelHoldCandidate(
+                out _,
+                out ulong targetNetworkObjectId,
+                out int postItId,
+                out _))
+        {
             return false;
+        }
+
+        _postItPeelTrackedTargetNetworkObjectId = targetNetworkObjectId;
+        _postItPeelTrackedPostItId = postItId;
+        _postItPeelHoldStartedAt = Time.unscaledTime;
+        _postItPeelHoldState = PostItPeelHoldState.Tracking;
+        return true;
+    }
+
+    private void TickPostItPeelHold()
+    {
+        if (_postItPeelHoldState == PostItPeelHoldState.Idle)
+            return;
+
+        if (_postItPeelHoldState == PostItPeelHoldState.Completed)
+        {
+            _postItPeelHoldState = PostItPeelHoldState.Cooldown;
+            return;
+        }
+
+        if (_postItPeelHoldState == PostItPeelHoldState.Cooldown)
+        {
+            if (Time.unscaledTime >= _postItPeelLocalCooldownUntil)
+                ResetPostItPeelHoldState();
+
+            return;
+        }
+
+        bool interactHeld = inputModule != null && inputModule.IsInteractHeld();
+        if (_postItPeelHoldState == PostItPeelHoldState.Cancelled)
+        {
+            if (!interactHeld)
+                ResetPostItPeelHoldState();
+
+            return;
+        }
+
+        if (!interactHeld ||
+            !TryResolvePostItPeelHoldCandidate(
+                out NetworkObjectReference targetReference,
+                out ulong targetNetworkObjectId,
+                out int postItId,
+                out Vector3 aimDirection) ||
+            targetNetworkObjectId != _postItPeelTrackedTargetNetworkObjectId ||
+            postItId != _postItPeelTrackedPostItId)
+        {
+            CancelPostItPeelHold();
+            return;
+        }
+
+        float duration = Mathf.Max(0.01f, postItPeelHoldDuration);
+        if (Time.unscaledTime - _postItPeelHoldStartedAt < duration)
+            return;
+
+        _postItPeelLocalCooldownUntil =
+            Time.unscaledTime + Mathf.Max(0f, postItPeelCooldown);
+        _postItPeelHoldState = PostItPeelHoldState.Completed;
+        RequestPostItPeelServerRpc(
+            targetReference,
+            postItId,
+            aimDirection);
+    }
+
+    private bool TryResolvePostItPeelHoldCandidate(
+        out NetworkObjectReference targetReference,
+        out ulong targetNetworkObjectId,
+        out int postItId,
+        out Vector3 aimDirection)
+    {
+        targetReference = default;
+        targetNetworkObjectId = ulong.MaxValue;
+        postItId = -1;
+        aimDirection = Vector3.zero;
+
+        if (!IsOwner ||
+            !IsSpawned ||
+            !IsPlayingState() ||
+            !CanInteractNow() ||
+            IsPostItPeelHoldLocallyBlocked())
+        {
+            return false;
+        }
 
         PlayerPostItInventory requesterInventory = ResolvePostItInventory();
         if (requesterInventory == null || requesterInventory.IsFull)
@@ -909,17 +1043,116 @@ public class PlayerHub : NetworkBehaviour
         Ray ray = playerCamera.ViewportPointToRay(new Vector3(0.5f, 0.5f, 0f));
         if (!TryFindPostItPeelTarget(
                 ray,
-                out NetworkObjectReference targetReference,
-                out PostItPublicVisualData selectedPostIt))
+                out NetworkObjectReference selectedTargetReference,
+                out PostItPublicVisualData selectedPostIt) ||
+            !selectedTargetReference.TryGet(out NetworkObject targetNetworkObject) ||
+            targetNetworkObject == null ||
+            !targetNetworkObject.IsSpawned)
         {
             return false;
         }
 
-        RequestPostItPeelServerRpc(
-            targetReference,
-            selectedPostIt.PostItId,
-            ray.direction.normalized);
+        PlayerPostItWorldPresenter targetPresenter =
+            targetNetworkObject.GetComponent<PlayerPostItWorldPresenter>();
+        if (targetPresenter == null)
+        {
+            targetPresenter =
+                targetNetworkObject.GetComponentInChildren<PlayerPostItWorldPresenter>(true);
+        }
+
+        if (targetPresenter == null ||
+            !targetPresenter.TryGetVisiblePostItWorldPosition(
+                selectedPostIt.PostItId,
+                out Vector3 postItWorldPosition) ||
+            !ValidatePostItPeelGeometry(
+                NetworkObject,
+                targetNetworkObject,
+                postItWorldPosition,
+                ray.origin))
+        {
+            return false;
+        }
+
+        targetReference = selectedTargetReference;
+        targetNetworkObjectId = targetNetworkObject.NetworkObjectId;
+        postItId = selectedPostIt.PostItId;
+        aimDirection = ray.direction.normalized;
         return true;
+    }
+
+    private bool IsPostItPeelHoldLocallyBlocked()
+    {
+        if (IsPostItPeelInputBlocked() || IsPostItPeelUiInputBlocked())
+            return true;
+
+        if (statusModule != null &&
+            (statusModule.IsKnocked || statusModule.IsStandingUp))
+        {
+            return true;
+        }
+
+        if (_motorShellRecoveryAdapter == null)
+        {
+            _motorShellRecoveryAdapter =
+                GetComponentInChildren<HamsterMotorShellRagdollRecoveryAdapter>(true);
+        }
+
+        if (_motorShellRecoveryAdapter != null &&
+            _motorShellRecoveryAdapter.IsKnockedOrRecovering)
+        {
+            return true;
+        }
+
+        SugaActiveRagdollController activeRagdollController =
+            ResolveActiveRagdollController();
+        if (activeRagdollController != null &&
+            activeRagdollController.IsRagdollActiveForGameplay)
+        {
+            return true;
+        }
+
+        if (_ragdollGrabber == null)
+            _ragdollGrabber = GetComponentInChildren<HamsterRagdollGrabber>(true);
+
+        if (_ragdollGrabber != null &&
+            (_ragdollGrabber.IsHolding ||
+             _ragdollGrabber.HasPendingGrab ||
+             _ragdollGrabber.HasPendingThrow))
+        {
+            return true;
+        }
+
+        if (_ragdollGrabbable == null)
+            _ragdollGrabbable = GetComponentInChildren<HamsterRagdollGrabbable>(true);
+
+        return _ragdollGrabbable != null && _ragdollGrabbable.IsHeld;
+    }
+
+    private static bool IsPostItPeelUiInputBlocked()
+    {
+        EventSystem eventSystem = EventSystem.current;
+        return eventSystem != null &&
+               (eventSystem.currentSelectedGameObject != null ||
+                eventSystem.IsPointerOverGameObject());
+    }
+
+    private void CancelPostItPeelHold()
+    {
+        if (_postItPeelHoldState != PostItPeelHoldState.Tracking)
+            return;
+
+        _postItPeelHoldState = PostItPeelHoldState.Cancelled;
+        _postItPeelTrackedTargetNetworkObjectId = ulong.MaxValue;
+        _postItPeelTrackedPostItId = -1;
+    }
+
+    private void ResetPostItPeelHoldState()
+    {
+        _postItPeelHoldState = PostItPeelHoldState.Idle;
+        _postItPeelTrackedTargetNetworkObjectId = ulong.MaxValue;
+        _postItPeelTrackedPostItId = -1;
+        _postItPeelHoldStartedAt = 0f;
+        _postItPeelLocalCooldownUntil = 0f;
     }
 
     private bool TryRequestDroppedPostItRecovery()
@@ -977,10 +1210,13 @@ public class PlayerHub : NetworkBehaviour
         if (_motorShellItemAdapter != null && _motorShellItemAdapter.HasHeldItem)
             return true;
 
+        if (locomotionModule != null && locomotionModule.IsSpinDashing)
+            return true;
+
         if (_motorShellSpinDashAdapter == null)
             _motorShellSpinDashAdapter = GetComponentInChildren<HamsterMotorShellSpinDashAdapter>(true);
 
-        return _motorShellSpinDashAdapter != null && _motorShellSpinDashAdapter.IsDizzyActive;
+        return _motorShellSpinDashAdapter != null && _motorShellSpinDashAdapter.IsSpinDashBusy;
     }
 
     private PlayerPostItInventory ResolvePostItInventory()
@@ -1340,7 +1576,7 @@ public class PlayerHub : NetworkBehaviour
             return false;
         }
 
-        return ServerValidatePostItPeelGeometry(
+        return ValidatePostItPeelGeometry(
             requesterNetworkObject,
             targetNetworkObject,
             postItWorldPosition,
@@ -1384,7 +1620,7 @@ public class PlayerHub : NetworkBehaviour
         return true;
     }
 
-    private bool ServerValidatePostItPeelGeometry(
+    private bool ValidatePostItPeelGeometry(
         NetworkObject requesterNetworkObject,
         NetworkObject targetNetworkObject,
         Vector3 postItWorldPosition,

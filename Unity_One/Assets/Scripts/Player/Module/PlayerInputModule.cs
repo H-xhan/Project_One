@@ -46,6 +46,14 @@ public class PlayerInputModule : MonoBehaviour
 
     public bool IsCursorLocked => Cursor.lockState == CursorLockMode.Locked;
 
+    public bool IsInteractHeld()
+    {
+        Mouse mouse = Mouse.current;
+        return IsLocalOwner() &&
+               mouse != null &&
+               ReadMouseButtonHeld(mouse, interactMouseButton);
+    }
+
     private void Awake()
     {
         _netObj = GetComponent<NetworkObject>();
@@ -144,6 +152,17 @@ public class PlayerInputModule : MonoBehaviour
             case 0: return mouse.leftButton.wasPressedThisFrame;
             case 1: return mouse.rightButton.wasPressedThisFrame;
             case 2: return mouse.middleButton.wasPressedThisFrame;
+            default: return false;
+        }
+    }
+
+    private bool ReadMouseButtonHeld(Mouse mouse, int button)
+    {
+        switch (button)
+        {
+            case 0: return mouse.leftButton.isPressed;
+            case 1: return mouse.rightButton.isPressed;
+            case 2: return mouse.middleButton.isPressed;
             default: return false;
         }
     }
