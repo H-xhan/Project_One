@@ -328,6 +328,34 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
     public bool CanInteract => !isKnocked && !isStandingUp && !IsStandUpVisualControlLocked && !isEliminated && !ShouldBlockInteractByTemporaryLock();
     public bool HasRecentCombatFallContributor => false;
 
+    public bool ServerEliminateForPostItDepletion()
+    {
+        if (!IsServer || !IsSpawned || isEliminated)
+            return false;
+
+        if (rootNetObj == null || !rootNetObj.IsSpawned)
+            return false;
+
+        if (!TryGetGameStateManager(out GameStateManager manager) ||
+            manager.GetState() != GameStateManager.GameState.Playing)
+        {
+            return false;
+        }
+
+        PlayerPostItInventory inventory = ResolvePostItInventory();
+        if (inventory == null ||
+            !inventory.IsServer ||
+            !inventory.IsSpawned ||
+            inventory.Count != 0 ||
+            inventory.GetComponentInParent<NetworkObject>() != rootNetObj)
+        {
+            return false;
+        }
+
+        HandleElimination();
+        return isEliminated;
+    }
+
     public bool ServerApplyTemporaryControlLock(float duration)
     {
         return ServerApplyTemporaryControlLock(duration, true, true, true);
