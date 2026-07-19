@@ -5,6 +5,15 @@ using UnityEngine;
 
 public class PostItRoundManager : NetworkBehaviour
 {
+    private const int InitialMapDrawingPostItCount = 2;
+    private const int InitialMapBonusPostItCount = 1;
+    private const int InitialMapPenaltyPostItCount = 1;
+    private const int InitialMapPostItCount =
+        InitialMapDrawingPostItCount +
+        InitialMapBonusPostItCount +
+        InitialMapPenaltyPostItCount;
+    private const float MinimumMapSpawnSeparation = 0.5f;
+
     [SerializeField] private int initialDrawingPostItCountPerPlayer = 2;
     [SerializeField] private int initialEffectPostItCountPerPlayer = 1;
     [SerializeField, HideInInspector] private int initialPostItCountPerPlayer = 3;
@@ -116,6 +125,12 @@ public class PostItRoundManager : NetworkBehaviour
         public ulong OwnerClientId;
         public PostItRuntimeData[] PreviousItems;
         public PostItRuntimeData[] DesiredItems;
+    }
+
+    private struct PreparedWorldDrop
+    {
+        public PostItRuntimeData Payload;
+        public PostItWorldDropData PublicData;
     }
 
     private void Awake()
@@ -365,7 +380,7 @@ public class PostItRoundManager : NetworkBehaviour
             return false;
         }
 
-        if (preparedAssignments.Count == 0)
+        if (preparedAssignments.Count == 0 && !isNewRoundRevision)
         {
             if (explicitRevision)
             {
@@ -469,29 +484,92 @@ public class PostItRoundManager : NetworkBehaviour
             assignment.DesiredItems = desiredItems;
         }
 
+        PreparedWorldDrop[] previousWorldDrops = Array.Empty<PreparedWorldDrop>();
+        PreparedWorldDrop[] desiredMapWorldDrops = Array.Empty<PreparedWorldDrop>();
+        if (isNewRoundRevision)
+        {
+            if (!TryCaptureWorldDropState(out previousWorldDrops))
+            {
+                LogAuthorityError(
+                    "Cannot replace map Post-its because the current world state is invalid.");
+                return false;
+            }
+
+            if (!TryPrepareInitialMapWorldDrops(
+                    roundRevision,
+                    drawingEntries,
+                    effectEntries,
+                    reservedPostItIds,
+                    ref nextPostItId,
+                    out desiredMapWorldDrops,
+                    out string mapSpawnError))
+            {
+                LogAuthorityError(
+                    $"Cannot prepare initial map Post-its. {mapSpawnError}");
+                return false;
+            }
+        }
+
         _initialAssignmentInProgress = true;
+        bool worldMutationStarted = false;
+        int mutatedAssignmentCount = 0;
         try
         {
-            int mutatedAssignmentCount = 0;
-            for (int assignmentIndex = 0;
-                 assignmentIndex < preparedAssignments.Count;
-                 assignmentIndex++)
+            if (isNewRoundRevision)
             {
-                PreparedInitialAssignment assignment = preparedAssignments[assignmentIndex];
-                assignment.Inventory.ServerClearPostIts();
-                mutatedAssignmentCount = assignmentIndex + 1;
-                if (!InventoryMatches(assignment.Inventory, Array.Empty<PostItRuntimeData>()) ||
-                    !TryAddInitialAssignmentItems(assignment))
+                BeginWorldDropMutation();
+                worldMutationStarted = true;
+            }
+
+            try
+            {
+                for (int assignmentIndex = 0;
+                     assignmentIndex < preparedAssignments.Count;
+                     assignmentIndex++)
                 {
-                    RollBackInitialAssignments(preparedAssignments, mutatedAssignmentCount);
+                    PreparedInitialAssignment assignment = preparedAssignments[assignmentIndex];
+                    mutatedAssignmentCount = assignmentIndex + 1;
+                    assignment.Inventory.ServerClearPostIts();
+                    if (!InventoryMatches(assignment.Inventory, Array.Empty<PostItRuntimeData>()) ||
+                        !TryAddInitialAssignmentItems(assignment))
+                    {
+                        RollBackInitialAssignments(preparedAssignments, mutatedAssignmentCount);
+                        return false;
+                    }
+                }
+
+                if (isNewRoundRevision &&
+                    !TryWriteWorldDropState(desiredMapWorldDrops))
+                {
+                    bool worldRollbackSucceeded =
+                        TryRollBackInitialWorldDropState(previousWorldDrops);
+                    bool inventoryRollbackSucceeded =
+                        RollBackInitialAssignments(preparedAssignments, mutatedAssignmentCount);
+                    if (!worldRollbackSucceeded || !inventoryRollbackSucceeded)
+                    {
+                        LogAuthorityError(
+                            "Initial assignment failed and its compound rollback was incomplete.");
+                    }
+
+                    LogAuthorityError(
+                        "Initial assignment failed because map Post-its could not be published.");
                     return false;
                 }
             }
-
-            if (isNewRoundRevision && !ServerClearWorldDrops())
+            catch (Exception exception)
             {
-                RollBackInitialAssignments(preparedAssignments, mutatedAssignmentCount);
-                LogAuthorityError("Initial assignment failed because world drops could not be cleared.");
+                Debug.LogException(exception, this);
+                bool worldRollbackSucceeded =
+                    !isNewRoundRevision ||
+                    TryRollBackInitialWorldDropState(previousWorldDrops);
+                bool inventoryRollbackSucceeded =
+                    RollBackInitialAssignments(preparedAssignments, mutatedAssignmentCount);
+                if (!worldRollbackSucceeded || !inventoryRollbackSucceeded)
+                {
+                    LogAuthorityError(
+                        "Initial assignment threw and its compound rollback was incomplete.");
+                }
+
                 return false;
             }
 
@@ -513,11 +591,17 @@ public class PostItRoundManager : NetworkBehaviour
             Log(
                 $"Assigned Initial PostIts\nRound={roundRevision}\n" +
                 $"Players={preparedAssignments.Count}\n" +
-                $"TotalPostIts={preparedAssignments.Count * desiredCount}");
+                $"PlayerPostIts={preparedAssignments.Count * desiredCount}\n" +
+                $"MapPostIts={(isNewRoundRevision ? desiredMapWorldDrops.Length : 0)}");
             return true;
         }
         finally
         {
+            if (worldMutationStarted)
+            {
+                EndWorldDropMutation();
+            }
+
             _initialAssignmentInProgress = false;
         }
     }
@@ -2086,6 +2170,193 @@ public class PostItRoundManager : NetworkBehaviour
         }
     }
 
+    private bool TryCaptureWorldDropState(out PreparedWorldDrop[] capturedState)
+    {
+        capturedState = Array.Empty<PreparedWorldDrop>();
+        if (_worldDropMutationDepth > 0 ||
+            _isResettingWorldDrops ||
+            _claimedWorldDropIds.Count > 0)
+        {
+            return false;
+        }
+
+        int publicCount;
+        if (IsNetworkWorldStorageActive())
+        {
+            publicCount = _networkWorldDrops.Count;
+        }
+        else if (IsSpawnedNetworkSession())
+        {
+            return false;
+        }
+        else
+        {
+            publicCount = _worldDrops.Count;
+        }
+
+        if (publicCount != _worldDropPayloads.Count)
+        {
+            return false;
+        }
+
+        PreparedWorldDrop[] state = new PreparedWorldDrop[publicCount];
+        HashSet<int> includedPostItIds = new HashSet<int>();
+        for (int i = 0; i < publicCount; i++)
+        {
+            PostItWorldDropData publicData = IsNetworkWorldStorageActive()
+                ? _networkWorldDrops[i]
+                : _worldDrops[i];
+            if (!includedPostItIds.Add(publicData.PostItId) ||
+                !_worldDropPayloads.TryGetValue(
+                    publicData.PostItId,
+                    out PostItRuntimeData payload))
+            {
+                return false;
+            }
+
+            PreparedWorldDrop entry = new PreparedWorldDrop
+            {
+                Payload = payload,
+                PublicData = publicData
+            };
+            if (!IsValidWorldDropPair(entry))
+            {
+                return false;
+            }
+
+            state[i] = entry;
+        }
+
+        capturedState = state;
+        return true;
+    }
+
+    private bool TryWriteWorldDropState(IReadOnlyList<PreparedWorldDrop> desiredState)
+    {
+        if (!ValidatePreparedWorldDropState(desiredState))
+        {
+            return false;
+        }
+
+        if (WorldDropStateMatches(desiredState))
+        {
+            return true;
+        }
+
+        if (!ServerClearWorldDrops() ||
+            !WorldDropStateMatches(Array.Empty<PreparedWorldDrop>()))
+        {
+            return false;
+        }
+
+        for (int i = 0; i < desiredState.Count; i++)
+        {
+            PreparedWorldDrop entry = desiredState[i];
+            if (!TryAddWorldDrop(entry.Payload, entry.PublicData))
+            {
+                return false;
+            }
+        }
+
+        return WorldDropStateMatches(desiredState);
+    }
+
+    private bool TryRollBackInitialWorldDropState(
+        IReadOnlyList<PreparedWorldDrop> previousState)
+    {
+        try
+        {
+            return TryWriteWorldDropState(previousState);
+        }
+        catch (Exception exception)
+        {
+            Debug.LogException(exception, this);
+            LogAuthorityError("Failed to roll back initial world Post-it state.");
+            return false;
+        }
+    }
+
+    private bool ValidatePreparedWorldDropState(
+        IReadOnlyList<PreparedWorldDrop> state)
+    {
+        if (state == null)
+        {
+            return false;
+        }
+
+        HashSet<int> includedPostItIds = new HashSet<int>();
+        for (int i = 0; i < state.Count; i++)
+        {
+            PreparedWorldDrop entry = state[i];
+            if (!IsValidWorldDropPair(entry) ||
+                !includedPostItIds.Add(entry.Payload.PostItId))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private bool WorldDropStateMatches(IReadOnlyList<PreparedWorldDrop> expectedState)
+    {
+        if (expectedState == null ||
+            _claimedWorldDropIds.Count != 0 ||
+            _worldDropPayloads.Count != expectedState.Count)
+        {
+            return false;
+        }
+
+        bool useNetworkStorage = IsNetworkWorldStorageActive();
+        if (!useNetworkStorage && IsSpawnedNetworkSession())
+        {
+            return false;
+        }
+
+        int publicCount = useNetworkStorage
+            ? _networkWorldDrops.Count
+            : _worldDrops.Count;
+        if (publicCount != expectedState.Count ||
+            (useNetworkStorage && _worldDrops.Count != expectedState.Count))
+        {
+            return false;
+        }
+
+        for (int i = 0; i < expectedState.Count; i++)
+        {
+            PreparedWorldDrop expected = expectedState[i];
+            PostItWorldDropData publicData = useNetworkStorage
+                ? _networkWorldDrops[i]
+                : _worldDrops[i];
+            if (!publicData.Equals(expected.PublicData) ||
+                (useNetworkStorage && !_worldDrops[i].Equals(publicData)) ||
+                !_worldDropPayloads.TryGetValue(
+                    expected.Payload.PostItId,
+                    out PostItRuntimeData payload) ||
+                !payload.Equals(expected.Payload) ||
+                CountAuthoritativePostItLocations(expected.Payload.PostItId) != 1)
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static bool IsValidWorldDropPair(PreparedWorldDrop entry)
+    {
+        return entry.Payload.IsValid &&
+               entry.PublicData.IsValid &&
+               entry.Payload.PostItId == entry.PublicData.PostItId &&
+               entry.Payload.Type == entry.PublicData.Type &&
+               entry.Payload.VisualId == entry.PublicData.VisualId &&
+               entry.Payload.HolderClientId == ulong.MaxValue &&
+               entry.Payload.SlotIndex == -1 &&
+               !entry.PublicData.IsOriginalOwnerItem &&
+               IsFiniteVector(entry.PublicData.Position) &&
+               IsFiniteQuaternion(entry.PublicData.Rotation);
+    }
+
     public bool ServerClearWorldDrops()
     {
         if (!CanMutateServerState() || _isResettingWorldDrops)
@@ -2177,6 +2448,30 @@ public class PostItRoundManager : NetworkBehaviour
         }
 
         return found;
+    }
+
+    private bool TryResolveMapSpawnPose(
+        int postItId,
+        Vector3 markerPosition,
+        out Vector3 position,
+        out Quaternion rotation)
+    {
+        position = Vector3.zero;
+        rotation = Quaternion.identity;
+        if (!IsFiniteVector(markerPosition))
+        {
+            return false;
+        }
+
+        return TryProjectWorldDropToGround(
+            postItId,
+            markerPosition,
+            markerPosition.y,
+            true,
+            markerPosition,
+            true,
+            out position,
+            out rotation);
     }
 
     private bool TryResolveWorldDropPose(
@@ -3126,6 +3421,288 @@ public class PostItRoundManager : NetworkBehaviour
         return ulong.MaxValue;
     }
 
+    private bool TryPrepareInitialMapWorldDrops(
+        int roundRevision,
+        IReadOnlyList<PostItVisualCatalogSO.Entry> drawingEntries,
+        IReadOnlyList<PostItVisualCatalogSO.Entry> effectEntries,
+        HashSet<int> reservedPostItIds,
+        ref int nextPostItId,
+        out PreparedWorldDrop[] desiredWorldDrops,
+        out string validationError)
+    {
+        desiredWorldDrops = Array.Empty<PreparedWorldDrop>();
+        validationError = null;
+        if (drawingEntries == null ||
+            effectEntries == null ||
+            reservedPostItIds == null ||
+            roundRevision < 0)
+        {
+            validationError = "Map spawn preparation received invalid input.";
+            return false;
+        }
+
+        List<PostItVisualCatalogSO.Entry> bonusEntries =
+            new List<PostItVisualCatalogSO.Entry>();
+        List<PostItVisualCatalogSO.Entry> penaltyEntries =
+            new List<PostItVisualCatalogSO.Entry>();
+        for (int entryIndex = 0; entryIndex < effectEntries.Count; entryIndex++)
+        {
+            PostItVisualCatalogSO.Entry entry = effectEntries[entryIndex];
+            if (entry.Type == PostItType.Bonus)
+            {
+                bonusEntries.Add(entry);
+            }
+            else if (entry.Type == PostItType.Penalty)
+            {
+                penaltyEntries.Add(entry);
+            }
+        }
+
+        if (drawingEntries.Count == 0 ||
+            bonusEntries.Count == 0 ||
+            penaltyEntries.Count == 0)
+        {
+            validationError =
+                "The visual catalog requires Drawing, Bonus (Guard), and Penalty (Heavy) entries.";
+            return false;
+        }
+
+        PostItMapSpawnPoint[] sceneSpawnPoints =
+            FindObjectsByType<PostItMapSpawnPoint>(FindObjectsSortMode.None);
+        List<PostItMapSpawnPoint> spawnPoints = new List<PostItMapSpawnPoint>();
+        HashSet<int> spawnOrders = new HashSet<int>();
+        for (int spawnPointIndex = 0;
+             spawnPointIndex < sceneSpawnPoints.Length;
+             spawnPointIndex++)
+        {
+            PostItMapSpawnPoint spawnPoint = sceneSpawnPoints[spawnPointIndex];
+            if (spawnPoint == null ||
+                !spawnPoint.isActiveAndEnabled ||
+                spawnPoint.gameObject.scene != gameObject.scene)
+            {
+                continue;
+            }
+
+            if (spawnPoint.SpawnOrder < 0 ||
+                !IsFiniteVector(spawnPoint.transform.position) ||
+                !spawnOrders.Add(spawnPoint.SpawnOrder))
+            {
+                validationError =
+                    "Map spawn points require finite positions and unique non-negative SpawnOrder values.";
+                return false;
+            }
+
+            spawnPoints.Add(spawnPoint);
+        }
+
+        if (spawnPoints.Count < InitialMapPostItCount)
+        {
+            validationError =
+                $"At least {InitialMapPostItCount} active map spawn points are required.";
+            return false;
+        }
+
+        spawnPoints.Sort(CompareMapSpawnPointsByOrder);
+        PostItMapSpawnPoint[] orderedSpawnPoints =
+            BuildDeterministicMapSpawnPointOrder(spawnPoints, roundRevision);
+
+        PostItVisualCatalogSO.Entry[] selectedEntries =
+            new PostItVisualCatalogSO.Entry[InitialMapPostItCount];
+        int drawingStartIndex = (int)(ComputeStableAssignmentHash(
+            roundRevision,
+            ulong.MaxValue,
+            0,
+            0x4D415044u) % (uint)drawingEntries.Count);
+        for (int drawingIndex = 0;
+             drawingIndex < InitialMapDrawingPostItCount;
+             drawingIndex++)
+        {
+            selectedEntries[drawingIndex] =
+                drawingEntries[(drawingStartIndex + drawingIndex) % drawingEntries.Count];
+        }
+
+        int bonusEntryIndex = (int)(ComputeStableAssignmentHash(
+            roundRevision,
+            ulong.MaxValue,
+            0,
+            0x4D415047u) % (uint)bonusEntries.Count);
+        selectedEntries[InitialMapDrawingPostItCount] = bonusEntries[bonusEntryIndex];
+
+        int penaltyEntryIndex = (int)(ComputeStableAssignmentHash(
+            roundRevision,
+            ulong.MaxValue,
+            0,
+            0x4D415048u) % (uint)penaltyEntries.Count);
+        selectedEntries[InitialMapDrawingPostItCount + InitialMapBonusPostItCount] =
+            penaltyEntries[penaltyEntryIndex];
+
+        int[] postItIds = new int[InitialMapPostItCount];
+        for (int itemIndex = 0; itemIndex < postItIds.Length; itemIndex++)
+        {
+            if (!TryReserveNextPostItId(
+                    reservedPostItIds,
+                    ref nextPostItId,
+                    out postItIds[itemIndex]))
+            {
+                validationError = "Map PostItId space is exhausted.";
+                return false;
+            }
+        }
+
+        PreparedWorldDrop[] preparedWorldDrops =
+            new PreparedWorldDrop[InitialMapPostItCount];
+        int candidateIndex = 0;
+        for (int itemIndex = 0; itemIndex < preparedWorldDrops.Length; itemIndex++)
+        {
+            bool prepared = false;
+            while (candidateIndex < orderedSpawnPoints.Length)
+            {
+                PostItMapSpawnPoint spawnPoint = orderedSpawnPoints[candidateIndex++];
+                if (!TryResolveMapSpawnPose(
+                        postItIds[itemIndex],
+                        spawnPoint.transform.position,
+                        out Vector3 position,
+                        out Quaternion rotation) ||
+                    !IsSeparatedFromPreparedMapSpawns(
+                        position,
+                        preparedWorldDrops,
+                        itemIndex))
+                {
+                    continue;
+                }
+
+                PostItVisualCatalogSO.Entry entry = selectedEntries[itemIndex];
+                PreparedWorldDrop worldDrop = new PreparedWorldDrop
+                {
+                    Payload = new PostItRuntimeData(
+                        postItIds[itemIndex],
+                        entry.Type,
+                        entry.TopicId,
+                        entry.VisualId,
+                        ulong.MaxValue,
+                        ulong.MaxValue,
+                        -1),
+                    PublicData = new PostItWorldDropData(
+                        postItIds[itemIndex],
+                        entry.Type,
+                        entry.VisualId,
+                        false,
+                        position,
+                        rotation)
+                };
+                if (!IsValidWorldDropPair(worldDrop))
+                {
+                    validationError = "A prepared map Post-it did not satisfy the world data contract.";
+                    return false;
+                }
+
+                preparedWorldDrops[itemIndex] = worldDrop;
+                prepared = true;
+                break;
+            }
+
+            if (!prepared)
+            {
+                validationError =
+                    $"Could not project {InitialMapPostItCount} separated map Post-its onto valid ground.";
+                return false;
+            }
+        }
+
+        desiredWorldDrops = preparedWorldDrops;
+        return true;
+    }
+
+    private static PostItMapSpawnPoint[] BuildDeterministicMapSpawnPointOrder(
+        IReadOnlyList<PostItMapSpawnPoint> spawnPoints,
+        int roundRevision)
+    {
+        PostItMapSpawnPoint[] ordered = new PostItMapSpawnPoint[spawnPoints.Count];
+        bool[] selected = new bool[spawnPoints.Count];
+        int firstIndex = (int)(ComputeStableAssignmentHash(
+            roundRevision,
+            ulong.MaxValue,
+            0,
+            0x4D415050u) % (uint)spawnPoints.Count);
+        ordered[0] = spawnPoints[firstIndex];
+        selected[firstIndex] = true;
+
+        for (int orderedIndex = 1;
+             orderedIndex < ordered.Length;
+             orderedIndex++)
+        {
+            int bestCandidateIndex = -1;
+            float bestMinimumDistance = -1f;
+            for (int candidateIndex = 0;
+                 candidateIndex < spawnPoints.Count;
+                 candidateIndex++)
+            {
+                if (selected[candidateIndex])
+                {
+                    continue;
+                }
+
+                float minimumDistance = float.PositiveInfinity;
+                for (int selectedIndex = 0;
+                     selectedIndex < orderedIndex;
+                     selectedIndex++)
+                {
+                    minimumDistance = Mathf.Min(
+                        minimumDistance,
+                        HorizontalSqrDistance(
+                            spawnPoints[candidateIndex].transform.position,
+                            ordered[selectedIndex].transform.position));
+                }
+
+                if (bestCandidateIndex < 0 ||
+                    minimumDistance > bestMinimumDistance)
+                {
+                    bestCandidateIndex = candidateIndex;
+                    bestMinimumDistance = minimumDistance;
+                }
+            }
+
+            ordered[orderedIndex] = spawnPoints[bestCandidateIndex];
+            selected[bestCandidateIndex] = true;
+        }
+
+        return ordered;
+    }
+
+    private static bool IsSeparatedFromPreparedMapSpawns(
+        Vector3 position,
+        IReadOnlyList<PreparedWorldDrop> preparedWorldDrops,
+        int preparedCount)
+    {
+        float minimumSqrDistance =
+            MinimumMapSpawnSeparation * MinimumMapSpawnSeparation;
+        for (int i = 0; i < preparedCount; i++)
+        {
+            if (HorizontalSqrDistance(
+                    position,
+                    preparedWorldDrops[i].PublicData.Position) < minimumSqrDistance)
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static float HorizontalSqrDistance(Vector3 left, Vector3 right)
+    {
+        float deltaX = left.x - right.x;
+        float deltaZ = left.z - right.z;
+        return deltaX * deltaX + deltaZ * deltaZ;
+    }
+
+    private static int CompareMapSpawnPointsByOrder(
+        PostItMapSpawnPoint left,
+        PostItMapSpawnPoint right)
+    {
+        return left.SpawnOrder.CompareTo(right.SpawnOrder);
+    }
+
     private bool TryBuildInitialAssignmentCatalog(
         out List<PostItVisualCatalogSO.Entry> drawingEntries,
         out List<PostItVisualCatalogSO.Entry> effectEntries,
@@ -3247,7 +3824,7 @@ public class PostItRoundManager : NetworkBehaviour
         return InventoryMatches(assignment.Inventory, assignment.DesiredItems);
     }
 
-    private void RollBackInitialAssignments(
+    private bool RollBackInitialAssignments(
         IReadOnlyList<PreparedInitialAssignment> assignments,
         int mutatedAssignmentCount)
     {
@@ -3257,28 +3834,38 @@ public class PostItRoundManager : NetworkBehaviour
              assignmentIndex--)
         {
             PreparedInitialAssignment assignment = assignments[assignmentIndex];
-            assignment.Inventory.ServerClearPostIts();
-            if (!InventoryMatches(assignment.Inventory, Array.Empty<PostItRuntimeData>()))
+            try
             {
-                rollbackSucceeded = false;
-                continue;
-            }
-
-            for (int itemIndex = 0;
-                 itemIndex < assignment.PreviousItems.Length;
-                 itemIndex++)
-            {
-                PostItRuntimeData previousItem = assignment.PreviousItems[itemIndex];
-                if (!assignment.Inventory.ServerTryAddPostIt(previousItem, out PostItRuntimeData restoredItem) ||
-                    !restoredItem.Equals(previousItem))
+                assignment.Inventory.ServerClearPostIts();
+                if (!InventoryMatches(assignment.Inventory, Array.Empty<PostItRuntimeData>()))
                 {
                     rollbackSucceeded = false;
-                    break;
+                    continue;
+                }
+
+                for (int itemIndex = 0;
+                     itemIndex < assignment.PreviousItems.Length;
+                     itemIndex++)
+                {
+                    PostItRuntimeData previousItem = assignment.PreviousItems[itemIndex];
+                    if (!assignment.Inventory.ServerTryAddPostIt(
+                            previousItem,
+                            out PostItRuntimeData restoredItem) ||
+                        !restoredItem.Equals(previousItem))
+                    {
+                        rollbackSucceeded = false;
+                        break;
+                    }
+                }
+
+                if (!InventoryMatches(assignment.Inventory, assignment.PreviousItems))
+                {
+                    rollbackSucceeded = false;
                 }
             }
-
-            if (!InventoryMatches(assignment.Inventory, assignment.PreviousItems))
+            catch (Exception exception)
             {
+                Debug.LogException(exception, this);
                 rollbackSucceeded = false;
             }
         }
@@ -3289,6 +3876,8 @@ public class PostItRoundManager : NetworkBehaviour
                 $"[{nameof(PostItRoundManager)}] Failed to roll back initial Post-it assignment.",
                 this);
         }
+
+        return rollbackSucceeded;
     }
 
     private static bool InventoryMatches(
