@@ -16,6 +16,25 @@ public sealed class PlayerPostItWorldPresenter : MonoBehaviour
         public Vector3 LocalScale;
     }
 
+    private enum CatalogPreviewFailure
+    {
+        None = 0,
+        UnsupportedTemplate = 1,
+        MissingCatalog = 2,
+        MissingEntry = 3,
+        TypeMismatch = 4,
+        InvalidSprite = 5
+    }
+
+    private struct CatalogWarningState
+    {
+        public bool IsInitialized;
+        public int PostItId;
+        public int VisualId;
+        public PostItType Type;
+        public CatalogPreviewFailure Failure;
+    }
+
     [SerializeField] private PlayerPostItInventory targetInventory;
     [SerializeField] private GameObject visualTemplate;
     [SerializeField] private Transform[] anchors = Array.Empty<Transform>();
@@ -29,9 +48,14 @@ public sealed class PlayerPostItWorldPresenter : MonoBehaviour
     [SerializeField] private Color acquiredTint = new Color(1f, 0.46f, 0.12f, 1f);
     [SerializeField, Range(0f, 1f)] private float acquiredTintStrength = 0.35f;
     [SerializeField] private bool debugLogs = false;
+    [SerializeField] private PostItVisualCatalogSO visualCatalog;
 
     private static readonly int BaseColorPropertyId = Shader.PropertyToID("_BaseColor");
     private static readonly int ColorPropertyId = Shader.PropertyToID("_Color");
+    private static readonly int BaseMapPropertyId = Shader.PropertyToID("_BaseMap");
+    private static readonly int MainTexturePropertyId = Shader.PropertyToID("_MainTex");
+    private static readonly int BaseMapScaleOffsetPropertyId = Shader.PropertyToID("_BaseMap_ST");
+    private static readonly int MainTextureScaleOffsetPropertyId = Shader.PropertyToID("_MainTex_ST");
     private static readonly int VisualIdPropertyId = Shader.PropertyToID("_PostItVisualId");
     private static readonly int TypePropertyId = Shader.PropertyToID("_PostItType");
 
@@ -40,6 +64,8 @@ public sealed class PlayerPostItWorldPresenter : MonoBehaviour
         public GameObject Instance;
         public Renderer[] Renderers;
         public MaterialPropertyBlock PropertyBlock;
+        public bool SupportsCatalogPreview;
+        public CatalogWarningState WarningState;
         public PostItPublicVisualData Data;
         public bool HasData;
     }
@@ -49,6 +75,8 @@ public sealed class PlayerPostItWorldPresenter : MonoBehaviour
         public GameObject Instance;
         public Renderer[] Renderers;
         public MaterialPropertyBlock PropertyBlock;
+        public bool SupportsCatalogPreview;
+        public CatalogWarningState WarningState;
         public PostItWorldDropData Data;
         public bool HasData;
     }
@@ -67,6 +95,8 @@ public sealed class PlayerPostItWorldPresenter : MonoBehaviour
     private float _nextWorldManagerResolveTime;
 
     private const float WorldManagerResolveInterval = 0.5f;
+    private const float PreviewAcquiredTintMultiplier = 0.25f;
+    private const float EffectPreviewTypeTintStrength = 0.18f;
 
     public PlayerPostItInventory BoundInventory => _boundInventory;
     public int AnchorCount => _resolvedAnchors.Length;
@@ -372,6 +402,7 @@ public sealed class PlayerPostItWorldPresenter : MonoBehaviour
                 Instance = instance,
                 Renderers = renderers,
                 PropertyBlock = new MaterialPropertyBlock(),
+                SupportsCatalogPreview = SupportsCatalogPreviewTextures(renderers),
                 Data = PostItPublicVisualData.Invalid,
                 HasData = false
             };
@@ -497,9 +528,12 @@ public sealed class PlayerPostItWorldPresenter : MonoBehaviour
             ApplyVisualProperties(
                 slot.Renderers,
                 slot.PropertyBlock,
+                data.PostItId,
                 data.Type,
                 data.VisualId,
-                data.IsOriginalOwnerItem);
+                data.IsOriginalOwnerItem,
+                slot.SupportsCatalogPreview,
+                ref slot.WarningState);
             slot.Instance.SetActive(true);
             _worldVisibleCount++;
         }
@@ -565,6 +599,7 @@ public sealed class PlayerPostItWorldPresenter : MonoBehaviour
                 Instance = instance,
                 Renderers = renderers,
                 PropertyBlock = new MaterialPropertyBlock(),
+                SupportsCatalogPreview = SupportsCatalogPreviewTextures(renderers),
                 Data = PostItWorldDropData.Invalid,
                 HasData = false
             });
@@ -628,25 +663,45 @@ public sealed class PlayerPostItWorldPresenter : MonoBehaviour
         ApplyVisualProperties(
             slot.Renderers,
             slot.PropertyBlock,
+            data.PostItId,
             data.Type,
             data.VisualId,
-            data.IsOriginalOwnerItem);
+            data.IsOriginalOwnerItem,
+            slot.SupportsCatalogPreview,
+            ref slot.WarningState);
     }
 
     private void ApplyVisualProperties(
         Renderer[] renderers,
         MaterialPropertyBlock propertyBlock,
+        int postItId,
         PostItType type,
         int visualId,
-        bool isOriginalOwnerItem)
+        bool isOriginalOwnerItem,
+        bool supportsCatalogPreview,
+        ref CatalogWarningState warningState)
     {
-        Color color = ResolveTypeColor(type);
+        propertyBlock.Clear();
+        bool hasCatalogPreview = TryApplyCatalogPreview(
+            propertyBlock,
+            postItId,
+            type,
+            visualId,
+            supportsCatalogPreview,
+            ref warningState);
+
+        Color typeColor = ResolveTypeColor(type);
+        Color color = hasCatalogPreview
+            ? ResolvePreviewColor(type, typeColor)
+            : typeColor;
         if (!isOriginalOwnerItem)
         {
-            color = Color.Lerp(color, acquiredTint, acquiredTintStrength);
+            float tintStrength = hasCatalogPreview
+                ? acquiredTintStrength * PreviewAcquiredTintMultiplier
+                : acquiredTintStrength;
+            color = Color.Lerp(color, acquiredTint, tintStrength);
         }
 
-        propertyBlock.Clear();
         propertyBlock.SetColor(BaseColorPropertyId, color);
         propertyBlock.SetColor(ColorPropertyId, color);
         propertyBlock.SetFloat(VisualIdPropertyId, visualId);
@@ -660,6 +715,150 @@ public sealed class PlayerPostItWorldPresenter : MonoBehaviour
                 renderer.SetPropertyBlock(propertyBlock);
             }
         }
+    }
+
+    private bool TryApplyCatalogPreview(
+        MaterialPropertyBlock propertyBlock,
+        int postItId,
+        PostItType type,
+        int visualId,
+        bool supportsCatalogPreview,
+        ref CatalogWarningState warningState)
+    {
+        CatalogPreviewFailure failure = CatalogPreviewFailure.None;
+        Texture previewTexture = null;
+        Vector4 scaleOffset = default;
+
+        if (!supportsCatalogPreview)
+        {
+            failure = CatalogPreviewFailure.UnsupportedTemplate;
+        }
+        else if (visualCatalog == null)
+        {
+            failure = CatalogPreviewFailure.MissingCatalog;
+        }
+        else if (!visualCatalog.TryGetEntryByVisualId(
+                     visualId,
+                     out PostItVisualCatalogSO.Entry entry))
+        {
+            failure = CatalogPreviewFailure.MissingEntry;
+        }
+        else if (entry.Type != type)
+        {
+            failure = CatalogPreviewFailure.TypeMismatch;
+        }
+        else if (!TryGetSpriteTextureData(
+                     entry.PreviewSprite,
+                     out previewTexture,
+                     out scaleOffset))
+        {
+            failure = CatalogPreviewFailure.InvalidSprite;
+        }
+
+        if (failure != CatalogPreviewFailure.None)
+        {
+            if (!warningState.IsInitialized ||
+                warningState.PostItId != postItId ||
+                warningState.VisualId != visualId ||
+                warningState.Type != type ||
+                warningState.Failure != failure)
+            {
+                warningState = new CatalogWarningState
+                {
+                    IsInitialized = true,
+                    PostItId = postItId,
+                    VisualId = visualId,
+                    Type = type,
+                    Failure = failure
+                };
+                LogWarning(
+                    $"Catalog preview unavailable; using color fallback. " +
+                    $"postItId={postItId}, visualId={visualId}, " +
+                    $"type={type}, failure={failure}");
+            }
+
+            return false;
+        }
+
+        warningState = default;
+        propertyBlock.SetTexture(BaseMapPropertyId, previewTexture);
+        propertyBlock.SetTexture(MainTexturePropertyId, previewTexture);
+        propertyBlock.SetVector(BaseMapScaleOffsetPropertyId, scaleOffset);
+        propertyBlock.SetVector(MainTextureScaleOffsetPropertyId, scaleOffset);
+        return true;
+    }
+
+    private static Color ResolvePreviewColor(PostItType type, Color typeColor)
+    {
+        if (type == PostItType.Drawing)
+            return Color.white;
+
+        return Color.Lerp(Color.white, typeColor, EffectPreviewTypeTintStrength);
+    }
+
+    private static bool TryGetSpriteTextureData(
+        Sprite sprite,
+        out Texture texture,
+        out Vector4 scaleOffset)
+    {
+        texture = null;
+        scaleOffset = new Vector4(1f, 1f, 0f, 0f);
+        if (sprite == null || sprite.texture == null)
+            return false;
+
+        if (sprite.packed && sprite.packingRotation != SpritePackingRotation.None)
+            return false;
+
+        Rect textureRect;
+        try
+        {
+            textureRect = sprite.textureRect;
+        }
+        catch (UnityException)
+        {
+            return false;
+        }
+
+        Texture2D spriteTexture = sprite.texture;
+        if (spriteTexture.width <= 0 ||
+            spriteTexture.height <= 0 ||
+            textureRect.width <= 0f ||
+            textureRect.height <= 0f)
+        {
+            return false;
+        }
+
+        texture = spriteTexture;
+        scaleOffset = new Vector4(
+            textureRect.width / spriteTexture.width,
+            textureRect.height / spriteTexture.height,
+            textureRect.x / spriteTexture.width,
+            textureRect.y / spriteTexture.height);
+        return true;
+    }
+
+    private static bool SupportsCatalogPreviewTextures(Renderer[] renderers)
+    {
+        for (int rendererIndex = 0; rendererIndex < renderers.Length; rendererIndex++)
+        {
+            Renderer renderer = renderers[rendererIndex];
+            if (renderer == null)
+                continue;
+
+            Material[] materials = renderer.sharedMaterials;
+            for (int materialIndex = 0; materialIndex < materials.Length; materialIndex++)
+            {
+                Material material = materials[materialIndex];
+                if (material != null &&
+                    (material.HasProperty(BaseMapPropertyId) ||
+                     material.HasProperty(MainTexturePropertyId)))
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
     }
 
     private Color ResolveTypeColor(PostItType type)
