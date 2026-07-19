@@ -6,6 +6,8 @@ using UnityEngine.EventSystems;
 
 public class GameStateManager : NetworkBehaviour
 {
+    private const float CountdownPostItAssignmentRetryInterval = 0.1f;
+
     public enum GameState
     {
         Lobby = 0,
@@ -133,8 +135,8 @@ public class GameStateManager : NetworkBehaviour
     private int _lastPlayingCursorLockRetryStartFrame = -1;
     private bool _roundResultResolved;
     private bool _isStateValueChangeSubscribed;
-    private bool _postItAssignedThisRound;
     private bool _roundEndTransitionInProgress;
+    private float _nextCountdownPostItAssignmentRetryTime;
     private int _roundRevision = -1;
     private int _guessRevision = -1;
     private PlayingEndReason _activePlayingEndReason = PlayingEndReason.Timer;
@@ -221,11 +223,20 @@ public class GameStateManager : NetworkBehaviour
         {
             if (readySystem != null && readySystem.CanStartGameServer() && readySystem.AreAllReady())
             {
-                readySystem.ResetAllReadyServer();
-                EnterCountdown();
+                if (EnterCountdown())
+                    readySystem.ResetAllReadyServer();
             }
 
             return;
+        }
+
+        if (state == GameState.Countdown &&
+            Time.unscaledTime >= _nextCountdownPostItAssignmentRetryTime)
+        {
+            _nextCountdownPostItAssignmentRetryTime =
+                Time.unscaledTime + CountdownPostItAssignmentRetryInterval;
+            if (!AssignInitialPostItsForRoundServer(_roundRevision))
+                return;
         }
 
         if (state == GameState.Playing)
@@ -278,7 +289,6 @@ public class GameStateManager : NetworkBehaviour
         ApplyCursorStateForCurrentGameState("enter-lobby");
         StateTimer.Value = 0f;
         ResetRoundResultServer();
-        _postItAssignedThisRound = false;
         _guessRevision = -1;
         _activePlayingEndReason = PlayingEndReason.Timer;
         _pendingSurvivorWinnerClientId = invalidWinnerClientId;
@@ -296,25 +306,40 @@ public class GameStateManager : NetworkBehaviour
         Log("[GameStateManager] EnterLobby");
     }
 
-    private void EnterCountdown()
+    private bool EnterCountdown()
     {
-        if (!TryAdvanceRoundRevisionServer())
+        if (!TryGetNextRoundRevisionServer(out int nextRoundRevision))
         {
             Log("[GameStateManager] Round revision could not advance.");
-            return;
+            return false;
         }
 
+        if (!AssignInitialPostItsForRoundServer(nextRoundRevision))
+        {
+            Log("[GameStateManager] Initial post-it assignment failed before Countdown.");
+            return false;
+        }
+
+        _roundRevision = nextRoundRevision;
+        _guessRevision = -1;
         StateValue.Value = (int)GameState.Countdown;
         ApplyCursorStateForCurrentGameState("enter-countdown");
         StateTimer.Value = countdownSeconds;
-        _postItAssignedThisRound = false;
-        _guessRevision = -1;
+        _nextCountdownPostItAssignmentRetryTime =
+            Time.unscaledTime + CountdownPostItAssignmentRetryInterval;
 
         Log("[GameStateManager] EnterCountdown");
+        return true;
     }
 
     private void EnterPlaying()
     {
+        if (!AssignInitialPostItsForRoundServer(_roundRevision))
+        {
+            Log("[GameStateManager] Playing transition deferred until initial post-it assignment completes.");
+            return;
+        }
+
         ResetRoundResultServer();
         CaptureRoundParticipantsServer();
 
@@ -328,31 +353,30 @@ public class GameStateManager : NetworkBehaviour
             inGameMatchManager.TeleportPlayersToGameServer();
         }
 
-        AssignInitialPostItsForCurrentRoundServer();
-
         Log("[GameStateManager] EnterPlaying");
     }
 
-    private void AssignInitialPostItsForCurrentRoundServer()
+    private bool AssignInitialPostItsForRoundServer(int roundRevision)
     {
-        if (!IsServer) return;
-        if (_postItAssignedThisRound) return;
+        if (!IsServer || roundRevision < 0)
+            return false;
 
         PostItRoundManager postItRoundManager = ResolvePostItRoundManager();
-        if (postItRoundManager == null)
+        if (!IsValidServerPostItRoundManager(postItRoundManager))
         {
-            Log("[GameStateManager] PostItRoundManager not found. Initial post-it assignment skipped.");
-            return;
+            Log("[GameStateManager] Server PostItRoundManager not ready for initial assignment.");
+            return false;
         }
 
-        if (!postItRoundManager.ServerAssignInitialPostItsFromScene(_roundRevision))
+        if (!TryBuildCountdownAssignmentInventoriesServer(
+                out List<PlayerPostItInventory> inventories))
         {
-            Log("[GameStateManager] Initial post-it assignment failed.");
-            return;
+            return false;
         }
 
-        _postItAssignedThisRound = true;
-        Log("[GameStateManager] Initial post-it assignment completed.");
+        return postItRoundManager.ServerAssignInitialPostIts(
+            inventories,
+            roundRevision);
     }
 
     private void EnterResults()
@@ -508,12 +532,13 @@ public class GameStateManager : NetworkBehaviour
         EnterResults();
     }
 
-    private bool TryAdvanceRoundRevisionServer()
+    private bool TryGetNextRoundRevisionServer(out int nextRoundRevision)
     {
+        nextRoundRevision = -1;
         if (!IsServer || _roundRevision == int.MaxValue)
             return false;
 
-        _roundRevision++;
+        nextRoundRevision = _roundRevision + 1;
         return true;
     }
 
@@ -966,6 +991,34 @@ public class GameStateManager : NetworkBehaviour
         }
 
         return true;
+    }
+
+    private bool TryBuildCountdownAssignmentInventoriesServer(
+        out List<PlayerPostItInventory> inventories)
+    {
+        inventories = new List<PlayerPostItInventory>();
+        if (!IsServer || NetworkManager == null || !NetworkManager.IsListening)
+            return false;
+
+        List<ulong> clientIds = new List<ulong>(NetworkManager.ConnectedClientsIds);
+        clientIds.Sort();
+        if (clientIds.Count == 0)
+            return false;
+
+        for (int clientIndex = 0; clientIndex < clientIds.Count; clientIndex++)
+        {
+            if (!TryResolveConnectedPlayerInventory(
+                    NetworkManager,
+                    clientIds[clientIndex],
+                    out PlayerPostItInventory inventory))
+            {
+                return false;
+            }
+
+            inventories.Add(inventory);
+        }
+
+        return inventories.Count == clientIds.Count;
     }
 
     private bool TryFlushZeroPostItEliminationsServer()
