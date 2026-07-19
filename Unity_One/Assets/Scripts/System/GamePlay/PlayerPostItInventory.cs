@@ -5,6 +5,12 @@ using UnityEngine;
 
 public class PlayerPostItInventory : NetworkBehaviour
 {
+    private const int GuardVisualId = 2001;
+    private const int HeavyVisualId = 3001;
+    private const int MaximumGuardCharges = 1;
+    private const double HeavyDurationSeconds = 4d;
+    private const float HeavyMovementScale = 0.65f;
+
     [SerializeField] private int maxPostItSlots = 6;
     [SerializeField] private bool debugLogs = false;
 
@@ -14,13 +20,17 @@ public class PlayerPostItInventory : NetworkBehaviour
     private NetworkList<PostItRuntimeData> _networkPostIts;
     private NetworkList<PostItPublicVisualData> _networkPublicVisuals;
     private NetworkList<PostItGuessOwnerData> _networkGuessItems;
+    private NetworkVariable<int> _guardCharges;
+    private NetworkVariable<double> _heavyUntilServerTime;
     private bool _hasSubscribedToNetworkPostIts;
     private bool _hasSubscribedToNetworkPublicVisuals;
     private bool _hasSubscribedToNetworkGuessItems;
+    private bool _hasSubscribedToEffects;
 
     public event Action PostItsChanged;
     public event Action PublicVisualsChanged;
     public event Action GuessItemsChanged;
+    public event Action EffectsChanged;
 
     private void Awake()
     {
@@ -36,6 +46,16 @@ public class PlayerPostItInventory : NetworkBehaviour
 
         _networkGuessItems = new NetworkList<PostItGuessOwnerData>(
             values: null,
+            readPerm: NetworkVariableReadPermission.Owner,
+            writePerm: NetworkVariableWritePermission.Server);
+
+        _guardCharges = new NetworkVariable<int>(
+            value: 0,
+            readPerm: NetworkVariableReadPermission.Owner,
+            writePerm: NetworkVariableWritePermission.Server);
+
+        _heavyUntilServerTime = new NetworkVariable<double>(
+            value: 0d,
             readPerm: NetworkVariableReadPermission.Owner,
             writePerm: NetworkVariableWritePermission.Server);
     }
@@ -97,6 +117,8 @@ public class PlayerPostItInventory : NetworkBehaviour
             SubscribeToNetworkGuessItems();
         }
 
+        SubscribeToEffects();
+
         RebuildLocalMirrorFromNetworkList();
         if (hasPublicNetworkStorage)
         {
@@ -119,6 +141,19 @@ public class PlayerPostItInventory : NetworkBehaviour
         NotifyPostItsChanged();
         NotifyPublicVisualsChanged();
         NotifyGuessItemsChanged();
+        NotifyEffectsChanged();
+    }
+
+    public override void OnNetworkPreDespawn()
+    {
+        if (IsServer && !ServerClearEffects())
+        {
+            Debug.LogError(
+                $"[{nameof(PlayerPostItInventory)}] Failed to clear effects before network despawn.",
+                this);
+        }
+
+        base.OnNetworkPreDespawn();
     }
 
     public override void OnNetworkDespawn()
@@ -126,6 +161,7 @@ public class PlayerPostItInventory : NetworkBehaviour
         UnsubscribeFromNetworkPostIts();
         UnsubscribeFromNetworkPublicVisuals();
         UnsubscribeFromNetworkGuessItems();
+        UnsubscribeFromEffects();
         base.OnNetworkDespawn();
     }
 
@@ -137,6 +173,38 @@ public class PlayerPostItInventory : NetworkBehaviour
     public IReadOnlyList<PostItPublicVisualData> PublicVisualItems => _publicVisuals;
     public int GuessItemCount => _guessItems.Count;
     public IReadOnlyList<PostItGuessOwnerData> GuessItems => _guessItems;
+    public int GuardCharges =>
+        _guardCharges != null && CanReadPrivateEffectState()
+        ? Mathf.Clamp(_guardCharges.Value, 0, MaximumGuardCharges)
+        : 0;
+    public bool IsHeavyActive => HeavyRemainingSeconds > 0f;
+    public float HeavyRemainingSeconds
+    {
+        get
+        {
+            if (!CanReadPrivateEffectState() || _heavyUntilServerTime == null)
+            {
+                return 0f;
+            }
+
+            double serverTime = GetAuthoritativeServerTime();
+            double deadline = _heavyUntilServerTime.Value;
+            if (!IsFiniteNonNegative(serverTime) || !IsFiniteNonNegative(deadline))
+            {
+                return 0f;
+            }
+
+            double remainingSeconds = deadline - serverTime;
+            if (!IsFiniteNonNegative(remainingSeconds) || remainingSeconds <= 0d)
+            {
+                return 0f;
+            }
+
+            return remainingSeconds >= float.MaxValue
+                ? float.MaxValue
+                : (float)remainingSeconds;
+        }
+    }
 
     public PostItRuntimeData[] GetSnapshot()
     {
@@ -302,7 +370,200 @@ public class PlayerPostItInventory : NetworkBehaviour
             return;
         }
 
-        ClearAuthoritativeStorage();
+        int previousGuardCharges = _guardCharges.Value;
+        double previousHeavyDeadline = _heavyUntilServerTime.Value;
+        if (!ServerClearEffects())
+        {
+            Debug.LogError(
+                $"[{nameof(PlayerPostItInventory)}] Blocked post-it clear because effects could not be cleared.",
+                this);
+            return;
+        }
+
+        bool clearReportedSuccess = false;
+        try
+        {
+            clearReportedSuccess = ClearAuthoritativeStorage();
+        }
+        catch (Exception exception)
+        {
+            Debug.LogException(exception, this);
+        }
+
+        if (clearReportedSuccess || Count == 0)
+        {
+            return;
+        }
+
+        if (!TrySetEffectState(previousGuardCharges, previousHeavyDeadline))
+        {
+            Debug.LogError(
+                $"[{nameof(PlayerPostItInventory)}] Failed to restore effects after post-it clear failure.",
+                this);
+        }
+    }
+
+    public bool ServerTryActivateGuard()
+    {
+        if (!CanUseServerEffectState() ||
+            !IsPlayingState() ||
+            _guardCharges.Value >= MaximumGuardCharges ||
+            !TrySelectFirstEffectCard(
+                PostItType.Bonus,
+                GuardVisualId,
+                out PostItRuntimeData guardCard))
+        {
+            return false;
+        }
+
+        int previousGuardCharges = _guardCharges.Value;
+        double previousHeavyDeadline = _heavyUntilServerTime.Value;
+        if (!TryRemoveEffectCardForUse(guardCard, out PostItRuntimeData removedCard))
+        {
+            return false;
+        }
+
+        if (TrySetEffectState(MaximumGuardCharges, previousHeavyDeadline))
+        {
+            Log($"Activated Guard. postItId={guardCard.PostItId}");
+            return true;
+        }
+
+        if (EffectStateMatches(MaximumGuardCharges, previousHeavyDeadline))
+        {
+            LogAuthorityRecovery("Guard activation", removedCard.PostItId);
+            return true;
+        }
+
+        if (!EffectStateMatches(previousGuardCharges, previousHeavyDeadline))
+        {
+            TrySetEffectState(previousGuardCharges, previousHeavyDeadline);
+        }
+
+        if (EffectStateMatches(previousGuardCharges, previousHeavyDeadline))
+        {
+            TryRestoreEffectCard(removedCard, "Guard activation failure");
+            return false;
+        }
+
+        LogIrrecoverableEffectTransaction("Guard activation", removedCard.PostItId);
+
+        return false;
+    }
+
+    public bool ServerTryConsumeGuardAgainstPeel()
+    {
+        if (!CanUseServerEffectState() ||
+            !IsPlayingState() ||
+            _guardCharges.Value <= 0)
+        {
+            return false;
+        }
+
+        int desiredGuardCharges = _guardCharges.Value - 1;
+        if (!TrySetEffectState(desiredGuardCharges, _heavyUntilServerTime.Value))
+        {
+            return false;
+        }
+
+        Log("Consumed one Guard charge against Peel.");
+        return true;
+    }
+
+    public bool ServerTryApplyHeavy(PlayerPostItInventory targetInventory)
+    {
+        if (!CanUseServerEffectState() ||
+            !IsPlayingState() ||
+            targetInventory == null ||
+            targetInventory == this ||
+            targetInventory.NetworkManager != NetworkManager ||
+            !targetInventory.CanUseServerEffectState() ||
+            !TrySelectFirstEffectCard(
+                PostItType.Penalty,
+                HeavyVisualId,
+                out PostItRuntimeData heavyCard))
+        {
+            return false;
+        }
+
+        double serverTime = GetAuthoritativeServerTime();
+        double desiredDeadline = serverTime + HeavyDurationSeconds;
+        if (!IsFiniteNonNegative(serverTime) ||
+            !IsFiniteNonNegative(desiredDeadline))
+        {
+            return false;
+        }
+
+        int previousTargetGuardCharges = targetInventory._guardCharges.Value;
+        double previousTargetHeavyDeadline = targetInventory._heavyUntilServerTime.Value;
+        if (!TryRemoveEffectCardForUse(heavyCard, out PostItRuntimeData removedCard))
+        {
+            return false;
+        }
+
+        if (targetInventory.TrySetEffectState(
+                previousTargetGuardCharges,
+                desiredDeadline))
+        {
+            Log(
+                $"Applied Heavy. postItId={heavyCard.PostItId}, " +
+                $"targetOwnerClientId={targetInventory.OwnerClientId}");
+            return true;
+        }
+
+        if (targetInventory.EffectStateMatches(
+                previousTargetGuardCharges,
+                desiredDeadline))
+        {
+            LogAuthorityRecovery("Heavy application", removedCard.PostItId);
+            return true;
+        }
+
+        if (!targetInventory.EffectStateMatches(
+                previousTargetGuardCharges,
+                previousTargetHeavyDeadline))
+        {
+            targetInventory.TrySetEffectState(
+                previousTargetGuardCharges,
+                previousTargetHeavyDeadline);
+        }
+
+        if (targetInventory.EffectStateMatches(
+                previousTargetGuardCharges,
+                previousTargetHeavyDeadline))
+        {
+            TryRestoreEffectCard(removedCard, "Heavy application failure");
+            return false;
+        }
+
+        LogIrrecoverableEffectTransaction("Heavy application", removedCard.PostItId);
+
+        return false;
+    }
+
+    public float ServerGetHeavyMovementScale()
+    {
+        return IsHeavyActive ? HeavyMovementScale : 1f;
+    }
+
+    public bool ServerCanSprint()
+    {
+        return !IsHeavyActive;
+    }
+
+    public bool ServerCanJump()
+    {
+        return !IsHeavyActive;
+    }
+
+    public bool ServerClearEffects()
+    {
+        if (!CanUseServerEffectState())
+        {
+            return false;
+        }
+
+        return TrySetEffectState(0, 0d);
     }
 
     public bool ServerReplaceGuessItems(IReadOnlyList<PostItGuessOwnerData> guessItems)
@@ -676,6 +937,34 @@ public class PlayerPostItInventory : NetworkBehaviour
         _hasSubscribedToNetworkGuessItems = false;
     }
 
+    private void SubscribeToEffects()
+    {
+        if (_hasSubscribedToEffects ||
+            _guardCharges == null ||
+            _heavyUntilServerTime == null)
+        {
+            return;
+        }
+
+        _guardCharges.OnValueChanged += OnGuardChargesChanged;
+        _heavyUntilServerTime.OnValueChanged += OnHeavyUntilServerTimeChanged;
+        _hasSubscribedToEffects = true;
+    }
+
+    private void UnsubscribeFromEffects()
+    {
+        if (!_hasSubscribedToEffects ||
+            _guardCharges == null ||
+            _heavyUntilServerTime == null)
+        {
+            return;
+        }
+
+        _guardCharges.OnValueChanged -= OnGuardChargesChanged;
+        _heavyUntilServerTime.OnValueChanged -= OnHeavyUntilServerTimeChanged;
+        _hasSubscribedToEffects = false;
+    }
+
     private void OnNetworkPostItsChanged(NetworkListEvent<PostItRuntimeData> changeEvent)
     {
         RebuildLocalMirrorFromNetworkList();
@@ -724,6 +1013,18 @@ public class PlayerPostItInventory : NetworkBehaviour
                 $"type={changeEvent.Type}, index={changeEvent.Index}, count={_guessItems.Count}",
                 this);
         }
+    }
+
+    private void OnGuardChargesChanged(int previousValue, int currentValue)
+    {
+        NotifyEffectsChanged();
+        Log($"Guard charges changed. previous={previousValue}, current={currentValue}");
+    }
+
+    private void OnHeavyUntilServerTimeChanged(double previousValue, double currentValue)
+    {
+        NotifyEffectsChanged();
+        Log($"Heavy deadline changed. previous={previousValue}, current={currentValue}");
     }
 
     private void RebuildLocalMirrorFromNetworkList()
@@ -796,6 +1097,11 @@ public class PlayerPostItInventory : NetworkBehaviour
     private void NotifyGuessItemsChanged()
     {
         GuessItemsChanged?.Invoke();
+    }
+
+    private void NotifyEffectsChanged()
+    {
+        EffectsChanged?.Invoke();
     }
 
     private bool ValidateGuessReplacement(IReadOnlyList<PostItGuessOwnerData> guessItems)
@@ -1297,6 +1603,277 @@ public class PlayerPostItInventory : NetworkBehaviour
         NotifyPostItsChanged();
         RebuildLocalPublicVisualsFromPrivateMirrorAndNotify();
         return true;
+    }
+
+    private bool TrySelectFirstEffectCard(
+        PostItType requiredType,
+        int requiredVisualId,
+        out PostItRuntimeData selectedCard)
+    {
+        selectedCard = PostItRuntimeData.Invalid;
+        bool found = false;
+        for (int i = 0; i < _postIts.Count; i++)
+        {
+            PostItRuntimeData candidate = _postIts[i];
+            if (!IsOwnedEffectCard(candidate, requiredType, requiredVisualId))
+            {
+                continue;
+            }
+
+            if (!found ||
+                candidate.SlotIndex < selectedCard.SlotIndex ||
+                (candidate.SlotIndex == selectedCard.SlotIndex &&
+                 candidate.PostItId < selectedCard.PostItId))
+            {
+                selectedCard = candidate;
+                found = true;
+            }
+        }
+
+        return found;
+    }
+
+    private bool IsOwnedEffectCard(
+        PostItRuntimeData data,
+        PostItType requiredType,
+        int requiredVisualId)
+    {
+        if (!data.IsValid ||
+            data.Type != requiredType ||
+            data.TopicId != PostItTopicId.None ||
+            data.VisualId != requiredVisualId ||
+            data.SlotIndex < 0)
+        {
+            return false;
+        }
+
+        return !TryResolveOwnerClientId(out ulong ownerClientId) ||
+               data.HolderClientId == ownerClientId;
+    }
+
+    private bool TrySetEffectState(int guardCharges, double heavyUntilServerTime)
+    {
+        if (!CanUseServerEffectState() ||
+            guardCharges < 0 ||
+            guardCharges > MaximumGuardCharges ||
+            !IsFiniteNonNegative(heavyUntilServerTime))
+        {
+            return false;
+        }
+
+        int previousGuardCharges = _guardCharges.Value;
+        double previousHeavyDeadline = _heavyUntilServerTime.Value;
+        if (previousGuardCharges == guardCharges &&
+            previousHeavyDeadline.Equals(heavyUntilServerTime))
+        {
+            return true;
+        }
+
+        try
+        {
+            if (previousGuardCharges != guardCharges)
+            {
+                _guardCharges.Value = guardCharges;
+            }
+
+            if (!previousHeavyDeadline.Equals(heavyUntilServerTime))
+            {
+                _heavyUntilServerTime.Value = heavyUntilServerTime;
+            }
+        }
+        catch (Exception exception)
+        {
+            Debug.LogException(exception, this);
+        }
+
+        if (EffectStateMatches(guardCharges, heavyUntilServerTime))
+        {
+            if (!IsSpawnedNetworkSession())
+            {
+                NotifyEffectsChanged();
+            }
+
+            return true;
+        }
+
+        try
+        {
+            if (_guardCharges.Value != previousGuardCharges)
+            {
+                _guardCharges.Value = previousGuardCharges;
+            }
+
+            if (!_heavyUntilServerTime.Value.Equals(previousHeavyDeadline))
+            {
+                _heavyUntilServerTime.Value = previousHeavyDeadline;
+            }
+        }
+        catch (Exception exception)
+        {
+            Debug.LogException(exception, this);
+        }
+
+        if (!EffectStateMatches(previousGuardCharges, previousHeavyDeadline))
+        {
+            Debug.LogError(
+                $"[{nameof(PlayerPostItInventory)}] Failed to roll back effect state.",
+                this);
+        }
+
+        return false;
+    }
+
+    private bool EffectStateMatches(int guardCharges, double heavyUntilServerTime)
+    {
+        return _guardCharges != null &&
+               _heavyUntilServerTime != null &&
+               _guardCharges.Value == guardCharges &&
+               _heavyUntilServerTime.Value.Equals(heavyUntilServerTime);
+    }
+
+    private bool TryRemoveEffectCardForUse(
+        PostItRuntimeData expectedCard,
+        out PostItRuntimeData removedCard)
+    {
+        removedCard = PostItRuntimeData.Invalid;
+        bool reportedSuccess = false;
+        try
+        {
+            reportedSuccess = ServerTryRemovePostIt(
+                expectedCard.PostItId,
+                out removedCard);
+        }
+        catch (Exception exception)
+        {
+            Debug.LogException(exception, this);
+        }
+
+        if (reportedSuccess && removedCard.Equals(expectedCard))
+        {
+            return true;
+        }
+
+        if (removedCard.IsValid && !removedCard.Equals(expectedCard))
+        {
+            if (!ContainsPostIt(removedCard.PostItId))
+            {
+                TryRestoreEffectCard(removedCard, "effect card mismatch");
+            }
+
+            return false;
+        }
+
+        if (ContainsPostIt(expectedCard.PostItId))
+        {
+            return false;
+        }
+
+        removedCard = expectedCard;
+        LogAuthorityRecovery("effect card removal", expectedCard.PostItId);
+        return true;
+    }
+
+    private bool TryRestoreEffectCard(PostItRuntimeData removedCard, string reason)
+    {
+        try
+        {
+            if (ServerTryAddPostIt(removedCard, out PostItRuntimeData restoredCard) &&
+                restoredCard.Equals(removedCard))
+            {
+                return true;
+            }
+        }
+        catch (Exception exception)
+        {
+            Debug.LogException(exception, this);
+        }
+
+        if (TryGetPostIt(removedCard.PostItId, out PostItRuntimeData currentCard) &&
+            currentCard.Equals(removedCard))
+        {
+            return true;
+        }
+
+        LogEffectRollbackError(reason, removedCard.PostItId);
+        return false;
+    }
+
+    private void LogEffectRollbackError(string operation, int postItId)
+    {
+        Debug.LogError(
+            $"[{nameof(PlayerPostItInventory)}] Failed to roll back {operation}. " +
+            $"postItId={postItId}",
+            this);
+    }
+
+    private void LogAuthorityRecovery(string operation, int postItId)
+    {
+        Debug.LogError(
+            $"[{nameof(PlayerPostItInventory)}] Reconciled {operation} from observed server state. " +
+            $"postItId={postItId}",
+            this);
+    }
+
+    private void LogIrrecoverableEffectTransaction(string operation, int postItId)
+    {
+        Debug.LogError(
+            $"[{nameof(PlayerPostItInventory)}] {operation} could not restore either the previous " +
+            $"or desired effect state. The card remains consumed to prevent duplication. " +
+            $"postItId={postItId}",
+            this);
+    }
+
+    private bool CanReadPrivateEffectState()
+    {
+        if (NetworkManager == null || !NetworkManager.IsListening)
+        {
+            return true;
+        }
+
+        return IsServer || (IsSpawned && IsOwner);
+    }
+
+    private bool CanUseServerEffectState()
+    {
+        if (_guardCharges == null ||
+            _heavyUntilServerTime == null ||
+            !CanMutateServerState())
+        {
+            return false;
+        }
+
+        if (NetworkManager == null || !NetworkManager.IsListening)
+        {
+            return true;
+        }
+
+        return IsServer &&
+               IsSpawned &&
+               NetworkObject != null &&
+               NetworkObject.IsSpawned;
+    }
+
+    private double GetAuthoritativeServerTime()
+    {
+        if (NetworkManager != null && NetworkManager.IsListening)
+        {
+            return NetworkManager.ServerTime.Time;
+        }
+
+        return Time.unscaledTimeAsDouble;
+    }
+
+    private static bool IsFiniteNonNegative(double value)
+    {
+        return !double.IsNaN(value) &&
+               !double.IsInfinity(value) &&
+               value >= 0d;
+    }
+
+    private static bool IsPlayingState()
+    {
+        GameStateManager manager = FindFirstObjectByType<GameStateManager>();
+        return manager != null && manager.GetState() == GameStateManager.GameState.Playing;
     }
 
     private bool NetworkListContainsPostIt(int postItId)
