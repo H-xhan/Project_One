@@ -163,6 +163,24 @@ public class PlayerHub : NetworkBehaviour
     private bool _cameraSmoothingWasSnappingLastFrame;
     private string _lastCameraSmoothingSnapReason;
     private bool _cameraWasObstructedLastFrame;
+    private bool _hasLocalCameraOverride;
+    private bool _isLocalCameraOverrideMutationInProgress;
+    private UnityEngine.Object _localCameraOverrideRequester;
+    private Camera _localCameraOverrideCamera;
+    private AudioListener _localCameraOverrideAudioListener;
+    private GameObject _localCameraOverrideGameObject;
+    private Camera _localCameraOverrideOriginalPlayerCamera;
+    private AudioListener _localCameraOverrideOriginalPlayerAudioListener;
+    private GameObject _localCameraOverrideOriginalPlayerCameraGameObject;
+    private bool _localCameraOverrideOriginalPlayerCameraEnabled;
+    private string _localCameraOverrideOriginalPlayerCameraTag;
+    private bool _localCameraOverrideOriginalPlayerAudioListenerEnabled;
+    private bool _localCameraOverrideCameraGameObjectWasActive;
+    private bool _localCameraOverrideCameraEnabled;
+    private string _localCameraOverrideCameraOriginalTag;
+    private bool _localCameraOverrideAudioListenerEnabled;
+    private Camera _localCameraHandoffPreservedCamera;
+    private AudioListener _localCameraHandoffPreservedAudioListener;
     private SugaActiveRagdollController _activeRagdollController;
     private bool _activeRagdollControllerResolveAttempted;
     private Vector3 _ragdollCameraFocusLocalOffset;
@@ -248,6 +266,14 @@ public class PlayerHub : NetworkBehaviour
     public CharacterController CharacterController => GetComponentInChildren<CharacterController>(true);
     public Animator Animator => GetComponentInChildren<Animator>(true);
     public Camera PlayerCamera => GetComponentInChildren<Camera>(true);
+    public bool IsLocalCameraOverrideActive =>
+        _hasLocalCameraOverride &&
+        !_isLocalCameraOverrideMutationInProgress &&
+        _localCameraOverrideRequester != null &&
+        _localCameraOverrideCamera != null &&
+        _localCameraOverrideAudioListener != null;
+    public Camera ActiveLocalCamera =>
+        IsLocalCameraOverrideActive ? _localCameraOverrideCamera : PlayerCamera;
     public PlayerCoinWalletModule CoinWalletModule => coinWalletModule;
     public PlayerStaminaModule StaminaModule => staminaModule;
     public PostItPeelHoldState CurrentPostItPeelHoldState => _postItPeelHoldState;
@@ -340,6 +366,7 @@ public class PlayerHub : NetworkBehaviour
 
     public override void OnNetworkDespawn()
     {
+        ForceEndLocalCameraOverride(false);
         ResetPostItPeelHoldState();
         UnsubscribePostItEffectChanges();
         ReleaseOwnedPostItHeavyJumpLock();
@@ -351,12 +378,14 @@ public class PlayerHub : NetworkBehaviour
 
     private void OnDisable()
     {
+        ForceEndLocalCameraOverride(false);
         ResetPostItPeelHoldState();
         ResetCameraPositionSmoothingState();
     }
 
     private void OnDestroy()
     {
+        ForceEndLocalCameraOverride(false);
         ResetPostItPeelHoldState();
         UnsubscribePostItEffectChanges();
         ReleaseOwnedPostItHeavyJumpLock();
@@ -476,11 +505,141 @@ public class PlayerHub : NetworkBehaviour
         return _activeRagdollController;
     }
 
+    public bool TryBeginLocalCameraOverride(
+        UnityEngine.Object requester,
+        Camera overrideCamera,
+        AudioListener overrideAudioListener)
+    {
+        if (_isLocalCameraOverrideMutationInProgress)
+            return false;
+
+        if (_hasLocalCameraOverride)
+        {
+            return IsLocalCameraOverrideActive &&
+                   ReferenceEquals(_localCameraOverrideRequester, requester) &&
+                   ReferenceEquals(_localCameraOverrideCamera, overrideCamera) &&
+                   ReferenceEquals(_localCameraOverrideAudioListener, overrideAudioListener);
+        }
+
+        if (requester == null ||
+            overrideCamera == null ||
+            overrideAudioListener == null ||
+            overrideAudioListener.gameObject != overrideCamera.gameObject ||
+            !IsOwner ||
+            !IsSpawned ||
+            !isActiveAndEnabled ||
+            statusModule == null ||
+            !statusModule.IsEliminated ||
+            !TryGetGameState(out GameStateManager.GameState state) ||
+            state != GameStateManager.GameState.Playing)
+        {
+            return false;
+        }
+
+        Camera playerCamera = PlayerCamera;
+        if (playerCamera == null || playerCamera == overrideCamera)
+            return false;
+
+        GameObject overrideGameObject = overrideCamera.gameObject;
+        GameObject playerCameraGameObject = playerCamera.gameObject;
+        Scene overrideScene = overrideGameObject.scene;
+        if (!overrideScene.IsValid() ||
+            !overrideScene.isLoaded ||
+            overrideGameObject.GetComponentInParent<NetworkObject>(true) != null ||
+            overrideAudioListener.GetComponentInParent<NetworkObject>(true) != null)
+        {
+            return false;
+        }
+
+        AudioListener playerAudioListener = audioListener != null
+            ? audioListener
+            : playerCamera.GetComponent<AudioListener>();
+
+        bool originalPlayerCameraEnabled;
+        string originalPlayerCameraTag;
+        bool originalPlayerAudioListenerEnabled;
+        bool overrideCameraGameObjectWasActive;
+        bool overrideCameraEnabled;
+        string overrideCameraOriginalTag;
+        bool overrideAudioListenerEnabled;
+
+        try
+        {
+            originalPlayerCameraEnabled = playerCamera.enabled;
+            originalPlayerCameraTag = playerCameraGameObject.tag;
+            originalPlayerAudioListenerEnabled =
+                playerAudioListener != null && playerAudioListener.enabled;
+            overrideCameraGameObjectWasActive = overrideGameObject.activeSelf;
+            overrideCameraEnabled = overrideCamera.enabled;
+            overrideCameraOriginalTag = overrideGameObject.tag;
+            overrideAudioListenerEnabled = overrideAudioListener.enabled;
+        }
+        catch (System.Exception)
+        {
+            return false;
+        }
+
+        _localCameraOverrideRequester = requester;
+        _localCameraOverrideCamera = overrideCamera;
+        _localCameraOverrideAudioListener = overrideAudioListener;
+        _localCameraOverrideGameObject = overrideGameObject;
+        _localCameraOverrideOriginalPlayerCamera = playerCamera;
+        _localCameraOverrideOriginalPlayerAudioListener = playerAudioListener;
+        _localCameraOverrideOriginalPlayerCameraGameObject = playerCameraGameObject;
+        _localCameraOverrideOriginalPlayerCameraEnabled = originalPlayerCameraEnabled;
+        _localCameraOverrideOriginalPlayerCameraTag = originalPlayerCameraTag;
+        _localCameraOverrideOriginalPlayerAudioListenerEnabled = originalPlayerAudioListenerEnabled;
+        _localCameraOverrideCameraGameObjectWasActive = overrideCameraGameObjectWasActive;
+        _localCameraOverrideCameraEnabled = overrideCameraEnabled;
+        _localCameraOverrideCameraOriginalTag = overrideCameraOriginalTag;
+        _localCameraOverrideAudioListenerEnabled = overrideAudioListenerEnabled;
+        _hasLocalCameraOverride = true;
+        _isLocalCameraOverrideMutationInProgress = true;
+
+        try
+        {
+            ApplyLocalCameraOverridePresentation();
+            ClearPendingGameplayInput();
+            ResetCameraPositionSmoothingState();
+            _isLocalCameraOverrideMutationInProgress = false;
+            if (!IsLocalCameraOverridePresentationValid())
+            {
+                ForceEndLocalCameraOverride(false, true);
+                return false;
+            }
+
+            return true;
+        }
+        catch (System.Exception)
+        {
+            _isLocalCameraOverrideMutationInProgress = false;
+            ForceEndLocalCameraOverride(false, true);
+            return false;
+        }
+    }
+
+    public bool TryEndLocalCameraOverride(UnityEngine.Object requester)
+    {
+        if (!IsLocalCameraOverrideActive ||
+            requester == null ||
+            !ReferenceEquals(_localCameraOverrideRequester, requester))
+        {
+            return false;
+        }
+
+        ForceEndLocalCameraOverride(true);
+        return true;
+    }
+
     private void ApplyOwnerVisuals()
     {
         bool active = IsOwner;
+        if (!active && _hasLocalCameraOverride)
+            ForceEndLocalCameraOverride(false);
+
         if (cameraRoot != null) cameraRoot.SetActive(active);
-        if (audioListener != null) audioListener.enabled = active;
+        if (audioListener != null)
+            audioListener.enabled = active && !_hasLocalCameraOverride;
         if (interactModule != null) interactModule.SetOwnerMode(active);
 
         ApplyInputRouteOwnerCameraHandoff();
@@ -714,6 +873,16 @@ public class PlayerHub : NetworkBehaviour
 
     private void TickOwner()
     {
+        if (_hasLocalCameraOverride)
+        {
+            ClearPendingGameplayInput();
+            if (IsOwner && IsSpawned)
+                SubmitInputServerRpc(Vector2.zero, 0f, false);
+
+            ApplyInputRouteOwnerCameraHandoff();
+            return;
+        }
+
         if (inputModule == null)
         {
             CancelPostItPeelHold();
@@ -2734,6 +2903,33 @@ public class PlayerHub : NetworkBehaviour
 
     private void ApplyInputRouteOwnerCameraHandoff()
     {
+        if (_hasLocalCameraOverride)
+        {
+            bool restoreOwnerPresentation = IsOwner && IsSpawned && isActiveAndEnabled;
+            if (!IsLocalCameraOverridePresentationValid())
+            {
+                ForceEndLocalCameraOverride(restoreOwnerPresentation);
+                return;
+            }
+
+            bool presentationApplied = false;
+            _isLocalCameraOverrideMutationInProgress = true;
+            try
+            {
+                ApplyLocalCameraOverridePresentation();
+                presentationApplied = true;
+            }
+            catch (System.Exception)
+            {
+            }
+
+            _isLocalCameraOverrideMutationInProgress = false;
+            if (!presentationApplied || !IsLocalCameraOverridePresentationValid())
+                ForceEndLocalCameraOverride(restoreOwnerPresentation);
+
+            return;
+        }
+
         if (!IsInputRouteTarget())
             return;
 
@@ -2764,6 +2960,192 @@ public class PlayerHub : NetworkBehaviour
         EnsureOwnerAudioListener(playerCamera);
         DisableCompetingMainCameras(playerCamera);
         DisableCompetingAudioListeners(audioListener);
+    }
+
+    private bool IsLocalCameraOverridePresentationValid()
+    {
+        if (!IsLocalCameraOverrideActive ||
+            !IsOwner ||
+            !IsSpawned ||
+            !isActiveAndEnabled ||
+            statusModule == null ||
+            !statusModule.IsEliminated ||
+            !TryGetGameState(out GameStateManager.GameState state) ||
+            state != GameStateManager.GameState.Playing ||
+            _localCameraOverrideGameObject == null ||
+            _localCameraOverrideOriginalPlayerCamera == null ||
+            _localCameraOverrideOriginalPlayerCameraGameObject == null ||
+            _localCameraOverrideCamera.gameObject != _localCameraOverrideGameObject ||
+            _localCameraOverrideAudioListener.gameObject != _localCameraOverrideGameObject)
+        {
+            return false;
+        }
+
+        Camera playerCamera = PlayerCamera;
+        if (playerCamera == null ||
+            playerCamera != _localCameraOverrideOriginalPlayerCamera ||
+            playerCamera.gameObject != _localCameraOverrideOriginalPlayerCameraGameObject ||
+            playerCamera == _localCameraOverrideCamera)
+        {
+            return false;
+        }
+
+        Scene overrideScene = _localCameraOverrideGameObject.scene;
+        return overrideScene.IsValid() &&
+               overrideScene.isLoaded &&
+               _localCameraOverrideGameObject.GetComponentInParent<NetworkObject>(true) == null &&
+               _localCameraOverrideAudioListener.GetComponentInParent<NetworkObject>(true) == null;
+    }
+
+    private void ApplyLocalCameraOverridePresentation()
+    {
+        if (cameraRoot != null && !cameraRoot.activeSelf)
+            cameraRoot.SetActive(true);
+
+        if (_localCameraOverrideOriginalPlayerCamera != null)
+            _localCameraOverrideOriginalPlayerCamera.enabled = false;
+
+        if (_localCameraOverrideOriginalPlayerAudioListener != null)
+            _localCameraOverrideOriginalPlayerAudioListener.enabled = false;
+
+        if (_localCameraOverrideOriginalPlayerCameraGameObject != null)
+            _localCameraOverrideOriginalPlayerCameraGameObject.tag = "Untagged";
+
+        if (!_localCameraOverrideGameObject.activeSelf)
+            _localCameraOverrideGameObject.SetActive(true);
+
+        _localCameraOverrideCamera.enabled = true;
+        _localCameraOverrideGameObject.tag = RuntimeMainCameraTag;
+        _localCameraOverrideAudioListener.enabled = true;
+        DisableCompetingMainCameras(_localCameraOverrideCamera);
+        DisableCompetingAudioListeners(_localCameraOverrideAudioListener);
+    }
+
+    private void ForceEndLocalCameraOverride(
+        bool restoreOwnerPresentation,
+        bool restoreOriginalPlayerSnapshot = false)
+    {
+        if (!_hasLocalCameraOverride || _isLocalCameraOverrideMutationInProgress)
+            return;
+
+        Camera restoredOverrideCamera = _localCameraOverrideCamera;
+        AudioListener restoredOverrideAudioListener =
+            _localCameraOverrideAudioListener;
+        _isLocalCameraOverrideMutationInProgress = true;
+        RestoreLocalCameraOverrideSnapshot(
+            restoreOwnerPresentation || restoreOriginalPlayerSnapshot);
+        ClearLocalCameraOverrideState();
+        ResetCameraPositionSmoothingState();
+
+        if (restoreOwnerPresentation && IsOwner && IsSpawned && isActiveAndEnabled)
+        {
+            _localCameraHandoffPreservedCamera = restoredOverrideCamera;
+            _localCameraHandoffPreservedAudioListener = restoredOverrideAudioListener;
+            try
+            {
+                ApplyInputRouteOwnerCameraHandoff();
+            }
+            catch (System.Exception)
+            {
+            }
+            finally
+            {
+                _localCameraHandoffPreservedCamera = null;
+                _localCameraHandoffPreservedAudioListener = null;
+            }
+        }
+
+        _isLocalCameraOverrideMutationInProgress = false;
+    }
+
+    private void RestoreLocalCameraOverrideSnapshot(
+        bool restoreOriginalPlayerSnapshot)
+    {
+        try
+        {
+            if (_localCameraOverrideCamera != null)
+                _localCameraOverrideCamera.enabled = _localCameraOverrideCameraEnabled;
+
+            if (_localCameraOverrideGameObject != null)
+                _localCameraOverrideGameObject.tag = _localCameraOverrideCameraOriginalTag;
+        }
+        catch (System.Exception)
+        {
+        }
+
+        try
+        {
+            if (_localCameraOverrideAudioListener != null)
+                _localCameraOverrideAudioListener.enabled = _localCameraOverrideAudioListenerEnabled;
+        }
+        catch (System.Exception)
+        {
+        }
+
+        try
+        {
+            if (_localCameraOverrideGameObject != null)
+            {
+                _localCameraOverrideGameObject.SetActive(
+                    _localCameraOverrideCameraGameObjectWasActive);
+            }
+        }
+        catch (System.Exception)
+        {
+        }
+
+        try
+        {
+            if (_localCameraOverrideOriginalPlayerCameraGameObject != null)
+            {
+                _localCameraOverrideOriginalPlayerCameraGameObject.tag =
+                    _localCameraOverrideOriginalPlayerCameraTag;
+            }
+
+            if (_localCameraOverrideOriginalPlayerCamera != null)
+            {
+                _localCameraOverrideOriginalPlayerCamera.enabled =
+                    restoreOriginalPlayerSnapshot &&
+                    _localCameraOverrideOriginalPlayerCameraEnabled;
+            }
+        }
+        catch (System.Exception)
+        {
+        }
+
+        try
+        {
+            if (_localCameraOverrideOriginalPlayerAudioListener != null)
+            {
+                _localCameraOverrideOriginalPlayerAudioListener.enabled =
+                    restoreOriginalPlayerSnapshot &&
+                    _localCameraOverrideOriginalPlayerAudioListenerEnabled;
+            }
+        }
+        catch (System.Exception)
+        {
+        }
+    }
+
+    private void ClearLocalCameraOverrideState()
+    {
+        _hasLocalCameraOverride = false;
+        _localCameraOverrideRequester = null;
+        _localCameraOverrideCamera = null;
+        _localCameraOverrideAudioListener = null;
+        _localCameraOverrideGameObject = null;
+        _localCameraOverrideOriginalPlayerCamera = null;
+        _localCameraOverrideOriginalPlayerAudioListener = null;
+        _localCameraOverrideOriginalPlayerCameraGameObject = null;
+        _localCameraOverrideOriginalPlayerCameraEnabled = false;
+        _localCameraOverrideOriginalPlayerCameraTag = null;
+        _localCameraOverrideOriginalPlayerAudioListenerEnabled = false;
+        _localCameraOverrideCameraGameObjectWasActive = false;
+        _localCameraOverrideCameraEnabled = false;
+        _localCameraOverrideCameraOriginalTag = null;
+        _localCameraOverrideAudioListenerEnabled = false;
+        _localCameraHandoffPreservedCamera = null;
+        _localCameraHandoffPreservedAudioListener = null;
     }
 
     private void EnsureMainCameraTag(Camera playerCamera)
@@ -2800,7 +3182,10 @@ public class PlayerHub : NetworkBehaviour
         for (int i = 0; i < cameras.Length; i++)
         {
             Camera candidate = cameras[i];
-            if (candidate == null || candidate == ownerCamera || !candidate.enabled)
+            if (candidate == null ||
+                candidate == ownerCamera ||
+                candidate == _localCameraHandoffPreservedCamera ||
+                !candidate.enabled)
                 continue;
 
             bool isSceneMainCamera = candidate.name == SceneMainCameraName;
@@ -2824,7 +3209,10 @@ public class PlayerHub : NetworkBehaviour
         for (int i = 0; i < listeners.Length; i++)
         {
             AudioListener candidate = listeners[i];
-            if (candidate == null || candidate == ownerListener || !candidate.enabled)
+            if (candidate == null ||
+                candidate == ownerListener ||
+                candidate == _localCameraHandoffPreservedAudioListener ||
+                !candidate.enabled)
                 continue;
 
             candidate.enabled = false;

@@ -923,12 +923,8 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
                 checkTf,
                 rootY,
                 eliminationCheckY);
-            ServerHandlePostItFallDrop(authoritativeFallPosition);
-
-            if (TryHandleCoinFallRespawn())
-                return;
-
-            HandleElimination(true);
+            ServerHandlePostItFallTransition(authoritativeFallPosition);
+            return;
         }
     }
 
@@ -1175,40 +1171,200 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
         return rootPosition;
     }
 
-    private void ServerHandlePostItFallDrop(Vector3 authoritativeFallPosition)
+    private void ServerHandlePostItFallTransition(Vector3 authoritativeFallPosition)
     {
-        if (!IsServer || _hasHandledPostItDropForCurrentFallTransition)
+        if (!IsServer || IsEliminated || _hasHandledPostItDropForCurrentFallTransition)
             return;
 
         _hasHandledPostItDropForCurrentFallTransition = true;
         if (!IsFiniteVector(authoritativeFallPosition))
+        {
+            FailPostItFallClosed("Authoritative fall position is not finite.");
             return;
+        }
 
         PlayerPostItInventory inventory = ResolvePostItInventory();
         PostItRoundManager roundManager = ResolvePostItRoundManager();
         PlayerHub ownerHub = ResolvePlayerHub();
         InGameMatchManager matchManager = ResolveInGameMatchManager();
-        if (inventory == null || roundManager == null || ownerHub == null || matchManager == null)
+        if (inventory == null ||
+            roundManager == null ||
+            !IsSpawned ||
+            rootNetObj == null ||
+            !rootNetObj.IsSpawned ||
+            !inventory.IsServer ||
+            !inventory.IsSpawned ||
+            inventory.GetComponentInParent<NetworkObject>() != rootNetObj ||
+            !roundManager.IsServer ||
+            !roundManager.IsSpawned ||
+            !TryGetGameStateManager(out GameStateManager manager) ||
+            manager.GetState() != GameStateManager.GameState.Playing)
+        {
+            FailPostItFallClosed("Server participant state is not valid for a post-it drop.");
             return;
+        }
 
-        bool hasFallbackPosition = matchManager.ServerTryResolveGameSpawnPose(
-            ownerHub,
-            out Vector3 fallbackPosition,
-            out _);
-
+        bool isCurrentPlayingParticipant;
         try
         {
-            roundManager.ServerTryDropHighestAcquiredPostIt(
-                inventory,
-                authoritativeFallPosition,
-                hasFallbackPosition,
-                fallbackPosition,
-                out _);
+            isCurrentPlayingParticipant =
+                roundManager.ServerIsCurrentPlayingParticipant(inventory);
         }
         catch (System.Exception exception)
         {
             Debug.LogException(exception, this);
+            FailPostItFallClosed(
+                "Current Playing participant validation threw an exception.");
+            return;
         }
+
+        if (!isCurrentPlayingParticipant)
+        {
+            FailPostItFallClosed(
+                "Player is not a current Playing post-it participant.");
+            return;
+        }
+
+        bool hasFallbackPosition = false;
+        Vector3 fallbackPosition = Vector3.zero;
+        if (ownerHub != null && matchManager != null)
+        {
+            try
+            {
+                hasFallbackPosition = matchManager.ServerTryResolveGameSpawnPose(
+                    ownerHub,
+                    out fallbackPosition,
+                    out _) &&
+                    IsFiniteVector(fallbackPosition);
+            }
+            catch (System.Exception exception)
+            {
+                Debug.LogException(exception, this);
+                hasFallbackPosition = false;
+            }
+
+            if (!hasFallbackPosition)
+                fallbackPosition = Vector3.zero;
+        }
+
+        bool dropSucceeded;
+        PostItWorldDropData droppedData;
+        int remainingPostItCount;
+        try
+        {
+            dropSucceeded = roundManager.ServerTryDropOnePostItForFall(
+                inventory,
+                authoritativeFallPosition,
+                hasFallbackPosition,
+                fallbackPosition,
+                out droppedData,
+                out remainingPostItCount);
+        }
+        catch (System.Exception exception)
+        {
+            Debug.LogException(exception, this);
+            FailPostItFallClosed("Post-it drop transaction threw an exception.");
+            return;
+        }
+
+        if (!dropSucceeded ||
+            !droppedData.IsValid ||
+            remainingPostItCount < 0 ||
+            inventory.Count != remainingPostItCount ||
+            !IsSpawned ||
+            rootNetObj == null ||
+            !rootNetObj.IsSpawned)
+        {
+            FailPostItFallClosed(
+                $"Post-it drop result failed validation. " +
+                $"success={dropSucceeded}, remaining={remainingPostItCount}.");
+            return;
+        }
+
+        if (remainingPostItCount == 0)
+        {
+            bool flushCompleted = false;
+            try
+            {
+                flushCompleted =
+                    roundManager.ServerFlushZeroPostItEliminations();
+            }
+            catch (System.Exception exception)
+            {
+                Debug.LogException(exception, this);
+            }
+
+            bool currentPlayerEliminated = IsEliminated;
+            if (!currentPlayerEliminated)
+            {
+                FailPostItFallClosed(
+                    "Zero-post-it flush did not eliminate current player.");
+                return;
+            }
+
+            if (!flushCompleted)
+            {
+                Debug.LogError(
+                    $"[PlayerStatus] Post-it zero flush did not complete although " +
+                    $"the current player is eliminated. postItId:{droppedData.PostItId}",
+                    this);
+                return;
+            }
+
+            Log(
+                $"[PlayerStatus] Post-it depletion elimination accepted after fall. " +
+                $"postItId:{droppedData.PostItId}, zeroFlushCompleted:true");
+            return;
+        }
+
+        if (IsEliminated)
+        {
+            FailPostItFallClosed(
+                "Player was unexpectedly eliminated before the respawn request.");
+            return;
+        }
+
+        if (ownerHub == null || matchManager == null)
+        {
+            FailPostItFallClosed(
+                "Respawn dependencies are missing after a committed post-it drop.");
+            return;
+        }
+
+        bool respawnRequestAccepted;
+        try
+        {
+            ResetStateForServerRespawn("PostItFallRespawn");
+            respawnRequestAccepted =
+                matchManager.ServerTryRespawnPlayerToGameSpawn(ownerHub);
+        }
+        catch (System.Exception exception)
+        {
+            Debug.LogException(exception, this);
+            FailPostItFallClosed("Post-it fall respawn request threw an exception.");
+            return;
+        }
+
+        if (!respawnRequestAccepted)
+        {
+            FailPostItFallClosed(
+                "Post-it fall respawn request was not accepted.");
+            return;
+        }
+
+        Log(
+            $"[PlayerStatus] Post-it fall respawn request accepted. " +
+            $"postItId:{droppedData.PostItId}, remaining:{remainingPostItCount}");
+    }
+
+    private void FailPostItFallClosed(string reason)
+    {
+        Debug.LogError(
+            $"[PlayerStatus] Post-it fall transition failed closed. {reason}",
+            this);
+
+        if (!IsEliminated)
+            HandleElimination(true);
     }
 
     private CoinSpawnManager ResolveCoinSpawnManager()
@@ -1299,7 +1455,6 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
         ClearTemporaryControlLockLocal();
         _didSyncRootFromRagdollForCurrentKnockback = false;
         _hasLastRagdollFocusForRootSync = false;
-        _hasHandledPostItDropForCurrentFallTransition = false;
         hasReachedSafePlayingPosition = false;
         hasLoggedEliminationGateState = false;
         if (locomotionModule != null)
