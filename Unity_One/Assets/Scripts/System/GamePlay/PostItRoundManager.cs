@@ -2647,6 +2647,246 @@ public class PostItRoundManager : NetworkBehaviour
         }
     }
 
+    public bool ServerTryDropOnePostItForFall(
+        PlayerPostItInventory sourceInventory,
+        Vector3 authoritativePosition,
+        bool hasFallbackPosition,
+        Vector3 fallbackPosition,
+        out PostItWorldDropData droppedData,
+        out int remainingPostItCount)
+    {
+        droppedData = PostItWorldDropData.Invalid;
+        remainingPostItCount = -1;
+
+        if (!CanMutateServerState() ||
+            !IsNetworkWorldStorageActive() ||
+            !IsPlayingState() ||
+            _isResettingWorldDrops ||
+            _worldDropMutationDepth != 0 ||
+            _claimedWorldDropIds.Count != 0 ||
+            sourceInventory == null ||
+            !IsValidServerInventory(sourceInventory) ||
+            !ServerIsCurrentPlayingParticipant(sourceInventory) ||
+            !IsFiniteVector(authoritativePosition) ||
+            (hasFallbackPosition && !IsFiniteVector(fallbackPosition)))
+        {
+            return false;
+        }
+
+        int beforeCount = sourceInventory.Count;
+        if (beforeCount <= 0 ||
+            !TrySelectPostItForFall(sourceInventory, out PostItRuntimeData selectedData))
+        {
+            return false;
+        }
+
+        ulong sourceOwnerClientId = ResolveInventoryOwnerClientId(sourceInventory);
+        if (!selectedData.IsValid ||
+            selectedData.SlotIndex < 0 ||
+            sourceOwnerClientId == ulong.MaxValue ||
+            selectedData.HolderClientId != sourceOwnerClientId ||
+            !sourceInventory.TryGetPostIt(
+                selectedData.PostItId,
+                out PostItRuntimeData currentData) ||
+            !currentData.Equals(selectedData))
+        {
+            return false;
+        }
+
+        if (CountAuthoritativePostItLocations(selectedData.PostItId) != 1 ||
+            HasFallDropWorldState(selectedData.PostItId))
+        {
+            LogWarning(
+                $"Rejected fall drop because the selected post-it state is not unique. " +
+                $"postItId={selectedData.PostItId}");
+            return false;
+        }
+
+        if (!TryResolveWorldDropPose(
+                selectedData.PostItId,
+                authoritativePosition,
+                hasFallbackPosition,
+                fallbackPosition,
+                out Vector3 dropPosition,
+                out Quaternion dropRotation))
+        {
+            LogWarning(
+                $"Rejected fall drop because no recoverable pose was found. " +
+                $"postItId={selectedData.PostItId}");
+            return false;
+        }
+
+        PostItRuntimeData expectedWorldPayload = PostItRuntimeData.Invalid;
+        PostItWorldDropData expectedPublicData = PostItWorldDropData.Invalid;
+        bool commitCandidate = false;
+
+        BeginWorldDropMutation();
+        try
+        {
+            if (!TryRemoveInventoryPostItForDrop(
+                    sourceInventory,
+                    selectedData,
+                    out PostItRuntimeData removedData))
+            {
+                return false;
+            }
+
+            if (!removedData.Equals(selectedData))
+            {
+                if (!RollBackInventoryAdd(
+                        sourceInventory,
+                        removedData,
+                        "fall drop selection mismatch"))
+                {
+                    PreserveRemovedPostItAsWorldDrop(
+                        removedData,
+                        dropPosition,
+                        dropRotation);
+                }
+
+                LogAuthorityError(
+                    $"Rejected fall drop because removed data did not match selection. " +
+                    $"postItId={selectedData.PostItId}");
+                return false;
+            }
+
+            expectedWorldPayload = new PostItRuntimeData(
+                removedData.PostItId,
+                removedData.Type,
+                removedData.TopicId,
+                removedData.VisualId,
+                removedData.OriginalOwnerClientId,
+                ulong.MaxValue,
+                -1);
+            expectedPublicData = new PostItWorldDropData(
+                expectedWorldPayload.PostItId,
+                expectedWorldPayload.Type,
+                expectedWorldPayload.VisualId,
+                false,
+                dropPosition,
+                dropRotation);
+
+            bool publishReportedSuccess =
+                TryAddWorldDrop(expectedWorldPayload, expectedPublicData);
+            if (TryValidateCommittedFallDrop(
+                    sourceInventory,
+                    beforeCount,
+                    selectedData,
+                    expectedWorldPayload,
+                    expectedPublicData,
+                    out _))
+            {
+                if (!publishReportedSuccess)
+                {
+                    LogAuthorityError(
+                        $"World drop publish reported failure after an exact fall commit. " +
+                        $"Reconciling from authoritative state. postItId={selectedData.PostItId}");
+                }
+
+                commitCandidate = true;
+            }
+            else if (publishReportedSuccess)
+            {
+                LogAuthorityError(
+                    $"Rejected fall drop after an incomplete reported commit. " +
+                    $"postItId={selectedData.PostItId}");
+                return false;
+            }
+            else if (HasFallDropWorldState(selectedData.PostItId))
+            {
+                LogAuthorityError(
+                    $"Rejected fall drop after a partial world state mutation. " +
+                    $"postItId={selectedData.PostItId}");
+                return false;
+            }
+            else
+            {
+                bool rollbackReportedSuccess = RollBackInventoryAdd(
+                    sourceInventory,
+                    removedData,
+                    "fall world drop publish failure");
+                if (rollbackReportedSuccess)
+                {
+                    if (!IsFallDropRollbackStateRestored(
+                            sourceInventory,
+                            beforeCount,
+                            selectedData))
+                    {
+                        LogAuthorityError(
+                            $"Fall drop rollback did not restore the exact prior state. " +
+                            $"postItId={selectedData.PostItId}");
+                    }
+
+                    return false;
+                }
+
+                if (sourceInventory.ContainsPostIt(selectedData.PostItId) ||
+                    sourceInventory.Count != beforeCount - 1)
+                {
+                    LogAuthorityError(
+                        $"Rejected fall drop because inventory state is uncertain after rollback failure. " +
+                        $"postItId={selectedData.PostItId}");
+                    return false;
+                }
+
+                bool preserveReportedSuccess =
+                    PreserveWorldDropPayload(expectedWorldPayload, expectedPublicData);
+                if (!TryValidateCommittedFallDrop(
+                        sourceInventory,
+                        beforeCount,
+                        selectedData,
+                        expectedWorldPayload,
+                        expectedPublicData,
+                        out _))
+                {
+                    LogAuthorityError(
+                        $"Rejected fall drop because preservation did not produce an exact commit. " +
+                        $"postItId={selectedData.PostItId}");
+                    return false;
+                }
+
+                if (!preserveReportedSuccess)
+                {
+                    LogAuthorityError(
+                        $"World drop preservation reported failure after an exact fall commit. " +
+                        $"Reconciling from authoritative state. postItId={selectedData.PostItId}");
+                }
+
+                commitCandidate = true;
+            }
+        }
+        finally
+        {
+            EndWorldDropMutation();
+        }
+
+        if (!commitCandidate ||
+            !TryValidateCommittedFallDrop(
+                sourceInventory,
+                beforeCount,
+                selectedData,
+                expectedWorldPayload,
+                expectedPublicData,
+                out PostItWorldDropData actualPublicData))
+        {
+            if (commitCandidate)
+            {
+                LogAuthorityError(
+                    $"Rejected fall drop because committed state changed during notification. " +
+                    $"postItId={selectedData.PostItId}");
+            }
+
+            return false;
+        }
+
+        droppedData = actualPublicData;
+        remainingPostItCount = sourceInventory.Count;
+        Log(
+            $"Dropped one post-it for fall. postItId={actualPublicData.PostItId}, " +
+            $"slot={selectedData.SlotIndex}, remaining={remainingPostItCount}");
+        return true;
+    }
+
     public bool ServerTryRecoverWorldDrop(
         PlayerPostItInventory requesterInventory,
         int postItId,
@@ -2988,6 +3228,146 @@ public class PostItRoundManager : NetworkBehaviour
         }
 
         return found;
+    }
+
+    private bool TrySelectPostItForFall(
+        PlayerPostItInventory sourceInventory,
+        out PostItRuntimeData selectedData)
+    {
+        selectedData = PostItRuntimeData.Invalid;
+        if (sourceInventory == null)
+            return false;
+
+        ulong sourceOwnerClientId = ResolveInventoryOwnerClientId(sourceInventory);
+        if (sourceOwnerClientId == ulong.MaxValue)
+            return false;
+
+        IReadOnlyList<PostItRuntimeData> items = sourceInventory.Items;
+        bool found = false;
+        bool foundAcquired = false;
+
+        for (int i = 0; i < items.Count; i++)
+        {
+            PostItRuntimeData candidate = items[i];
+            if (!candidate.IsValid ||
+                candidate.SlotIndex < 0 ||
+                candidate.HolderClientId != sourceOwnerClientId)
+            {
+                continue;
+            }
+
+            bool candidateIsAcquired =
+                candidate.OriginalOwnerClientId != candidate.HolderClientId;
+            if (foundAcquired && !candidateIsAcquired)
+                continue;
+
+            if (candidateIsAcquired && !foundAcquired)
+            {
+                selectedData = candidate;
+                found = true;
+                foundAcquired = true;
+                continue;
+            }
+
+            if (!found ||
+                candidate.SlotIndex > selectedData.SlotIndex ||
+                (candidate.SlotIndex == selectedData.SlotIndex &&
+                 candidate.PostItId < selectedData.PostItId))
+            {
+                selectedData = candidate;
+                found = true;
+            }
+        }
+
+        return found;
+    }
+
+    private bool TryValidateCommittedFallDrop(
+        PlayerPostItInventory sourceInventory,
+        int beforeCount,
+        PostItRuntimeData selectedData,
+        PostItRuntimeData expectedWorldPayload,
+        PostItWorldDropData expectedPublicData,
+        out PostItWorldDropData actualPublicData)
+    {
+        actualPublicData = PostItWorldDropData.Invalid;
+        if (sourceInventory == null ||
+            beforeCount <= 0 ||
+            !selectedData.IsValid ||
+            !expectedWorldPayload.IsValid ||
+            !expectedPublicData.IsValid ||
+            selectedData.PostItId != expectedWorldPayload.PostItId ||
+            expectedWorldPayload.PostItId != expectedPublicData.PostItId ||
+            sourceInventory.Count != beforeCount - 1 ||
+            sourceInventory.Count < 0 ||
+            sourceInventory.ContainsPostIt(selectedData.PostItId) ||
+            _claimedWorldDropIds.Contains(selectedData.PostItId) ||
+            !_worldDropPayloads.TryGetValue(
+                selectedData.PostItId,
+                out PostItRuntimeData actualWorldPayload) ||
+            !actualWorldPayload.Equals(expectedWorldPayload) ||
+            !TryGetWorldDrop(
+                selectedData.PostItId,
+                out PostItWorldDropData mirroredPublicData))
+        {
+            return false;
+        }
+
+        int networkMarkerCount = 0;
+        PostItWorldDropData networkPublicData = PostItWorldDropData.Invalid;
+        for (int i = 0; i < _networkWorldDrops.Count; i++)
+        {
+            PostItWorldDropData candidate = _networkWorldDrops[i];
+            if (candidate.PostItId != selectedData.PostItId)
+                continue;
+
+            networkMarkerCount++;
+            networkPublicData = candidate;
+        }
+
+        int mirrorMarkerCount = 0;
+        for (int i = 0; i < _worldDrops.Count; i++)
+        {
+            if (_worldDrops[i].PostItId == selectedData.PostItId)
+                mirrorMarkerCount++;
+        }
+
+        if (networkMarkerCount != 1 ||
+            mirrorMarkerCount != 1 ||
+            !networkPublicData.Equals(expectedPublicData) ||
+            !mirroredPublicData.Equals(expectedPublicData) ||
+            !networkPublicData.Equals(mirroredPublicData) ||
+            CountAuthoritativePostItLocations(selectedData.PostItId) != 1)
+        {
+            return false;
+        }
+
+        actualPublicData = mirroredPublicData;
+        return true;
+    }
+
+    private bool IsFallDropRollbackStateRestored(
+        PlayerPostItInventory sourceInventory,
+        int beforeCount,
+        PostItRuntimeData selectedData)
+    {
+        return sourceInventory != null &&
+               beforeCount > 0 &&
+               sourceInventory.Count == beforeCount &&
+               sourceInventory.TryGetPostIt(
+                   selectedData.PostItId,
+                   out PostItRuntimeData restoredData) &&
+               restoredData.Equals(selectedData) &&
+               !_claimedWorldDropIds.Contains(selectedData.PostItId) &&
+               !HasFallDropWorldState(selectedData.PostItId) &&
+               CountAuthoritativePostItLocations(selectedData.PostItId) == 1;
+    }
+
+    private bool HasFallDropWorldState(int postItId)
+    {
+        return _worldDropPayloads.ContainsKey(postItId) ||
+               FindNetworkWorldDropIndex(postItId) >= 0 ||
+               FindWorldDropIndex(postItId) >= 0;
     }
 
     private bool TryResolveMapSpawnPose(
