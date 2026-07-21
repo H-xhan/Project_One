@@ -6,6 +6,38 @@ using UnityEngine;
 
 public class InGameMatchManager : NetworkBehaviour
 {
+    public enum ServerGameTeleportPhase
+    {
+        None = 0,
+        InProgress = 1,
+        Completed = 2
+    }
+
+    public enum ServerGameTeleportOutcome
+    {
+        None = 0,
+        Succeeded = 1,
+        Failed = 2,
+        Canceled = 3
+    }
+
+    public readonly struct ServerGameTeleportSnapshot
+    {
+        public int RequestVersion { get; }
+        public ServerGameTeleportPhase Phase { get; }
+        public ServerGameTeleportOutcome Outcome { get; }
+
+        public ServerGameTeleportSnapshot(
+            int requestVersion,
+            ServerGameTeleportPhase phase,
+            ServerGameTeleportOutcome outcome)
+        {
+            RequestVersion = requestVersion;
+            Phase = phase;
+            Outcome = outcome;
+        }
+    }
+
     [Header("플레이어 스폰")]
     [SerializeField, Tooltip("플레이어 프리팹(NetworkObject 포함). 현재는 직접 스폰하지 않고 NetworkManager의 PlayerObject를 사용합니다.")]
     private NetworkObject playerPrefab;
@@ -54,6 +86,14 @@ public class InGameMatchManager : NetworkBehaviour
     private readonly Dictionary<ulong, Coroutine> _singleTeleportRoutines = new Dictionary<ulong, Coroutine>();
     private readonly Dictionary<ulong, int> _singleTeleportTokens = new Dictionary<ulong, int>();
     private int _teleportVersion;
+    private int _serverGameTeleportRequestVersion = -1;
+    private ServerGameTeleportPhase _serverGameTeleportPhase;
+    private ServerGameTeleportOutcome _serverGameTeleportOutcome;
+    private ulong[] _serverGameTeleportCohort;
+    private bool _serverGameTeleportCohortChanged;
+    private bool _serverGameTeleportCancellationRequested;
+    private int _serverGameTeleportExpectedCount;
+    private int _serverGameTeleportCompletedCount;
 
     public override void OnNetworkSpawn()
     {
@@ -62,7 +102,10 @@ public class InGameMatchManager : NetworkBehaviour
         if (!IsServer) return;
 
         if (NetworkManager.Singleton != null)
+        {
             NetworkManager.Singleton.OnClientConnectedCallback += HandleClientConnected;
+            NetworkManager.Singleton.OnClientDisconnectCallback += HandleClientDisconnected;
+        }
 
         TeleportPlayersToLobbyServer();
     }
@@ -70,7 +113,19 @@ public class InGameMatchManager : NetworkBehaviour
     public override void OnNetworkDespawn()
     {
         if (NetworkManager.Singleton != null)
+        {
             NetworkManager.Singleton.OnClientConnectedCallback -= HandleClientConnected;
+            NetworkManager.Singleton.OnClientDisconnectCallback -= HandleClientDisconnected;
+        }
+
+        if (_serverGameTeleportPhase == ServerGameTeleportPhase.InProgress)
+        {
+            _serverGameTeleportCancellationRequested = true;
+            CompleteServerGameTeleportRequest(
+                _serverGameTeleportRequestVersion,
+                ServerGameTeleportOutcome.Canceled,
+                "Network despawn.");
+        }
 
         if (_teleportRoutine != null)
         {
@@ -80,6 +135,7 @@ public class InGameMatchManager : NetworkBehaviour
 
         StopAllSingleClientTeleportRoutines();
         _teleportVersion++;
+        ClearServerGameTeleportTracking();
 
         base.OnNetworkDespawn();
     }
@@ -89,6 +145,12 @@ public class InGameMatchManager : NetworkBehaviour
         if (!IsServer) return;
         if (NetworkManager.Singleton == null) return;
 
+        if (_serverGameTeleportPhase == ServerGameTeleportPhase.InProgress)
+        {
+            MarkServerGameTeleportCohortChanged($"Client connected during strict game teleport. client:{clientId}");
+            return;
+        }
+
         // 호스트 자기 자신 초기 접속은 전체 로비 배치 루틴에서 처리
         if (clientId == NetworkManager.ServerClientId &&
             NetworkManager.Singleton.ConnectedClientsIds.Count <= 1)
@@ -97,9 +159,25 @@ public class InGameMatchManager : NetworkBehaviour
         StartSingleClientTeleportRoutine(clientId);
     }
 
+    private void HandleClientDisconnected(ulong clientId)
+    {
+        if (!IsServer) return;
+        if (_serverGameTeleportPhase != ServerGameTeleportPhase.InProgress) return;
+
+        MarkServerGameTeleportCohortChanged($"Client disconnected during strict game teleport. client:{clientId}");
+    }
+
     public void TeleportPlayersToLobbyServer()
     {
         if (!IsServer) return;
+
+        if (_serverGameTeleportPhase == ServerGameTeleportPhase.InProgress)
+        {
+            RequestServerGameTeleportCancellation("Legacy lobby teleport requested.");
+            return;
+        }
+
+        ClearServerGameTeleportTracking();
         StartTeleportRoutine(lobbySpawnTag, lobbySpawnNamePrefix);
     }
 
@@ -107,6 +185,127 @@ public class InGameMatchManager : NetworkBehaviour
     {
         if (!IsServer) return;
         StartTeleportRoutine(gameSpawnTag, gameSpawnNamePrefix);
+    }
+
+    public bool ServerTryStartGameSpawnTeleport(out int requestVersion)
+    {
+        requestVersion = -1;
+
+        if (!IsServer || !IsSpawned || !isActiveAndEnabled)
+            return false;
+
+        NetworkManager nm = NetworkManager.Singleton;
+        if (nm == null || !nm.IsListening)
+            return false;
+
+        if (_serverGameTeleportPhase == ServerGameTeleportPhase.InProgress)
+            return false;
+
+        if (_teleportRoutine != null || _singleTeleportRoutines.Count != 0)
+            return false;
+
+        if (_teleportVersion < 0 || _teleportVersion == int.MaxValue)
+            return false;
+
+        int connectedClientCount = nm.ConnectedClientsIds.Count;
+        if (connectedClientCount <= 0)
+            return false;
+
+        ulong[] cohort = new ulong[connectedClientCount];
+        for (int i = 0; i < connectedClientCount; i++)
+            cohort[i] = nm.ConnectedClientsIds[i];
+
+        System.Array.Sort(cohort);
+        for (int i = 1; i < cohort.Length; i++)
+        {
+            if (cohort[i - 1] == cohort[i])
+                return false;
+        }
+
+        int previousRequestVersion = _serverGameTeleportRequestVersion;
+        ServerGameTeleportPhase previousPhase = _serverGameTeleportPhase;
+        ServerGameTeleportOutcome previousOutcome = _serverGameTeleportOutcome;
+        ulong[] previousCohort = _serverGameTeleportCohort;
+        bool previousCohortChanged = _serverGameTeleportCohortChanged;
+        bool previousCancellationRequested = _serverGameTeleportCancellationRequested;
+        int previousExpectedCount = _serverGameTeleportExpectedCount;
+        int previousCompletedCount = _serverGameTeleportCompletedCount;
+
+        int nextVersion = _teleportVersion + 1;
+        _teleportVersion = nextVersion;
+        _serverGameTeleportRequestVersion = nextVersion;
+        _serverGameTeleportPhase = ServerGameTeleportPhase.InProgress;
+        _serverGameTeleportOutcome = ServerGameTeleportOutcome.None;
+        _serverGameTeleportCohort = cohort;
+        _serverGameTeleportCohortChanged = false;
+        _serverGameTeleportCancellationRequested = false;
+        _serverGameTeleportExpectedCount = cohort.Length;
+        _serverGameTeleportCompletedCount = 0;
+
+        Coroutine routine;
+        try
+        {
+            routine = StartCoroutine(TeleportGameSpawnRequestRoutine(nextVersion, cohort));
+        }
+        catch (System.Exception exception)
+        {
+            RestoreServerGameTeleportTracking(
+                previousRequestVersion,
+                previousPhase,
+                previousOutcome,
+                previousCohort,
+                previousCohortChanged,
+                previousCancellationRequested,
+                previousExpectedCount,
+                previousCompletedCount);
+            Debug.LogError($"[InGameMatchManager] Failed to start strict game teleport. {exception}", this);
+            return false;
+        }
+
+        if (routine == null)
+        {
+            RestoreServerGameTeleportTracking(
+                previousRequestVersion,
+                previousPhase,
+                previousOutcome,
+                previousCohort,
+                previousCohortChanged,
+                previousCancellationRequested,
+                previousExpectedCount,
+                previousCompletedCount);
+            Debug.LogError("[InGameMatchManager] Failed to start strict game teleport. Coroutine reference is null.", this);
+            return false;
+        }
+
+        _teleportRoutine = routine;
+        requestVersion = nextVersion;
+        return true;
+    }
+
+    public bool ServerTryGetGameSpawnTeleportStatus(
+        int requestVersion,
+        out ServerGameTeleportSnapshot snapshot)
+    {
+        snapshot = default;
+
+        if (!IsServer || !IsSpawned)
+            return false;
+
+        NetworkManager nm = NetworkManager.Singleton;
+        if (nm == null || !nm.IsListening)
+            return false;
+
+        if (requestVersion <= 0 || requestVersion != _serverGameTeleportRequestVersion)
+            return false;
+
+        if (_serverGameTeleportPhase == ServerGameTeleportPhase.None)
+            return false;
+
+        snapshot = new ServerGameTeleportSnapshot(
+            _serverGameTeleportRequestVersion,
+            _serverGameTeleportPhase,
+            _serverGameTeleportOutcome);
+        return true;
     }
 
     public bool ServerTryRespawnPlayerToGameSpawn(PlayerHub playerHub)
@@ -161,6 +360,12 @@ public class InGameMatchManager : NetworkBehaviour
     private void StartTeleportRoutine(string tagName, string namePrefix)
     {
         if (!IsServer) return;
+
+        if (_serverGameTeleportPhase == ServerGameTeleportPhase.InProgress)
+        {
+            RequestServerGameTeleportCancellation($"Legacy batch teleport requested. tag:{tagName}");
+            return;
+        }
 
         if (_teleportRoutine != null)
         {
@@ -325,6 +530,365 @@ public class InGameMatchManager : NetworkBehaviour
 
         if (requestVersion == _teleportVersion)
             _teleportRoutine = null;
+    }
+
+    private IEnumerator TeleportGameSpawnRequestRoutine(int requestVersion, ulong[] cohort)
+    {
+        try
+        {
+            if (teleportDelay > 0f)
+                yield return new WaitForSeconds(teleportDelay);
+            else
+                yield return null;
+
+            NetworkManager nm = NetworkManager.Singleton;
+            if (!TryContinueServerGameTeleportRequest(requestVersion, nm))
+                yield break;
+
+            if (cohort == null ||
+                !ReferenceEquals(cohort, _serverGameTeleportCohort) ||
+                cohort.Length != _serverGameTeleportExpectedCount)
+            {
+                CompleteServerGameTeleportRequest(
+                    requestVersion,
+                    ServerGameTeleportOutcome.Failed,
+                    "Request cohort tracking mismatch.");
+                yield break;
+            }
+
+            float wait = 0f;
+            float readinessTimeout = Mathf.Max(0f, playerResolveTimeout);
+            while (true)
+            {
+                nm = NetworkManager.Singleton;
+                if (!TryContinueServerGameTeleportRequest(requestVersion, nm))
+                    yield break;
+
+                if (AreServerGameTeleportCohortPlayersReady(nm, cohort))
+                    break;
+
+                if (wait >= readinessTimeout)
+                {
+                    CompleteServerGameTeleportRequest(
+                        requestVersion,
+                        ServerGameTeleportOutcome.Failed,
+                        "PlayerObject readiness timeout.");
+                    yield break;
+                }
+
+                wait += Time.deltaTime;
+                yield return null;
+            }
+
+            List<Transform> spawnPoints = FindSpawnPointsByTag(gameSpawnTag);
+            spawnPoints.Sort((a, b) => string.Compare(a.name, b.name, System.StringComparison.Ordinal));
+
+            if (spawnPoints.Count == 0)
+            {
+                CompleteServerGameTeleportRequest(
+                    requestVersion,
+                    ServerGameTeleportOutcome.Failed,
+                    $"SpawnPoint tag not found or empty: {gameSpawnTag}");
+                yield break;
+            }
+
+            for (int i = 0; i < cohort.Length; i++)
+            {
+                nm = NetworkManager.Singleton;
+                if (!TryContinueServerGameTeleportRequest(requestVersion, nm))
+                    yield break;
+
+                ulong clientId = cohort[i];
+                if (!nm.ConnectedClients.TryGetValue(clientId, out var client) || client == null)
+                {
+                    CompleteServerGameTeleportRequest(
+                        requestVersion,
+                        ServerGameTeleportOutcome.Failed,
+                        $"Connected client missing. client:{clientId}");
+                    yield break;
+                }
+
+                NetworkObject playerObject = client.PlayerObject;
+                if (playerObject == null || !playerObject.IsSpawned)
+                {
+                    CompleteServerGameTeleportRequest(
+                        requestVersion,
+                        ServerGameTeleportOutcome.Failed,
+                        $"PlayerObject missing or unspawned. client:{clientId}");
+                    yield break;
+                }
+
+                Transform targetSpawn = ResolveSpawnPointForClient(
+                    spawnPoints,
+                    clientId,
+                    i,
+                    gameSpawnNamePrefix);
+                if (targetSpawn == null)
+                {
+                    CompleteServerGameTeleportRequest(
+                        requestVersion,
+                        ServerGameTeleportOutcome.Failed,
+                        $"Game spawn could not be resolved. client:{clientId}");
+                    yield break;
+                }
+
+                yield return TeleportPlayerSafely(playerObject, targetSpawn.position, targetSpawn.rotation);
+
+                nm = NetworkManager.Singleton;
+                if (!TryContinueServerGameTeleportRequest(requestVersion, nm))
+                    yield break;
+
+                if (!nm.ConnectedClients.TryGetValue(clientId, out var currentClient) ||
+                    currentClient == null ||
+                    currentClient.PlayerObject != playerObject ||
+                    !playerObject.IsSpawned)
+                {
+                    CompleteServerGameTeleportRequest(
+                        requestVersion,
+                        ServerGameTeleportOutcome.Failed,
+                        $"Player identity changed during safe teleport. client:{clientId}");
+                    yield break;
+                }
+
+                if (_serverGameTeleportCompletedCount >= _serverGameTeleportExpectedCount)
+                {
+                    CompleteServerGameTeleportRequest(
+                        requestVersion,
+                        ServerGameTeleportOutcome.Failed,
+                        "Completed player count exceeded the expected cohort count.");
+                    yield break;
+                }
+
+                _serverGameTeleportCompletedCount++;
+                Log($"[InGameMatchManager] Strict game teleport client:{clientId} -> {targetSpawn.name} completed:{_serverGameTeleportCompletedCount}/{_serverGameTeleportExpectedCount}");
+            }
+
+            nm = NetworkManager.Singleton;
+            if (!TryContinueServerGameTeleportRequest(requestVersion, nm))
+                yield break;
+
+            if (_serverGameTeleportCompletedCount != _serverGameTeleportExpectedCount)
+            {
+                CompleteServerGameTeleportRequest(
+                    requestVersion,
+                    ServerGameTeleportOutcome.Failed,
+                    "Final completed player count mismatch.");
+                yield break;
+            }
+
+            CompleteServerGameTeleportRequest(
+                requestVersion,
+                ServerGameTeleportOutcome.Succeeded,
+                "All request cohort players completed safe teleport.");
+        }
+        finally
+        {
+            if (_serverGameTeleportRequestVersion == requestVersion)
+            {
+                if (_serverGameTeleportPhase == ServerGameTeleportPhase.InProgress)
+                {
+                    CompleteServerGameTeleportRequest(
+                        requestVersion,
+                        ServerGameTeleportOutcome.Failed,
+                        "Strict game teleport ended without a terminal outcome.");
+                }
+
+                _teleportRoutine = null;
+            }
+        }
+    }
+
+    private bool TryContinueServerGameTeleportRequest(int requestVersion, NetworkManager nm)
+    {
+        if (requestVersion != _serverGameTeleportRequestVersion ||
+            _serverGameTeleportPhase != ServerGameTeleportPhase.InProgress)
+            return false;
+
+        if (requestVersion != _teleportVersion || !IsServer || !IsSpawned || !isActiveAndEnabled)
+        {
+            _serverGameTeleportCancellationRequested = true;
+            CompleteServerGameTeleportRequest(
+                requestVersion,
+                ServerGameTeleportOutcome.Canceled,
+                "Request version or lifecycle was invalidated.");
+            return false;
+        }
+
+        if (_serverGameTeleportCancellationRequested)
+        {
+            CompleteServerGameTeleportRequest(
+                requestVersion,
+                ServerGameTeleportOutcome.Canceled,
+                "Cancellation was requested.");
+            return false;
+        }
+
+        if (_serverGameTeleportCohortChanged)
+        {
+            CompleteServerGameTeleportRequest(
+                requestVersion,
+                ServerGameTeleportOutcome.Failed,
+                "Connected client cohort changed.");
+            return false;
+        }
+
+        if (nm == null || !nm.IsListening)
+        {
+            CompleteServerGameTeleportRequest(
+                requestVersion,
+                ServerGameTeleportOutcome.Failed,
+                "NetworkManager is unavailable or not listening.");
+            return false;
+        }
+
+        if (!DoesServerGameTeleportCohortMatch(nm, _serverGameTeleportCohort))
+        {
+            _serverGameTeleportCohortChanged = true;
+            CompleteServerGameTeleportRequest(
+                requestVersion,
+                ServerGameTeleportOutcome.Failed,
+                "Connected client cohort no longer matches the request snapshot.");
+            return false;
+        }
+
+        return true;
+    }
+
+    private bool DoesServerGameTeleportCohortMatch(NetworkManager nm, ulong[] cohort)
+    {
+        if (nm == null || cohort == null || nm.ConnectedClientsIds.Count != cohort.Length)
+            return false;
+
+        bool hasPreviousId = false;
+        ulong previousId = 0;
+
+        for (int expectedIndex = 0; expectedIndex < cohort.Length; expectedIndex++)
+        {
+            bool foundNextId = false;
+            ulong nextId = 0;
+
+            for (int liveIndex = 0; liveIndex < nm.ConnectedClientsIds.Count; liveIndex++)
+            {
+                ulong liveId = nm.ConnectedClientsIds[liveIndex];
+                if (hasPreviousId && liveId <= previousId)
+                    continue;
+
+                if (!foundNextId || liveId < nextId)
+                {
+                    nextId = liveId;
+                    foundNextId = true;
+                }
+            }
+
+            if (!foundNextId || nextId != cohort[expectedIndex])
+                return false;
+
+            previousId = nextId;
+            hasPreviousId = true;
+        }
+
+        return true;
+    }
+
+    private bool AreServerGameTeleportCohortPlayersReady(NetworkManager nm, ulong[] cohort)
+    {
+        if (nm == null || cohort == null)
+            return false;
+
+        for (int i = 0; i < cohort.Length; i++)
+        {
+            if (!nm.ConnectedClients.TryGetValue(cohort[i], out var client) || client == null)
+                return false;
+
+            if (client.PlayerObject == null || !client.PlayerObject.IsSpawned)
+                return false;
+        }
+
+        return true;
+    }
+
+    private void CompleteServerGameTeleportRequest(
+        int requestVersion,
+        ServerGameTeleportOutcome outcome,
+        string reason)
+    {
+        if (requestVersion != _serverGameTeleportRequestVersion ||
+            _serverGameTeleportPhase != ServerGameTeleportPhase.InProgress ||
+            outcome == ServerGameTeleportOutcome.None)
+            return;
+
+        if (outcome == ServerGameTeleportOutcome.Succeeded &&
+            (_serverGameTeleportExpectedCount <= 0 ||
+             _serverGameTeleportCompletedCount != _serverGameTeleportExpectedCount))
+        {
+            outcome = ServerGameTeleportOutcome.Failed;
+            reason = "Succeeded postcondition rejected because completed count did not match the expected cohort.";
+        }
+
+        _serverGameTeleportPhase = ServerGameTeleportPhase.Completed;
+        _serverGameTeleportOutcome = outcome;
+
+        string message = $"[InGameMatchManager] Strict game teleport terminal. version:{requestVersion} outcome:{outcome} completed:{_serverGameTeleportCompletedCount}/{_serverGameTeleportExpectedCount} reason:{reason}";
+        if (outcome == ServerGameTeleportOutcome.Succeeded)
+            Log(message);
+        else
+            LogWarning(message);
+    }
+
+    private void RequestServerGameTeleportCancellation(string reason)
+    {
+        if (_serverGameTeleportPhase != ServerGameTeleportPhase.InProgress)
+            return;
+
+        if (_serverGameTeleportCancellationRequested)
+            return;
+
+        _serverGameTeleportCancellationRequested = true;
+        LogWarning($"[InGameMatchManager] Strict game teleport cancellation requested. version:{_serverGameTeleportRequestVersion} reason:{reason}");
+    }
+
+    private void MarkServerGameTeleportCohortChanged(string reason)
+    {
+        if (_serverGameTeleportPhase != ServerGameTeleportPhase.InProgress)
+            return;
+
+        if (_serverGameTeleportCohortChanged)
+            return;
+
+        _serverGameTeleportCohortChanged = true;
+        LogWarning($"[InGameMatchManager] Strict game teleport cohort changed. version:{_serverGameTeleportRequestVersion} reason:{reason}");
+    }
+
+    private void ClearServerGameTeleportTracking()
+    {
+        _serverGameTeleportRequestVersion = -1;
+        _serverGameTeleportPhase = ServerGameTeleportPhase.None;
+        _serverGameTeleportOutcome = ServerGameTeleportOutcome.None;
+        _serverGameTeleportCohort = null;
+        _serverGameTeleportCohortChanged = false;
+        _serverGameTeleportCancellationRequested = false;
+        _serverGameTeleportExpectedCount = 0;
+        _serverGameTeleportCompletedCount = 0;
+    }
+
+    private void RestoreServerGameTeleportTracking(
+        int requestVersion,
+        ServerGameTeleportPhase phase,
+        ServerGameTeleportOutcome outcome,
+        ulong[] cohort,
+        bool cohortChanged,
+        bool cancellationRequested,
+        int expectedCount,
+        int completedCount)
+    {
+        _serverGameTeleportRequestVersion = requestVersion;
+        _serverGameTeleportPhase = phase;
+        _serverGameTeleportOutcome = outcome;
+        _serverGameTeleportCohort = cohort;
+        _serverGameTeleportCohortChanged = cohortChanged;
+        _serverGameTeleportCancellationRequested = cancellationRequested;
+        _serverGameTeleportExpectedCount = expectedCount;
+        _serverGameTeleportCompletedCount = completedCount;
     }
 
     private IEnumerator TeleportSingleClientRoutine(ulong clientId, int requestVersion, int requestToken)
