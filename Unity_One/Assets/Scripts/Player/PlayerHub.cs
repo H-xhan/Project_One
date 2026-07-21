@@ -372,6 +372,7 @@ public class PlayerHub : NetworkBehaviour
         ReleaseOwnedPostItHeavyJumpLock();
         UnsubscribeGameplayStateChanges();
         ReleaseOwnedGameplayPhaseJumpLock();
+        _gameplayPhaseLockedServer = false;
         ResetCameraPositionSmoothingState();
         base.OnNetworkDespawn();
     }
@@ -670,34 +671,12 @@ public class PlayerHub : NetworkBehaviour
 
     private bool AllowOwnerLookInput()
     {
-        if (!TryGetGameState(out GameStateManager.GameState state))
-            return false;
-
-        if (state == GameStateManager.GameState.Playing ||
-            state == GameStateManager.GameState.Countdown)
-            return true;
-
-        if (state != GameStateManager.GameState.Lobby)
-            return false;
-
-        ReadySystem ready = ResolveReadySystem();
-        return ready != null && ready.IsLocalReady();
+        return IsPlayingState();
     }
 
     private bool AllowServerLookInput()
     {
-        if (!TryGetGameState(out GameStateManager.GameState state))
-            return false;
-
-        if (state == GameStateManager.GameState.Playing ||
-            state == GameStateManager.GameState.Countdown)
-            return true;
-
-        if (state != GameStateManager.GameState.Lobby)
-            return false;
-
-        ReadySystem ready = ResolveReadySystem();
-        return ready != null && ready.IsClientReady(OwnerClientId);
+        return IsPlayingState();
     }
 
     private bool TryGetGameState(out GameStateManager.GameState state)
@@ -717,14 +696,13 @@ public class PlayerHub : NetworkBehaviour
 
     private bool IsGameplayPhaseLocked()
     {
-        return TryGetGameState(out GameStateManager.GameState state) &&
+        return !TryGetGameState(out GameStateManager.GameState state) ||
                IsGameplayPhaseLocked(state);
     }
 
     private static bool IsGameplayPhaseLocked(GameStateManager.GameState state)
     {
-        return state == GameStateManager.GameState.Guessing ||
-               state == GameStateManager.GameState.Results;
+        return state != GameStateManager.GameState.Playing;
     }
 
     private void SubscribeGameplayStateChanges()
@@ -767,8 +745,10 @@ public class PlayerHub : NetworkBehaviour
     {
         GameStateManager.GameState newState =
             (GameStateManager.GameState)newStateValue;
+        bool wasGameplayLocked =
+            IsGameplayPhaseLocked((GameStateManager.GameState)previousStateValue);
         bool gameplayLocked = IsGameplayPhaseLocked(newState);
-        if (gameplayLocked)
+        if (!IsServer && !wasGameplayLocked && gameplayLocked)
             ClearPendingGameplayInput();
 
         if (IsServer)
@@ -778,7 +758,7 @@ public class PlayerHub : NetworkBehaviour
     private void ApplyCurrentGameplayPhaseLock()
     {
         bool gameplayLocked = IsGameplayPhaseLocked();
-        if (gameplayLocked)
+        if (!IsServer && gameplayLocked)
             ClearPendingGameplayInput();
 
         if (IsServer)
@@ -790,14 +770,6 @@ public class PlayerHub : NetworkBehaviour
         if (!IsServer)
             return;
 
-        if (gameplayLocked)
-        {
-            ClearPendingGameplayInput();
-            _attackBufferedServer = false;
-            _attackBufferedAtServer = 0f;
-            ApplyOwnedGameplayPhaseJumpLock();
-        }
-
         if (_gameplayPhaseLockedServer == gameplayLocked)
             return;
 
@@ -808,6 +780,11 @@ public class PlayerHub : NetworkBehaviour
             return;
         }
 
+        ClearPendingGameplayInput();
+        _attackBufferedServer = false;
+        _attackBufferedAtServer = 0f;
+        ApplyOwnedGameplayPhaseJumpLock();
+
         if (interactModule != null && interactModule.IsCharacterGrabBusy)
             interactModule.ServerReleaseCharacterGrab("GameplayPhaseLock");
 
@@ -817,15 +794,20 @@ public class PlayerHub : NetworkBehaviour
 
     private void ClearPendingGameplayInput()
     {
+        NeutralizeRoutedGameplayInput();
+        _postItPeelEvaluatedFrame = -1;
+        _postItPeelConsumedInEvaluatedFrame = false;
+        CancelPostItPeelHold();
+    }
+
+    private void NeutralizeRoutedGameplayInput()
+    {
         _moveInput = Vector2.zero;
         _ownerPresentationMoveInput = Vector2.zero;
         _yawDelta = 0f;
         _pitchDelta = 0f;
         _jumpPressed = false;
         _sprintHeld = false;
-        _postItPeelEvaluatedFrame = -1;
-        _postItPeelConsumedInEvaluatedFrame = false;
-        CancelPostItPeelHold();
     }
 
     private void ApplyOwnedGameplayPhaseJumpLock()
@@ -834,13 +816,12 @@ public class PlayerHub : NetworkBehaviour
         if (motorShellMotor == null)
             return;
 
-        if (!motorShellMotor.IsExternalJumpLocked ||
-            motorShellMotor.ExternalJumpLockReason == GameplayPhaseJumpLockReason)
-        {
-            motorShellMotor.SetExternalJumpLock(
-                true,
-                GameplayPhaseJumpLockReason);
-        }
+        if (motorShellMotor.IsExternalJumpLocked)
+            return;
+
+        motorShellMotor.SetExternalJumpLock(
+            true,
+            GameplayPhaseJumpLockReason);
     }
 
     private void ReleaseOwnedGameplayPhaseJumpLock()
@@ -963,7 +944,10 @@ public class PlayerHub : NetworkBehaviour
         }
 
         SubmitInputServerRpc(requestedMove, _yawDelta, requestedSprintHeld);
-        LogInputRouteOwner(rawMove, _ownerPresentationMoveInput, jumpPressed, rawSprintHeld, sprintHeld, allowLook, canMoveNow ? "submitted" : "CanMoveNow false");
+        string routeResult = gameplayPhaseLocked
+            ? "gameplay phase locked"
+            : (canMoveNow ? "submitted" : "CanMoveNow false");
+        LogInputRouteOwner(rawMove, _ownerPresentationMoveInput, jumpPressed, rawSprintHeld, sprintHeld, allowLook, routeResult);
         Camera playerCameraAfter = PlayerCamera;
         LogMotorShellCameraInput(
             rawYawDelta,
@@ -973,7 +957,7 @@ public class PlayerHub : NetworkBehaviour
             GetTransformYawForLog(cameraRoot != null ? cameraRoot.transform : null),
             playerCameraPitchBefore,
             GetTransformPitchForLog(playerCameraAfter != null ? playerCameraAfter.transform : null),
-            canMoveNow ? "submitted" : "CanMoveNow false");
+            routeResult);
 
         if (jumpPressed)
         {
@@ -3296,7 +3280,14 @@ public class PlayerHub : NetworkBehaviour
     private void TickServer()
     {
         bool heavyActive = TryGetPostItHeavyMovementScale(out float heavyMovementScale);
-        ApplyGameplayPhaseLockServer(IsGameplayPhaseLocked());
+        bool gameplayPhaseLocked = IsGameplayPhaseLocked();
+        ApplyGameplayPhaseLockServer(gameplayPhaseLocked);
+        if (gameplayPhaseLocked)
+        {
+            NeutralizeRoutedGameplayInput();
+            ApplyOwnedGameplayPhaseJumpLock();
+        }
+
         ApplyOwnedPostItHeavyJumpLock(heavyActive);
 
         ResolveServerPostItInputRoute(
