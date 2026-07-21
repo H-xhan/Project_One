@@ -11,7 +11,7 @@ public sealed class HamsterMotorShellSpinDashAdapter : MonoBehaviour
     private const string DashReason = "SpinDash:Dashing";
     private const string DizzyReason = "SpinDash:Dizzy";
     private const string CooldownReason = "SpinDash:Cooldown";
-    private const string GameplayPhaseLockReason = "GameState:GuessingResults";
+    private const string GameplayPhaseLockReason = "GameState:NotPlaying";
 
     private enum SpinDashState
     {
@@ -132,7 +132,8 @@ public sealed class HamsterMotorShellSpinDashAdapter : MonoBehaviour
 
         if (IsGameplayPhaseLocked())
         {
-            CancelSpinDash(GameplayPhaseLockReason);
+            if (_state != SpinDashState.Idle)
+                CancelSpinDashForGameplayPhase();
             return;
         }
 
@@ -160,14 +161,18 @@ public sealed class HamsterMotorShellSpinDashAdapter : MonoBehaviour
 
     private void FixedUpdate()
     {
-        if (!IsTargetRoot() || _state != SpinDashState.Dashing)
+        if (!IsTargetRoot())
             return;
 
         if (IsGameplayPhaseLocked())
         {
-            CancelSpinDash(GameplayPhaseLockReason);
+            if (_state != SpinDashState.Idle)
+                CancelSpinDashForGameplayPhase();
             return;
         }
+
+        if (_state != SpinDashState.Dashing)
+            return;
 
         if (blockDuringRecovery && IsRecoveryActive())
         {
@@ -230,17 +235,25 @@ public sealed class HamsterMotorShellSpinDashAdapter : MonoBehaviour
             faceAdapter = _targetRoot.GetComponentInChildren<HamsterMotorShellFaceExpressionAdapter>(true);
     }
 
-    private bool IsGameplayPhaseLocked()
+    private bool TryGetGameState(out GameStateManager.GameState state)
     {
         if (_gameStateManager == null)
             _gameStateManager = FindFirstObjectByType<GameStateManager>();
 
         if (_gameStateManager == null)
+        {
+            state = default;
             return false;
+        }
 
-        GameStateManager.GameState state = _gameStateManager.GetState();
-        return state == GameStateManager.GameState.Guessing ||
-               state == GameStateManager.GameState.Results;
+        state = _gameStateManager.GetState();
+        return true;
+    }
+
+    private bool IsGameplayPhaseLocked()
+    {
+        return !TryGetGameState(out GameStateManager.GameState state) ||
+               state != GameStateManager.GameState.Playing;
     }
 
     private bool CanReadOwnerInput()
@@ -375,6 +388,13 @@ public sealed class HamsterMotorShellSpinDashAdapter : MonoBehaviour
         }
 
         Log($"stopped reason={reason} blendOut={enterBlendOut}");
+    }
+
+    private void CancelSpinDashForGameplayPhase()
+    {
+        CancelSpinDash(GameplayPhaseLockReason);
+        _dashDirection = Vector3.forward;
+        _cooldownUntil = 0f;
     }
 
     private void CancelSpinDash(string reason)
