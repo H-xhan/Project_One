@@ -9,6 +9,7 @@ public sealed class HamsterMotorShellTraversalAdapter : MonoBehaviour
     private const string PlayerCameraName = "PlayerCamera";
     private const string TraversalReason = "TraversalGlide";
     private const string TraversalWallReason = "TraversalWall";
+    private const float GameStateResolveRetryInterval = 0.5f;
 
     private enum TraversalState
     {
@@ -154,6 +155,9 @@ public sealed class HamsterMotorShellTraversalAdapter : MonoBehaviour
     [SerializeField] private bool debugTraversalLogs = false;
 
     private Transform _targetRoot;
+    private GameStateManager _gameStateManager;
+    private float _nextGameStateResolveTime = float.NegativeInfinity;
+    private bool _requireTraversalInputReleaseBeforeRearm;
     private TraversalState _state;
     private float _lastGlideKeyDownTime = float.NegativeInfinity;
     private float _lastWallJumpKeyDownTime = float.NegativeInfinity;
@@ -226,6 +230,16 @@ public sealed class HamsterMotorShellTraversalAdapter : MonoBehaviour
 
         if (autoFindReferences)
             CacheReferences();
+
+        if (IsGameplayPhaseLocked())
+        {
+            if (!_requireTraversalInputReleaseBeforeRearm)
+                CancelTraversalForGameplayPhase();
+            return;
+        }
+
+        if (!TryRearmTraversalInput())
+            return;
 
         CaptureGlideKeyDown();
         CaptureWallJumpKeyDown();
@@ -312,6 +326,16 @@ public sealed class HamsterMotorShellTraversalAdapter : MonoBehaviour
         if (autoFindReferences)
             CacheReferences();
 
+        if (IsGameplayPhaseLocked())
+        {
+            if (!_requireTraversalInputReleaseBeforeRearm)
+                CancelTraversalForGameplayPhase();
+            return;
+        }
+
+        if (_requireTraversalInputReleaseBeforeRearm)
+            return;
+
         if (_state == TraversalState.Gliding)
         {
             if (ShouldEndGlide(out string endReason))
@@ -376,6 +400,117 @@ public sealed class HamsterMotorShellTraversalAdapter : MonoBehaviour
 
         if (visualClipStateDriver == null && _targetRoot != null)
             visualClipStateDriver = _targetRoot.GetComponentInChildren<HamsterVisualClipStateDriver>(true);
+    }
+
+    private bool TryGetGameState(out GameStateManager.GameState state)
+    {
+        if (_gameStateManager == null)
+        {
+            if (Time.unscaledTime < _nextGameStateResolveTime)
+            {
+                state = default;
+                return false;
+            }
+
+            _nextGameStateResolveTime = Time.unscaledTime + GameStateResolveRetryInterval;
+            _gameStateManager = FindFirstObjectByType<GameStateManager>();
+        }
+
+        if (_gameStateManager == null)
+        {
+            state = default;
+            return false;
+        }
+
+        state = _gameStateManager.GetState();
+        return true;
+    }
+
+    private bool IsGameplayPhaseLocked()
+    {
+        return !TryGetGameState(out GameStateManager.GameState state) ||
+               state != GameStateManager.GameState.Playing;
+    }
+
+    private void CancelTraversalForGameplayPhase()
+    {
+        switch (_state)
+        {
+            case TraversalState.Gliding:
+                EndGlide("GameplayPhase", false);
+                break;
+            case TraversalState.WallContact:
+            case TraversalState.WallClinging:
+            case TraversalState.WallClimbing:
+                EndWallTraversal("GameplayPhase", false);
+                break;
+            case TraversalState.WallJumping:
+                EndWallJump("GameplayPhase");
+                break;
+            case TraversalState.Cooldown:
+                _state = TraversalState.Normal;
+                _cooldownUntil = 0f;
+                break;
+        }
+
+        if (_glideAnimationActive || _appliedMovementScale || _appliedUprightScale)
+            EndGlide("GameplayPhase", false);
+        if (_wallAnimationActive || _appliedWallMovementScale || _appliedWallUprightScale)
+            EndWallTraversal("GameplayPhase", false);
+        if (_appliedWallJumpLock)
+            EndWallJump("GameplayPhase");
+
+        _state = TraversalState.Normal;
+        _cooldownUntil = 0f;
+        _lastGlideKeyDownTime = float.NegativeInfinity;
+        _lastWallJumpKeyDownTime = float.NegativeInfinity;
+        _lastWallJumpConsumedTime = float.NegativeInfinity;
+        _glideStartedTime = float.NegativeInfinity;
+        _wallStartedTime = float.NegativeInfinity;
+        _wallJumpStartedTime = float.NegativeInfinity;
+        _wallJumpSuppressNormalJumpUntil = float.NegativeInfinity;
+        _glideBlockedUntil = float.NegativeInfinity;
+        _lastWallSeenTime = float.NegativeInfinity;
+        ClearWallState();
+        _requireTraversalInputReleaseBeforeRearm = true;
+    }
+
+    private bool TryRearmTraversalInput()
+    {
+        if (!_requireTraversalInputReleaseBeforeRearm)
+            return true;
+
+        if (IsTraversalStartInputHeld())
+            return false;
+
+        _requireTraversalInputReleaseBeforeRearm = false;
+        return false;
+    }
+
+    private bool IsTraversalStartInputHeld()
+    {
+        if (_legacyInputUnavailable || !CanReadDirectLocalInput())
+            return true;
+
+        if (enableGlide && ReadGlideHeld())
+            return true;
+
+        if (!enableWallClimb)
+            return _legacyInputUnavailable;
+
+        if (IsWallJumpKeyHeld())
+            return true;
+
+        if (requireWallClimbHoldForStart && ReadWallClimbHeld())
+            return true;
+
+        if ((requireWallInputToStart || requireForwardInputForWallClimb) &&
+            TryReadWallMoveInput(out _))
+        {
+            return true;
+        }
+
+        return _legacyInputUnavailable;
     }
 
     private bool CanReadDirectLocalInput()
@@ -780,6 +915,7 @@ public sealed class HamsterMotorShellTraversalAdapter : MonoBehaviour
         if (!IsWallClinging &&
             !IsWallClimbing &&
             _state != TraversalState.WallContact &&
+            !_wallAnimationActive &&
             !_appliedWallMovementScale &&
             !_appliedWallUprightScale &&
             !_appliedWallJumpLock)
