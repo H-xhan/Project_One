@@ -24,6 +24,15 @@ public class GameStateManager : NetworkBehaviour
         NoSurvivors = 2
     }
 
+    private enum GameSpawnWarmupState
+    {
+        None = 0,
+        WaitingForTeleport = 1,
+        Settling = 2,
+        Ready = 3,
+        WaitingForCancellation = 4
+    }
+
     [Header("Refs")]
     [SerializeField, Tooltip("ReadySystem 참조(없으면 자동 탐색)")]
     private ReadySystem readySystem;
@@ -40,6 +49,13 @@ public class GameStateManager : NetworkBehaviour
 
     [SerializeField, Tooltip("결과 시간(초)")]
     private float resultsSeconds = 6f;
+
+    [Header("Game Spawn Warmup")]
+    [SerializeField, Min(0f)]
+    private float minimumPostTeleportSettleSeconds = 1.25f;
+
+    [SerializeField, Min(0.1f)]
+    private float gameSpawnTransitionTimeoutSeconds = 5f;
 
     [Header("동작 옵션")]
     [SerializeField, Tooltip("Results 후 Lobby로 자동 복귀")]
@@ -143,6 +159,20 @@ public class GameStateManager : NetworkBehaviour
     private ulong _pendingSurvivorWinnerClientId = ulong.MaxValue;
     private PostItRoundManager _postItRoundManager;
     private NetworkManager _subscribedNetworkManager;
+    private GameSpawnWarmupState _gameSpawnWarmupState;
+    private int _gameSpawnTeleportRequestVersion = -1;
+    private bool _gameSpawnTeleportRequestAccepted;
+    private float _gameSpawnTeleportRequestStartedAt = -1f;
+    private float _gameSpawnTeleportSucceededAt = -1f;
+    private bool _gameSpawnTeleportSuccessObserved;
+    private bool _gameSpawnWarmupBypass;
+    private bool _gameSpawnWarmupAbortPending;
+    private bool _gameSpawnTeleportCancellationRequested;
+    private bool _gameSpawnWarmupLobbyReturnRequested;
+    private bool _gameSpawnWarmupAuthorityErrorLogged;
+    private string _gameSpawnWarmupAbortReason;
+    private ulong[] _gameSpawnExpectedClientIds;
+    private ulong[] _gameSpawnExpectedPlayerNetworkObjectIds;
 
     public bool HasRoundWinner => RoundHasWinnerValue.Value;
     public bool IsRoundDraw => RoundIsDrawValue.Value;
@@ -184,6 +214,7 @@ public class GameStateManager : NetworkBehaviour
 
         _roundParticipantClientIds.Clear();
         _frozenZeroScoreParticipantClientIds.Clear();
+        ResetGameSpawnWarmupTracking();
 
         base.OnNetworkDespawn();
     }
@@ -193,6 +224,7 @@ public class GameStateManager : NetworkBehaviour
         UnsubscribeNetworkCallbacksServer();
         UnsubscribeGameStateCursorEvents();
         StopPlayingCursorLockRetry("destroy");
+        ResetGameSpawnWarmupTracking();
         base.OnDestroy();
     }
 
@@ -221,6 +253,12 @@ public class GameStateManager : NetworkBehaviour
 
         if (state == GameState.Lobby)
         {
+            if (_gameSpawnWarmupAbortPending ||
+                _gameSpawnWarmupLobbyReturnRequested)
+            {
+                return;
+            }
+
             if (readySystem != null && readySystem.CanStartGameServer() && readySystem.AreAllReady())
             {
                 if (EnterCountdown())
@@ -230,12 +268,23 @@ public class GameStateManager : NetworkBehaviour
             return;
         }
 
+        bool countdownAssignmentReady = true;
         if (state == GameState.Countdown &&
             Time.unscaledTime >= _nextCountdownPostItAssignmentRetryTime)
         {
             _nextCountdownPostItAssignmentRetryTime =
                 Time.unscaledTime + CountdownPostItAssignmentRetryInterval;
-            if (!AssignInitialPostItsForRoundServer(_roundRevision))
+            countdownAssignmentReady =
+                AssignInitialPostItsForRoundServer(_roundRevision);
+        }
+
+        if (state == GameState.Countdown)
+        {
+            TickGameSpawnWarmupServer();
+            if (GetState() != GameState.Countdown)
+                return;
+
+            if (!countdownAssignmentReady)
                 return;
         }
 
@@ -265,7 +314,14 @@ public class GameStateManager : NetworkBehaviour
 
         if (state == GameState.Countdown)
         {
-            EnterPlaying();
+            if (!_gameSpawnWarmupAbortPending &&
+                !_gameSpawnTeleportCancellationRequested &&
+                !_gameSpawnWarmupLobbyReturnRequested &&
+                (_gameSpawnWarmupBypass ||
+                 _gameSpawnWarmupState == GameSpawnWarmupState.Ready))
+            {
+                EnterPlaying();
+            }
         }
         else if (state == GameState.Playing)
         {
@@ -291,6 +347,8 @@ public class GameStateManager : NetworkBehaviour
             return;
         }
 
+        ResetGameSpawnWarmupTracking();
+
         StateValue.Value = (int)GameState.Lobby;
         ApplyCursorStateForCurrentGameState("enter-lobby");
         StateTimer.Value = 0f;
@@ -314,6 +372,8 @@ public class GameStateManager : NetworkBehaviour
 
     private bool EnterCountdown()
     {
+        ResetGameSpawnWarmupTracking();
+
         if (!TryGetNextRoundRevisionServer(out int nextRoundRevision))
         {
             Log("[GameStateManager] Round revision could not advance.");
@@ -328,6 +388,44 @@ public class GameStateManager : NetworkBehaviour
 
         _roundRevision = nextRoundRevision;
         _guessRevision = -1;
+
+        ResolveRefs();
+        if (!teleportPlayersOnEnterPlaying)
+        {
+            _gameSpawnWarmupBypass = true;
+        }
+        else
+        {
+            if (inGameMatchManager == null ||
+                !inGameMatchManager.IsSpawned ||
+                NetworkManager == null ||
+                !NetworkManager.IsServer ||
+                !NetworkManager.IsListening ||
+                !TryCaptureGameSpawnWarmupCohortServer(out ulong[] expectedClientIds))
+            {
+                FailGameSpawnWarmupStartServer(
+                    "Game spawn warmup preflight or cohort capture failed.");
+                return false;
+            }
+
+            float requestStartedAt = Time.unscaledTime;
+            if (!IsFiniteGameSpawnWarmupTime(requestStartedAt) ||
+                !inGameMatchManager.ServerTryStartGameSpawnTeleport(
+                    out int requestVersion) ||
+                requestVersion <= 0)
+            {
+                FailGameSpawnWarmupStartServer(
+                    "Strict game spawn teleport request was not accepted.");
+                return false;
+            }
+
+            _gameSpawnExpectedClientIds = expectedClientIds;
+            _gameSpawnTeleportRequestVersion = requestVersion;
+            _gameSpawnTeleportRequestAccepted = true;
+            _gameSpawnTeleportRequestStartedAt = requestStartedAt;
+            _gameSpawnWarmupState = GameSpawnWarmupState.WaitingForTeleport;
+        }
+
         StateValue.Value = (int)GameState.Countdown;
         ApplyCursorStateForCurrentGameState("enter-countdown");
         StateTimer.Value = countdownSeconds;
@@ -340,6 +438,17 @@ public class GameStateManager : NetworkBehaviour
 
     private void EnterPlaying()
     {
+        if (!TryValidateGameSpawnWarmupReadyForPlayingServer(
+                out string warmupFailureReason,
+                out bool canReturnToLobby))
+        {
+            if (canReturnToLobby)
+                AbortGameSpawnWarmupToLobbyServer(warmupFailureReason);
+            else
+                MarkGameSpawnWarmupAuthorityError(warmupFailureReason);
+            return;
+        }
+
         if (!AssignInitialPostItsForRoundServer(_roundRevision))
         {
             Log("[GameStateManager] Playing transition deferred until initial post-it assignment completes.");
@@ -354,12 +463,561 @@ public class GameStateManager : NetworkBehaviour
         StateTimer.Value = playSeconds;
         _nextSurvivorCheckTime = Time.unscaledTime + Mathf.Max(0f, survivorCheckInterval);
 
-        if (teleportPlayersOnEnterPlaying && inGameMatchManager != null && inGameMatchManager.IsSpawned)
-        {
-            inGameMatchManager.TeleportPlayersToGameServer();
-        }
+        ResetGameSpawnWarmupTracking();
 
         Log("[GameStateManager] EnterPlaying");
+    }
+
+    private bool TryCaptureGameSpawnWarmupCohortServer(
+        out ulong[] expectedClientIds)
+    {
+        expectedClientIds = null;
+
+        NetworkManager networkManager = NetworkManager;
+        if (!IsServer ||
+            networkManager == null ||
+            !networkManager.IsServer ||
+            !networkManager.IsListening)
+        {
+            return false;
+        }
+
+        int clientCount = networkManager.ConnectedClientsIds.Count;
+        if (clientCount <= 0 || networkManager.ConnectedClients.Count != clientCount)
+            return false;
+
+        ulong[] candidateClientIds = new ulong[clientCount];
+        for (int i = 0; i < clientCount; i++)
+            candidateClientIds[i] = networkManager.ConnectedClientsIds[i];
+
+        System.Array.Sort(candidateClientIds);
+        for (int i = 0; i < candidateClientIds.Length; i++)
+        {
+            if (i > 0 && candidateClientIds[i - 1] == candidateClientIds[i])
+                return false;
+
+            if (!networkManager.ConnectedClients.ContainsKey(candidateClientIds[i]))
+                return false;
+        }
+
+        expectedClientIds = candidateClientIds;
+        return true;
+    }
+
+    private void TickGameSpawnWarmupServer()
+    {
+        if (!IsServer || GetState() != GameState.Countdown || _gameSpawnWarmupBypass)
+            return;
+
+        if (!_gameSpawnTeleportRequestAccepted ||
+            _gameSpawnTeleportRequestVersion <= 0)
+        {
+            MarkGameSpawnWarmupAuthorityError(
+                "Countdown has no accepted strict game spawn teleport request.");
+            return;
+        }
+
+        if (!TryGetGameSpawnWarmupSnapshotServer(
+                out InGameMatchManager.ServerGameTeleportSnapshot snapshot) ||
+            snapshot.RequestVersion != _gameSpawnTeleportRequestVersion)
+        {
+            MarkGameSpawnWarmupAuthorityError(
+                "Strict game spawn teleport status query lost the exact request version.");
+            return;
+        }
+
+        if (_gameSpawnWarmupAbortPending)
+        {
+            if (snapshot.Phase == InGameMatchManager.ServerGameTeleportPhase.InProgress)
+            {
+                RequestGameSpawnWarmupCancellationServer(
+                    _gameSpawnWarmupAbortReason ??
+                    "Game spawn warmup abort is pending.");
+                return;
+            }
+
+            if (snapshot.Phase == InGameMatchManager.ServerGameTeleportPhase.Completed)
+            {
+                AbortGameSpawnWarmupToLobbyServer(
+                    _gameSpawnWarmupAbortReason ??
+                    "Game spawn warmup reached terminal after abort.");
+                return;
+            }
+
+            MarkGameSpawnWarmupAuthorityError(
+                "Strict game spawn teleport returned an invalid phase while aborting.");
+            return;
+        }
+
+        if (snapshot.Phase == InGameMatchManager.ServerGameTeleportPhase.InProgress)
+        {
+            TickInProgressGameSpawnWarmupServer(snapshot);
+            return;
+        }
+
+        if (snapshot.Phase != InGameMatchManager.ServerGameTeleportPhase.Completed)
+        {
+            MarkGameSpawnWarmupAuthorityError(
+                "Strict game spawn teleport returned an invalid phase.");
+            return;
+        }
+
+        if (snapshot.Outcome == InGameMatchManager.ServerGameTeleportOutcome.Failed ||
+            snapshot.Outcome == InGameMatchManager.ServerGameTeleportOutcome.Canceled)
+        {
+            AbortGameSpawnWarmupToLobbyServer(
+                $"Strict game spawn teleport ended with {snapshot.Outcome}.");
+            return;
+        }
+
+        if (snapshot.Outcome != InGameMatchManager.ServerGameTeleportOutcome.Succeeded)
+        {
+            AbortGameSpawnWarmupToLobbyServer(
+                "Strict game spawn teleport completed without a valid terminal outcome.");
+            return;
+        }
+
+        TickSucceededGameSpawnWarmupServer();
+    }
+
+    private void TickInProgressGameSpawnWarmupServer(
+        InGameMatchManager.ServerGameTeleportSnapshot snapshot)
+    {
+        if (snapshot.Outcome != InGameMatchManager.ServerGameTeleportOutcome.None)
+        {
+            MarkGameSpawnWarmupAuthorityError(
+                "In-progress strict game spawn teleport has a terminal outcome.");
+            return;
+        }
+
+        if (_gameSpawnWarmupState == GameSpawnWarmupState.WaitingForCancellation)
+            return;
+
+        if (_gameSpawnWarmupState != GameSpawnWarmupState.WaitingForTeleport)
+        {
+            MarkGameSpawnWarmupAuthorityError(
+                "In-progress strict game spawn teleport has an invalid local state.");
+            return;
+        }
+
+        NetworkManager networkManager = NetworkManager;
+        if (!DoesGameSpawnWarmupCohortMatchServer(networkManager))
+        {
+            RequestGameSpawnWarmupCancellationServer(
+                "Connected client cohort changed before teleport completion.");
+            return;
+        }
+
+        if (!IsFiniteGameSpawnWarmupTime(_gameSpawnTeleportRequestStartedAt))
+        {
+            RequestGameSpawnWarmupCancellationServer(
+                "Strict game spawn teleport start time is invalid.");
+            return;
+        }
+
+        float elapsed = Time.unscaledTime - _gameSpawnTeleportRequestStartedAt;
+        if (!IsFiniteGameSpawnWarmupTime(elapsed))
+        {
+            RequestGameSpawnWarmupCancellationServer(
+                "Strict game spawn teleport elapsed time is invalid.");
+            return;
+        }
+
+        if (elapsed >= Mathf.Max(0.1f, gameSpawnTransitionTimeoutSeconds))
+        {
+            RequestGameSpawnWarmupCancellationServer(
+                "Strict game spawn teleport timed out.");
+        }
+    }
+
+    private void TickSucceededGameSpawnWarmupServer()
+    {
+        if (!_gameSpawnTeleportSuccessObserved)
+        {
+            if (!TryObserveGameSpawnWarmupSuccessServer(out string failureReason))
+            {
+                AbortGameSpawnWarmupToLobbyServer(failureReason);
+                return;
+            }
+
+            return;
+        }
+
+        if (_gameSpawnWarmupState != GameSpawnWarmupState.Settling &&
+            _gameSpawnWarmupState != GameSpawnWarmupState.Ready)
+        {
+            AbortGameSpawnWarmupToLobbyServer(
+                "Succeeded game spawn warmup has an invalid local state.");
+            return;
+        }
+
+        if (!TryValidateGameSpawnWarmupPlayerIdentityServer(
+                out string identityFailureReason))
+        {
+            AbortGameSpawnWarmupToLobbyServer(identityFailureReason);
+            return;
+        }
+
+        if (_gameSpawnWarmupState == GameSpawnWarmupState.Ready)
+            return;
+
+        if (!IsFiniteGameSpawnWarmupTime(_gameSpawnTeleportSucceededAt))
+        {
+            AbortGameSpawnWarmupToLobbyServer(
+                "Game spawn warmup success time is invalid.");
+            return;
+        }
+
+        float settleElapsed = Time.unscaledTime - _gameSpawnTeleportSucceededAt;
+        if (!IsFiniteGameSpawnWarmupTime(settleElapsed))
+        {
+            AbortGameSpawnWarmupToLobbyServer(
+                "Game spawn warmup settle elapsed time is invalid.");
+            return;
+        }
+
+        if (settleElapsed >= Mathf.Max(0f, minimumPostTeleportSettleSeconds) &&
+            StateTimer.Value <= 0f)
+        {
+            _gameSpawnWarmupState = GameSpawnWarmupState.Ready;
+        }
+    }
+
+    private bool TryObserveGameSpawnWarmupSuccessServer(out string failureReason)
+    {
+        failureReason = null;
+        NetworkManager networkManager = NetworkManager;
+        if (!DoesGameSpawnWarmupCohortMatchServer(networkManager) ||
+            _gameSpawnExpectedClientIds == null ||
+            _gameSpawnExpectedClientIds.Length == 0)
+        {
+            failureReason =
+                "Connected client cohort changed before success observation.";
+            return false;
+        }
+
+        for (int i = 0; i < _gameSpawnExpectedClientIds.Length; i++)
+        {
+            if (!TryResolveGameSpawnWarmupPlayerObjectServer(
+                    networkManager,
+                    _gameSpawnExpectedClientIds[i],
+                    out NetworkObject playerObject) ||
+                playerObject.NetworkObjectId == ulong.MaxValue)
+            {
+                failureReason =
+                    "A success cohort PlayerObject is missing or invalid.";
+                return false;
+            }
+        }
+
+        ulong[] playerNetworkObjectIds =
+            new ulong[_gameSpawnExpectedClientIds.Length];
+        for (int i = 0; i < _gameSpawnExpectedClientIds.Length; i++)
+        {
+            if (!TryResolveGameSpawnWarmupPlayerObjectServer(
+                    networkManager,
+                    _gameSpawnExpectedClientIds[i],
+                    out NetworkObject playerObject))
+            {
+                failureReason =
+                    "A success cohort PlayerObject changed during snapshot capture.";
+                return false;
+            }
+
+            playerNetworkObjectIds[i] = playerObject.NetworkObjectId;
+        }
+
+        float successObservedAt = Time.unscaledTime;
+        if (!IsFiniteGameSpawnWarmupTime(successObservedAt))
+        {
+            failureReason = "Game spawn warmup success time is invalid.";
+            return false;
+        }
+
+        _gameSpawnExpectedPlayerNetworkObjectIds = playerNetworkObjectIds;
+        _gameSpawnTeleportSucceededAt = successObservedAt;
+        _gameSpawnTeleportSuccessObserved = true;
+        _gameSpawnWarmupState = GameSpawnWarmupState.Settling;
+        return true;
+    }
+
+    private bool TryValidateGameSpawnWarmupReadyForPlayingServer(
+        out string failureReason,
+        out bool canReturnToLobby)
+    {
+        failureReason = null;
+        canReturnToLobby = false;
+
+        if (!IsServer || GetState() != GameState.Countdown)
+        {
+            failureReason =
+                "EnterPlaying requires the authoritative Countdown state.";
+            return false;
+        }
+
+        if (_gameSpawnWarmupAbortPending ||
+            _gameSpawnTeleportCancellationRequested ||
+            _gameSpawnWarmupLobbyReturnRequested)
+        {
+            failureReason =
+                "EnterPlaying is blocked by a pending game spawn warmup abort.";
+            return false;
+        }
+
+        if (!teleportPlayersOnEnterPlaying)
+        {
+            if (_gameSpawnWarmupBypass && !_gameSpawnTeleportRequestAccepted)
+                return true;
+
+            failureReason = "Game spawn warmup bypass state is invalid.";
+            return false;
+        }
+
+        if (_gameSpawnWarmupBypass ||
+            !_gameSpawnTeleportRequestAccepted ||
+            _gameSpawnTeleportRequestVersion <= 0 ||
+            !_gameSpawnTeleportSuccessObserved ||
+            _gameSpawnWarmupState != GameSpawnWarmupState.Ready)
+        {
+            failureReason = "Game spawn warmup is not ready for Playing.";
+            canReturnToLobby = !_gameSpawnTeleportRequestAccepted;
+            return false;
+        }
+
+        if (!TryGetGameSpawnWarmupSnapshotServer(
+                out InGameMatchManager.ServerGameTeleportSnapshot snapshot) ||
+            snapshot.RequestVersion != _gameSpawnTeleportRequestVersion)
+        {
+            failureReason =
+                "EnterPlaying lost the exact strict game spawn request status.";
+            return false;
+        }
+
+        if (snapshot.Phase != InGameMatchManager.ServerGameTeleportPhase.Completed ||
+            snapshot.Outcome != InGameMatchManager.ServerGameTeleportOutcome.Succeeded)
+        {
+            failureReason =
+                "EnterPlaying requires Completed/Succeeded game spawn status.";
+            canReturnToLobby =
+                snapshot.Phase == InGameMatchManager.ServerGameTeleportPhase.Completed;
+            return false;
+        }
+
+        if (!TryValidateGameSpawnWarmupPlayerIdentityServer(out failureReason))
+        {
+            canReturnToLobby = true;
+            return false;
+        }
+
+        if (!IsFiniteGameSpawnWarmupTime(_gameSpawnTeleportSucceededAt))
+        {
+            failureReason = "EnterPlaying has an invalid settle start time.";
+            canReturnToLobby = true;
+            return false;
+        }
+
+        float settleElapsed = Time.unscaledTime - _gameSpawnTeleportSucceededAt;
+        if (!IsFiniteGameSpawnWarmupTime(settleElapsed) ||
+            settleElapsed < Mathf.Max(0f, minimumPostTeleportSettleSeconds))
+        {
+            failureReason = "EnterPlaying minimum settle time is incomplete.";
+            canReturnToLobby = true;
+            return false;
+        }
+
+        return true;
+    }
+
+    private bool TryValidateGameSpawnWarmupPlayerIdentityServer(
+        out string failureReason)
+    {
+        failureReason = null;
+        NetworkManager networkManager = NetworkManager;
+        if (!DoesGameSpawnWarmupCohortMatchServer(networkManager) ||
+            _gameSpawnExpectedClientIds == null ||
+            _gameSpawnExpectedPlayerNetworkObjectIds == null ||
+            _gameSpawnExpectedClientIds.Length == 0 ||
+            _gameSpawnExpectedClientIds.Length !=
+                _gameSpawnExpectedPlayerNetworkObjectIds.Length)
+        {
+            failureReason = "Game spawn warmup cohort identity is invalid.";
+            return false;
+        }
+
+        for (int i = 0; i < _gameSpawnExpectedClientIds.Length; i++)
+        {
+            if (!TryResolveGameSpawnWarmupPlayerObjectServer(
+                    networkManager,
+                    _gameSpawnExpectedClientIds[i],
+                    out NetworkObject playerObject) ||
+                playerObject.NetworkObjectId == ulong.MaxValue ||
+                playerObject.NetworkObjectId !=
+                    _gameSpawnExpectedPlayerNetworkObjectIds[i])
+            {
+                failureReason =
+                    "Game spawn warmup PlayerObject identity changed during settle.";
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private bool TryGetGameSpawnWarmupSnapshotServer(
+        out InGameMatchManager.ServerGameTeleportSnapshot snapshot)
+    {
+        snapshot = default;
+        return IsServer &&
+               inGameMatchManager != null &&
+               inGameMatchManager.IsServer &&
+               inGameMatchManager.IsSpawned &&
+               NetworkManager != null &&
+               NetworkManager.IsServer &&
+               NetworkManager.IsListening &&
+               inGameMatchManager.ServerTryGetGameSpawnTeleportStatus(
+                   _gameSpawnTeleportRequestVersion,
+                   out snapshot);
+    }
+
+    private bool DoesGameSpawnWarmupCohortMatchServer(
+        NetworkManager networkManager)
+    {
+        if (!IsServer ||
+            networkManager == null ||
+            !networkManager.IsServer ||
+            !networkManager.IsListening ||
+            _gameSpawnExpectedClientIds == null ||
+            _gameSpawnExpectedClientIds.Length == 0 ||
+            networkManager.ConnectedClients.Count !=
+                _gameSpawnExpectedClientIds.Length ||
+            networkManager.ConnectedClientsIds.Count !=
+                _gameSpawnExpectedClientIds.Length)
+        {
+            return false;
+        }
+
+        for (int i = 0; i < _gameSpawnExpectedClientIds.Length; i++)
+        {
+            if (!networkManager.ConnectedClients.ContainsKey(
+                    _gameSpawnExpectedClientIds[i]))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static bool TryResolveGameSpawnWarmupPlayerObjectServer(
+        NetworkManager networkManager,
+        ulong clientId,
+        out NetworkObject playerObject)
+    {
+        playerObject = null;
+        if (networkManager == null ||
+            !networkManager.ConnectedClients.TryGetValue(clientId, out var client) ||
+            client == null)
+        {
+            return false;
+        }
+
+        playerObject = client.PlayerObject;
+        return playerObject != null &&
+               playerObject.IsSpawned &&
+               playerObject.OwnerClientId == clientId;
+    }
+
+    private void RequestGameSpawnWarmupCancellationServer(string reason)
+    {
+        _gameSpawnWarmupAbortPending = true;
+        if (string.IsNullOrEmpty(_gameSpawnWarmupAbortReason))
+            _gameSpawnWarmupAbortReason = reason;
+
+        if (_gameSpawnTeleportCancellationRequested)
+            return;
+
+        if (inGameMatchManager == null ||
+            !inGameMatchManager.IsServer ||
+            !inGameMatchManager.IsSpawned)
+        {
+            MarkGameSpawnWarmupAuthorityError(
+                "Cannot request strict game spawn teleport cancellation.");
+            return;
+        }
+
+        _gameSpawnTeleportCancellationRequested = true;
+        _gameSpawnWarmupState = GameSpawnWarmupState.WaitingForCancellation;
+        Debug.LogWarning(
+            $"[GameStateManager] Game spawn warmup cancellation requested. reason:{_gameSpawnWarmupAbortReason}",
+            this);
+        inGameMatchManager.TeleportPlayersToLobbyServer();
+    }
+
+    private void AbortGameSpawnWarmupToLobbyServer(string reason)
+    {
+        _gameSpawnWarmupAbortPending = true;
+        if (string.IsNullOrEmpty(_gameSpawnWarmupAbortReason))
+            _gameSpawnWarmupAbortReason = reason;
+
+        if (_gameSpawnWarmupLobbyReturnRequested)
+            return;
+
+        _gameSpawnWarmupLobbyReturnRequested = true;
+        Debug.LogWarning(
+            $"[GameStateManager] Game spawn warmup aborted to Lobby. reason:{_gameSpawnWarmupAbortReason}",
+            this);
+        EnterLobby(false);
+    }
+
+    private void FailGameSpawnWarmupStartServer(string reason)
+    {
+        _gameSpawnWarmupAbortPending = true;
+        _gameSpawnWarmupAbortReason = reason;
+        _gameSpawnWarmupLobbyReturnRequested = true;
+        Debug.LogError(
+            $"[GameStateManager] Game spawn warmup could not start. reason:{reason}",
+            this);
+        EnterLobby(false);
+    }
+
+    private void MarkGameSpawnWarmupAuthorityError(string reason)
+    {
+        _gameSpawnWarmupAbortPending = true;
+        if (string.IsNullOrEmpty(_gameSpawnWarmupAbortReason))
+            _gameSpawnWarmupAbortReason = reason;
+
+        if (_gameSpawnWarmupAuthorityErrorLogged)
+            return;
+
+        _gameSpawnWarmupAuthorityErrorLogged = true;
+        Debug.LogError(
+            $"[GameStateManager] Game spawn warmup authority error. reason:{_gameSpawnWarmupAbortReason}",
+            this);
+    }
+
+    private void ResetGameSpawnWarmupTracking()
+    {
+        _gameSpawnWarmupState = GameSpawnWarmupState.None;
+        _gameSpawnTeleportRequestVersion = -1;
+        _gameSpawnTeleportRequestAccepted = false;
+        _gameSpawnTeleportRequestStartedAt = -1f;
+        _gameSpawnTeleportSucceededAt = -1f;
+        _gameSpawnTeleportSuccessObserved = false;
+        _gameSpawnWarmupBypass = false;
+        _gameSpawnWarmupAbortPending = false;
+        _gameSpawnTeleportCancellationRequested = false;
+        _gameSpawnWarmupLobbyReturnRequested = false;
+        _gameSpawnWarmupAuthorityErrorLogged = false;
+        _gameSpawnWarmupAbortReason = null;
+        _gameSpawnExpectedClientIds = null;
+        _gameSpawnExpectedPlayerNetworkObjectIds = null;
+    }
+
+    private static bool IsFiniteGameSpawnWarmupTime(float value)
+    {
+        return !float.IsNaN(value) &&
+               !float.IsInfinity(value) &&
+               value >= 0f;
     }
 
     private bool AssignInitialPostItsForRoundServer(int roundRevision)
