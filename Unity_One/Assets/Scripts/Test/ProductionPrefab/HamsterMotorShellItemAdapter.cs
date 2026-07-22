@@ -128,6 +128,8 @@ public sealed class HamsterMotorShellItemAdapter : MonoBehaviour
     private NetworkObject _ownerNetworkObject;
     private PlayerHub _playerHub;
     private GameStateManager _gameStateManager;
+    private PlayerStatusModule _playerStatusModule;
+    private bool _playerStatusResolveAttempted;
     private Transform _targetRoot;
     private HamsterMotorShellSpinDashAdapter _spinDashAdapter;
     private Transform _runtimeRightHandSocket;
@@ -206,6 +208,9 @@ public sealed class HamsterMotorShellItemAdapter : MonoBehaviour
         if (!IsPlayingGameplayState())
             return;
 
+        if (IsItemInputBlockedByElimination())
+            return;
+
         if (IsSpinDashDizzyInputBlocked())
             return;
 
@@ -256,6 +261,10 @@ public sealed class HamsterMotorShellItemAdapter : MonoBehaviour
         if (_ownerNetworkObject == null)
             _ownerNetworkObject = GetComponentInParent<NetworkObject>();
 
+        _playerStatusModule = null;
+        _playerStatusResolveAttempted = false;
+        ResolvePlayerStatusModule();
+
         if (_playerHub == null)
             _playerHub = GetComponent<PlayerHub>();
         if (_playerHub == null)
@@ -290,7 +299,13 @@ public sealed class HamsterMotorShellItemAdapter : MonoBehaviour
             return false;
         }
 
-        if (_ownerNetworkObject != null && !_ownerNetworkObject.IsOwner)
+        if (_ownerNetworkObject == null || !_ownerNetworkObject.IsSpawned)
+        {
+            SetInputBlockerOnce("Owner NetworkObject missing or not spawned");
+            return false;
+        }
+
+        if (!_ownerNetworkObject.IsOwner)
             return false;
 
         return true;
@@ -305,7 +320,77 @@ public sealed class HamsterMotorShellItemAdapter : MonoBehaviour
             return false;
         }
 
-        return IsPlayingGameplayState();
+        if (!IsPlayingGameplayState())
+            return false;
+
+        if (!IsTargetRoot() ||
+            _ownerNetworkObject == null ||
+            !_ownerNetworkObject.IsSpawned ||
+            !_ownerNetworkObject.IsOwner)
+        {
+            return false;
+        }
+
+        return !IsItemInputBlockedByElimination();
+    }
+
+    private PlayerStatusModule ResolvePlayerStatusModule()
+    {
+        if (_playerStatusModule != null)
+        {
+            NetworkObject cachedOwner = _playerStatusModule.GetComponentInParent<NetworkObject>();
+            if (cachedOwner == _ownerNetworkObject)
+                return _playerStatusModule;
+
+            _playerStatusModule = null;
+        }
+        else if (!ReferenceEquals(_playerStatusModule, null))
+        {
+            _playerStatusModule = null;
+            _playerStatusResolveAttempted = false;
+        }
+
+        if (_playerStatusResolveAttempted)
+            return null;
+
+        _playerStatusResolveAttempted = true;
+        if (_ownerNetworkObject == null)
+            return null;
+
+        PlayerStatusModule candidate = _ownerNetworkObject.GetComponent<PlayerStatusModule>();
+        if (candidate == null)
+            candidate = _ownerNetworkObject.GetComponentInChildren<PlayerStatusModule>(true);
+
+        if (candidate == null ||
+            candidate.GetComponentInParent<NetworkObject>() != _ownerNetworkObject)
+        {
+            return null;
+        }
+
+        _playerStatusModule = candidate;
+        return _playerStatusModule;
+    }
+
+    private bool IsItemInputBlockedByElimination()
+    {
+        PlayerStatusModule status = ResolvePlayerStatusModule();
+        if (status == null)
+        {
+            SetInputBlockerOnce("PlayerStatusModule missing or root mismatch");
+            return true;
+        }
+
+        if (!status.IsEliminated)
+            return false;
+
+        SetInputBlockerOnce("Player eliminated");
+        return true;
+    }
+
+    private void SetInputBlockerOnce(string reason)
+    {
+        if (!string.Equals(_lastBlockerReason, reason, StringComparison.Ordinal))
+            SetBlocker(reason);
     }
 
     private bool IsPlayingGameplayState()
@@ -363,6 +448,9 @@ public sealed class HamsterMotorShellItemAdapter : MonoBehaviour
             SetBlocker("target NetworkObject missing or not spawned");
             return;
         }
+
+        if (!CanChangeItemState())
+            return;
 
         _heldPickup = pickup;
         _heldNetworkObject = itemNetworkObject;
@@ -486,6 +574,9 @@ public sealed class HamsterMotorShellItemAdapter : MonoBehaviour
         Collider[] holderColliders = GetHolderCollisionGraceColliders();
         releasePosition = ResolveCollisionSafeReleasePosition(releasePosition, holderColliders, out bool releaseAdjusted);
         List<Collider> initialOverlapPlayerColliders = CollectInitialOverlapPlayerColliders(releasePosition, holderColliders);
+
+        if (!CanChangeItemState())
+            return;
 
         bool restored = pickup.TryRestoreDroppedStateServer(
             releasePosition,
