@@ -9,6 +9,7 @@ public class HamsterFullRagdollMotor : MonoBehaviour
     private const float InputRouteLogInterval = 0.5f;
     private const float MotorJumpRearmStableGroundTime = 0.05f;
     private const float MaxMotorJumpRearmGroundHitDistance = 0.5f;
+    private const float MinimumGroundNormalUpDot = 0.5f;
     private const float PostJumpSprintMovementSettleTime = 0.10f;
     private const float PostJumpSprintMovementSettleMinScale = 0.35f;
     private const string CameraPivotName = "CameraPivot";
@@ -166,6 +167,7 @@ public class HamsterFullRagdollMotor : MonoBehaviour
     private string _lastGroundHitName = "<none>";
     private int _lastGroundHitLayer = -1;
     private float _lastGroundHitDistance = float.NaN;
+    private float _lastGroundHitNormalUpDot = float.NaN;
     private bool _lastGroundIgnoreLayerCollision;
     private Vector3 _lastMoveVelocityBefore;
     private Vector3 _lastMoveVelocityAfter;
@@ -1593,13 +1595,20 @@ public class HamsterFullRagdollMotor : MonoBehaviour
             distance,
             groundMask,
             QueryTriggerInteraction.Ignore);
+        float normalUpDot = hit && IsFinite(hitInfo.normal)
+            ? Vector3.Dot(hitInfo.normal, Vector3.up)
+            : float.NaN;
+        bool groundLikeHit = hit &&
+                             IsFinite(normalUpDot) &&
+                             normalUpDot >= MinimumGroundNormalUpDot;
         _lastGroundHit = hit;
         _lastGroundHitName = hit && hitInfo.collider != null ? hitInfo.collider.name : "<none>";
         _lastGroundHitLayer = hit && hitInfo.collider != null ? hitInfo.collider.gameObject.layer : -1;
         _lastGroundHitDistance = hit ? hitInfo.distance : float.NaN;
+        _lastGroundHitNormalUpDot = normalUpDot;
         _lastGroundIgnoreLayerCollision = hit && hitInfo.collider != null
             && Physics.GetIgnoreLayerCollision(hipsBody.gameObject.layer, hitInfo.collider.gameObject.layer);
-        return hit;
+        return groundLikeHit;
     }
 
     private void CaptureInputRoutePositionDelta()
@@ -1678,7 +1687,7 @@ public class HamsterFullRagdollMotor : MonoBehaviour
     private void LogInputRouteGround()
     {
         Debug.Log(
-            $"[InputRoute/Ground:{GetInputRouteObjectName()}] grounded={_isGrounded} probeOrigin={FormatVector3(_lastGroundProbeOrigin)} probeRadius={_lastGroundProbeRadius:F2} probeDistance={_lastGroundProbeDistance:F2} colliderBottomY={FormatFloat(_lastGroundColliderBottomY)} rbCenterOfMassY={FormatFloat(_lastGroundRbCenterOfMassY)} hit={_lastGroundHit} hitName={_lastGroundHitName} hitLayer={_lastGroundHitLayer} hitDistance={FormatFloat(_lastGroundHitDistance)} groundMask={groundMask.value} ignoreLayerCollision={_lastGroundIgnoreLayerCollision}",
+            $"[InputRoute/Ground:{GetInputRouteObjectName()}] grounded={_isGrounded} probeOrigin={FormatVector3(_lastGroundProbeOrigin)} probeRadius={_lastGroundProbeRadius:F2} probeDistance={_lastGroundProbeDistance:F2} colliderBottomY={FormatFloat(_lastGroundColliderBottomY)} rbCenterOfMassY={FormatFloat(_lastGroundRbCenterOfMassY)} hit={_lastGroundHit} hitName={_lastGroundHitName} hitLayer={_lastGroundHitLayer} hitDistance={FormatFloat(_lastGroundHitDistance)} hitNormalUpDot={FormatFloat(_lastGroundHitNormalUpDot)} minGroundNormalUpDot={MinimumGroundNormalUpDot:F2} groundMask={groundMask.value} ignoreLayerCollision={_lastGroundIgnoreLayerCollision}",
             this);
     }
 

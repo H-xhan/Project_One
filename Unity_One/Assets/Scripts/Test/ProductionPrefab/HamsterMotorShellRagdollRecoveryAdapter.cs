@@ -424,8 +424,9 @@ public sealed class HamsterMotorShellRagdollRecoveryAdapter : MonoBehaviour
 
         bool groundedOk = !groundedRequiredToFinishRecovery || motor == null || motor.IsGrounded;
         bool speedOk = GetPlanarSpeed() <= Mathf.Max(0f, maxRecoverPlanarSpeed);
+        bool stableEnough = groundedOk && speedOk && IsRecoveryAngularVelocityOk();
         bool failSafe = _stateTimer >= Mathf.Max(_activeKnockdownDuration, Mathf.Max(MinStateDuration, maxKnockdownDuration));
-        if (groundedOk || speedOk || failSafe)
+        if (stableEnough || failSafe)
             EnterPostKnockdownRecovery();
     }
 
@@ -1063,14 +1064,20 @@ public sealed class HamsterMotorShellRagdollRecoveryAdapter : MonoBehaviour
 
     private bool TryResolveStableGetUpRotation(out Quaternion stableRotation)
     {
-        Transform root = transform.root != null ? transform.root : transform;
-        Vector3 forward = root != null ? Vector3.ProjectOnPlane(root.forward, Vector3.up) : Vector3.zero;
+        Vector3 forward = Vector3.zero;
+        if (_hasPreImpactFacingForward)
+            TryNormalizePlanarDirection(_preImpactFacingForward, out forward);
+        if (forward.sqrMagnitude <= 0.0001f && motor != null)
+            TryNormalizePlanarDirection(motor.DesiredFacingDirection, out forward);
         if (forward.sqrMagnitude <= 0.0001f && bodyTransform != null)
-            forward = Vector3.ProjectOnPlane(bodyTransform.forward, Vector3.up);
+            TryNormalizePlanarDirection(bodyTransform.forward, out forward);
+        Transform root = transform.root != null ? transform.root : transform;
+        if (forward.sqrMagnitude <= 0.0001f && root != null)
+            TryNormalizePlanarDirection(root.forward, out forward);
         if (forward.sqrMagnitude <= 0.0001f)
             forward = Vector3.forward;
 
-        stableRotation = Quaternion.LookRotation(forward.normalized, Vector3.up);
+        stableRotation = Quaternion.LookRotation(forward, Vector3.up);
         return IsFiniteQuaternion(stableRotation);
     }
 
@@ -1329,11 +1336,14 @@ public sealed class HamsterMotorShellRagdollRecoveryAdapter : MonoBehaviour
 
     private bool TryResolvePreImpactFacingForward(out Vector3 forward)
     {
-        Transform root = transform.root != null ? transform.root : transform;
-        if (root != null && TryNormalizePlanarDirection(root.forward, out forward))
+        if (motor != null && TryNormalizePlanarDirection(motor.DesiredFacingDirection, out forward))
             return true;
 
         if (bodyTransform != null && TryNormalizePlanarDirection(bodyTransform.forward, out forward))
+            return true;
+
+        Transform root = transform.root != null ? transform.root : transform;
+        if (root != null && TryNormalizePlanarDirection(root.forward, out forward))
             return true;
 
         forward = Vector3.zero;

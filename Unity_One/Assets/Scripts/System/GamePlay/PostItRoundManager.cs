@@ -14,6 +14,13 @@ public class PostItRoundManager : NetworkBehaviour
         InitialMapBonusPostItCount +
         InitialMapPenaltyPostItCount;
     private const float MinimumMapSpawnSeparation = 0.5f;
+    private const float FallMapOffsetMinimumRadius = 0.75f;
+    private const float FallMapOffsetMaximumRadius = 1.25f;
+    private const int FallMapOffsetAttemptsPerMarker = 4;
+    private const float FallWorldDropMinimumSeparation = 0.75f;
+    private const uint FallMapDropSeedSalt = 0x46414C4Cu;
+    private const uint FallMapDropAngleSalt = 0x414E474Cu;
+    private const uint FallMapDropRadiusSalt = 0x52414449u;
     private const float ZeroPostItPollIntervalSeconds = 0.25f;
 
     [SerializeField] private int initialDrawingPostItCountPerPlayer = 2;
@@ -2702,11 +2709,11 @@ public class PostItRoundManager : NetworkBehaviour
             return false;
         }
 
-        if (!TryResolveWorldDropPose(
+        if (!TryResolveFallWorldDropPose(
                 selectedData.PostItId,
+                sourceOwnerClientId,
                 authoritativePosition,
-                hasFallbackPosition,
-                fallbackPosition,
+                _networkWorldDrops.Count,
                 out Vector3 dropPosition,
                 out Quaternion dropRotation))
         {
@@ -3394,6 +3401,324 @@ public class PostItRoundManager : NetworkBehaviour
             out rotation);
     }
 
+    private bool TryResolveFallWorldDropPose(
+        int postItId,
+        ulong sourceOwnerClientId,
+        Vector3 authoritativePosition,
+        int authoritativeWorldDropCount,
+        out Vector3 position,
+        out Quaternion rotation)
+    {
+        position = Vector3.zero;
+        rotation = Quaternion.identity;
+        if (postItId < 0 ||
+            sourceOwnerClientId == ulong.MaxValue ||
+            !IsFiniteVector(authoritativePosition) ||
+            _lastInitialAssignmentRoundRevision < 0 ||
+            authoritativeWorldDropCount < 0)
+        {
+            return false;
+        }
+
+        if (!TryCollectCanonicalMapSpawnPoints(
+                false,
+                out List<PostItMapSpawnPoint> spawnPoints,
+                out _))
+        {
+            return false;
+        }
+
+        if (spawnPoints.Count > 0)
+        {
+            if (!TryBuildFallMapDistributionSnapshot(
+                    spawnPoints,
+                    authoritativeWorldDropCount,
+                    out Vector3[] worldDropPositions,
+                    out int[] markerOccupancies))
+            {
+                return false;
+            }
+
+            uint seed = ComputeStableFallMapDropSeed(
+                _lastInitialAssignmentRoundRevision,
+                postItId,
+                sourceOwnerClientId,
+                authoritativeWorldDropCount);
+            int firstMarkerIndex = (int)(seed % (uint)spawnPoints.Count);
+            if (TryResolveFallMapPosePass(
+                    postItId,
+                    spawnPoints,
+                    firstMarkerIndex,
+                    seed,
+                    worldDropPositions,
+                    markerOccupancies,
+                    true,
+                    out bool foundGroundValidCandidate,
+                    out position,
+                    out rotation))
+            {
+                return true;
+            }
+
+            if (foundGroundValidCandidate)
+            {
+                return TryResolveFallMapPosePass(
+                    postItId,
+                    spawnPoints,
+                    firstMarkerIndex,
+                    seed,
+                    worldDropPositions,
+                    markerOccupancies,
+                    false,
+                    out _,
+                    out position,
+                    out rotation);
+            }
+        }
+
+        return TryProjectWorldDropToGround(
+            postItId,
+            authoritativePosition,
+            authoritativePosition.y,
+            false,
+            Vector3.zero,
+            false,
+            out position,
+            out rotation);
+    }
+
+    private bool TryResolveFallMapPosePass(
+        int postItId,
+        IReadOnlyList<PostItMapSpawnPoint> spawnPoints,
+        int firstMarkerIndex,
+        uint seed,
+        Vector3[] worldDropPositions,
+        int[] markerOccupancies,
+        bool requireWorldDropSeparation,
+        out bool foundGroundValidCandidate,
+        out Vector3 position,
+        out Quaternion rotation)
+    {
+        foundGroundValidCandidate = false;
+        position = Vector3.zero;
+        rotation = Quaternion.identity;
+        if (spawnPoints == null ||
+            spawnPoints.Count == 0 ||
+            firstMarkerIndex < 0 ||
+            firstMarkerIndex >= spawnPoints.Count ||
+            worldDropPositions == null ||
+            markerOccupancies == null ||
+            markerOccupancies.Length != spawnPoints.Count)
+        {
+            return false;
+        }
+
+        bool hasBestCandidate = false;
+        int bestMarkerOccupancy = int.MaxValue;
+        float bestMinimumWorldDropSqrDistance = float.NegativeInfinity;
+
+        for (int markerOffset = 0;
+             markerOffset < spawnPoints.Count;
+             markerOffset++)
+        {
+            int markerIndex =
+                (firstMarkerIndex + markerOffset) % spawnPoints.Count;
+            PostItMapSpawnPoint spawnPoint = spawnPoints[markerIndex];
+            if (spawnPoint == null)
+                continue;
+
+            for (int attempt = 0;
+                 attempt < FallMapOffsetAttemptsPerMarker;
+                 attempt++)
+            {
+                Vector3 markerOffsetPosition =
+                    GetDeterministicFallMapMarkerOffset(
+                        seed,
+                        spawnPoint.SpawnOrder,
+                        markerIndex,
+                        attempt);
+                Vector3 probePosition =
+                    spawnPoint.transform.position + markerOffsetPosition;
+                if (!TryResolveMapSpawnPose(
+                        postItId,
+                        probePosition,
+                        out Vector3 candidatePosition,
+                        out Quaternion candidateRotation))
+                {
+                    continue;
+                }
+
+                foundGroundValidCandidate = true;
+                float minimumWorldDropSqrDistance =
+                    GetMinimumWorldDropHorizontalSqrDistance(
+                        candidatePosition,
+                        worldDropPositions);
+                float minimumRequiredSqrDistance =
+                    FallWorldDropMinimumSeparation *
+                    FallWorldDropMinimumSeparation;
+                if (requireWorldDropSeparation &&
+                    minimumWorldDropSqrDistance < minimumRequiredSqrDistance)
+                {
+                    continue;
+                }
+
+                int markerOccupancy = markerOccupancies[markerIndex];
+                if (hasBestCandidate &&
+                    (markerOccupancy > bestMarkerOccupancy ||
+                     (markerOccupancy == bestMarkerOccupancy &&
+                      minimumWorldDropSqrDistance <=
+                      bestMinimumWorldDropSqrDistance)))
+                {
+                    continue;
+                }
+
+                hasBestCandidate = true;
+                bestMarkerOccupancy = markerOccupancy;
+                bestMinimumWorldDropSqrDistance =
+                    minimumWorldDropSqrDistance;
+                position = candidatePosition;
+                rotation = candidateRotation;
+            }
+        }
+
+        return hasBestCandidate;
+    }
+
+    private bool TryBuildFallMapDistributionSnapshot(
+        IReadOnlyList<PostItMapSpawnPoint> spawnPoints,
+        int authoritativeWorldDropCount,
+        out Vector3[] worldDropPositions,
+        out int[] markerOccupancies)
+    {
+        worldDropPositions = Array.Empty<Vector3>();
+        markerOccupancies = Array.Empty<int>();
+        if (spawnPoints == null ||
+            spawnPoints.Count == 0 ||
+            _networkWorldDrops == null ||
+            authoritativeWorldDropCount < 0 ||
+            _networkWorldDrops.Count != authoritativeWorldDropCount)
+        {
+            return false;
+        }
+
+        worldDropPositions = new Vector3[authoritativeWorldDropCount];
+        markerOccupancies = new int[spawnPoints.Count];
+        for (int worldDropIndex = 0;
+             worldDropIndex < authoritativeWorldDropCount;
+             worldDropIndex++)
+        {
+            PostItWorldDropData worldDrop = _networkWorldDrops[worldDropIndex];
+            if (!worldDrop.IsValid ||
+                !IsFiniteVector(worldDrop.Position))
+            {
+                return false;
+            }
+
+            worldDropPositions[worldDropIndex] = worldDrop.Position;
+            int nearestMarkerIndex = -1;
+            float nearestMarkerSqrDistance = float.PositiveInfinity;
+            for (int markerIndex = 0;
+                 markerIndex < spawnPoints.Count;
+                 markerIndex++)
+            {
+                PostItMapSpawnPoint spawnPoint = spawnPoints[markerIndex];
+                if (spawnPoint == null ||
+                    !IsFiniteVector(spawnPoint.transform.position))
+                {
+                    return false;
+                }
+
+                float markerSqrDistance = HorizontalSqrDistance(
+                    worldDrop.Position,
+                    spawnPoint.transform.position);
+                if (nearestMarkerIndex < 0 ||
+                    markerSqrDistance < nearestMarkerSqrDistance)
+                {
+                    nearestMarkerIndex = markerIndex;
+                    nearestMarkerSqrDistance = markerSqrDistance;
+                }
+            }
+
+            if (nearestMarkerIndex < 0)
+                return false;
+
+            markerOccupancies[nearestMarkerIndex]++;
+        }
+
+        return true;
+    }
+
+    private static float GetMinimumWorldDropHorizontalSqrDistance(
+        Vector3 position,
+        IReadOnlyList<Vector3> worldDropPositions)
+    {
+        float minimumSqrDistance = float.PositiveInfinity;
+        for (int worldDropIndex = 0;
+             worldDropIndex < worldDropPositions.Count;
+             worldDropIndex++)
+        {
+            minimumSqrDistance = Mathf.Min(
+                minimumSqrDistance,
+                HorizontalSqrDistance(
+                    position,
+                    worldDropPositions[worldDropIndex]));
+        }
+
+        return minimumSqrDistance;
+    }
+
+    private static Vector3 GetDeterministicFallMapMarkerOffset(
+        uint seed,
+        int spawnOrder,
+        int markerIndex,
+        int attempt)
+    {
+        uint angleHash = MixStableHash(seed, (uint)spawnOrder);
+        angleHash = MixStableHash(angleHash, (uint)markerIndex);
+        angleHash = MixStableHash(angleHash, FallMapDropAngleSalt);
+        float baseAngle = HashToUnitFloat(angleHash) * Mathf.PI * 2f;
+        float angle = baseAngle +
+            attempt * (Mathf.PI * 2f / FallMapOffsetAttemptsPerMarker);
+
+        uint radiusHash = MixStableHash(seed, (uint)spawnOrder);
+        radiusHash = MixStableHash(radiusHash, (uint)markerIndex);
+        radiusHash = MixStableHash(radiusHash, (uint)attempt);
+        radiusHash = MixStableHash(radiusHash, FallMapDropRadiusSalt);
+        float radius = Mathf.Lerp(
+            FallMapOffsetMinimumRadius,
+            FallMapOffsetMaximumRadius,
+            HashToUnitFloat(radiusHash));
+        return new Vector3(
+            Mathf.Cos(angle) * radius,
+            0f,
+            Mathf.Sin(angle) * radius);
+    }
+
+    private static uint ComputeStableFallMapDropSeed(
+        int roundRevision,
+        int postItId,
+        ulong sourceOwnerClientId,
+        int authoritativeWorldDropCount)
+    {
+        uint hash = 2166136261u;
+        hash = MixStableHash(hash, (uint)roundRevision);
+        hash = MixStableHash(hash, (uint)postItId);
+        hash = MixStableHash(hash, (uint)sourceOwnerClientId);
+        hash = MixStableHash(hash, (uint)(sourceOwnerClientId >> 32));
+        hash = MixStableHash(hash, (uint)authoritativeWorldDropCount);
+        return MixStableHash(hash, FallMapDropSeedSalt);
+    }
+
+    private static uint MixStableHash(uint hash, uint value)
+    {
+        return unchecked((hash ^ value) * 16777619u);
+    }
+
+    private static float HashToUnitFloat(uint hash)
+    {
+        return (hash & 0x00ffffffu) / 16777215f;
+    }
+
     private bool TryResolveWorldDropPose(
         int postItId,
         Vector3 authoritativePosition,
@@ -3506,6 +3831,7 @@ public class PostItRoundManager : NetworkBehaviour
         bool constrainToFallbackHeight)
     {
         if (hit.collider == null ||
+            hit.collider.isTrigger ||
             !IsFiniteVector(hit.point) ||
             !IsFiniteVector(hit.normal) ||
             Vector3.Dot(hit.normal.normalized, Vector3.up) <
@@ -4388,6 +4714,60 @@ public class PostItRoundManager : NetworkBehaviour
         return ulong.MaxValue;
     }
 
+    private bool TryCollectCanonicalMapSpawnPoints(
+        bool requireUniqueSpawnOrders,
+        out List<PostItMapSpawnPoint> spawnPoints,
+        out string validationError)
+    {
+        spawnPoints = new List<PostItMapSpawnPoint>();
+        validationError = null;
+        PostItMapSpawnPoint[] sceneSpawnPoints =
+            FindObjectsByType<PostItMapSpawnPoint>(FindObjectsSortMode.None);
+        HashSet<int> spawnOrders = requireUniqueSpawnOrders
+            ? new HashSet<int>()
+            : null;
+        for (int spawnPointIndex = 0;
+             spawnPointIndex < sceneSpawnPoints.Length;
+             spawnPointIndex++)
+        {
+            PostItMapSpawnPoint spawnPoint = sceneSpawnPoints[spawnPointIndex];
+            if (spawnPoint == null ||
+                !spawnPoint.isActiveAndEnabled ||
+                !spawnPoint.gameObject.scene.IsValid() ||
+                !spawnPoint.gameObject.scene.isLoaded ||
+                spawnPoint.gameObject.scene != gameObject.scene)
+            {
+                continue;
+            }
+
+            if (spawnPoint.SpawnOrder < 0 ||
+                !IsFiniteVector(spawnPoint.transform.position))
+            {
+                if (requireUniqueSpawnOrders)
+                {
+                    validationError =
+                        "Map spawn points require finite positions and unique non-negative SpawnOrder values.";
+                    return false;
+                }
+
+                continue;
+            }
+
+            if (requireUniqueSpawnOrders &&
+                !spawnOrders.Add(spawnPoint.SpawnOrder))
+            {
+                validationError =
+                    "Map spawn points require finite positions and unique non-negative SpawnOrder values.";
+                return false;
+            }
+
+            spawnPoints.Add(spawnPoint);
+        }
+
+        spawnPoints.Sort(CompareMapSpawnPointsByOrder);
+        return true;
+    }
+
     private bool TryPrepareInitialMapWorldDrops(
         int roundRevision,
         IReadOnlyList<PostItVisualCatalogSO.Entry> drawingEntries,
@@ -4434,32 +4814,12 @@ public class PostItRoundManager : NetworkBehaviour
             return false;
         }
 
-        PostItMapSpawnPoint[] sceneSpawnPoints =
-            FindObjectsByType<PostItMapSpawnPoint>(FindObjectsSortMode.None);
-        List<PostItMapSpawnPoint> spawnPoints = new List<PostItMapSpawnPoint>();
-        HashSet<int> spawnOrders = new HashSet<int>();
-        for (int spawnPointIndex = 0;
-             spawnPointIndex < sceneSpawnPoints.Length;
-             spawnPointIndex++)
+        if (!TryCollectCanonicalMapSpawnPoints(
+                true,
+                out List<PostItMapSpawnPoint> spawnPoints,
+                out validationError))
         {
-            PostItMapSpawnPoint spawnPoint = sceneSpawnPoints[spawnPointIndex];
-            if (spawnPoint == null ||
-                !spawnPoint.isActiveAndEnabled ||
-                spawnPoint.gameObject.scene != gameObject.scene)
-            {
-                continue;
-            }
-
-            if (spawnPoint.SpawnOrder < 0 ||
-                !IsFiniteVector(spawnPoint.transform.position) ||
-                !spawnOrders.Add(spawnPoint.SpawnOrder))
-            {
-                validationError =
-                    "Map spawn points require finite positions and unique non-negative SpawnOrder values.";
-                return false;
-            }
-
-            spawnPoints.Add(spawnPoint);
+            return false;
         }
 
         if (spawnPoints.Count < InitialMapPostItCount)
@@ -4469,7 +4829,6 @@ public class PostItRoundManager : NetworkBehaviour
             return false;
         }
 
-        spawnPoints.Sort(CompareMapSpawnPointsByOrder);
         PostItMapSpawnPoint[] orderedSpawnPoints =
             BuildDeterministicMapSpawnPointOrder(spawnPoints, roundRevision);
 
@@ -4667,7 +5026,70 @@ public class PostItRoundManager : NetworkBehaviour
         PostItMapSpawnPoint left,
         PostItMapSpawnPoint right)
     {
-        return left.SpawnOrder.CompareTo(right.SpawnOrder);
+        int orderComparison = left.SpawnOrder.CompareTo(right.SpawnOrder);
+        return orderComparison != 0
+            ? orderComparison
+            : CompareTransformHierarchy(
+                left != null ? left.transform : null,
+                right != null ? right.transform : null);
+    }
+
+    private static int CompareTransformHierarchy(
+        Transform left,
+        Transform right)
+    {
+        if (ReferenceEquals(left, right))
+            return 0;
+        if (left == null)
+            return -1;
+        if (right == null)
+            return 1;
+
+        int leftDepth = GetTransformHierarchyDepth(left);
+        int rightDepth = GetTransformHierarchyDepth(right);
+        int leftOriginalDepth = leftDepth;
+        int rightOriginalDepth = rightDepth;
+        Transform leftCursor = left;
+        Transform rightCursor = right;
+        while (leftDepth > rightDepth)
+        {
+            leftCursor = leftCursor.parent;
+            leftDepth--;
+        }
+
+        while (rightDepth > leftDepth)
+        {
+            rightCursor = rightCursor.parent;
+            rightDepth--;
+        }
+
+        if (leftCursor == rightCursor)
+            return leftOriginalDepth.CompareTo(rightOriginalDepth);
+
+        while (leftCursor.parent != rightCursor.parent)
+        {
+            leftCursor = leftCursor.parent;
+            rightCursor = rightCursor.parent;
+        }
+
+        int siblingComparison =
+            leftCursor.GetSiblingIndex().CompareTo(rightCursor.GetSiblingIndex());
+        return siblingComparison != 0
+            ? siblingComparison
+            : string.CompareOrdinal(leftCursor.name, rightCursor.name);
+    }
+
+    private static int GetTransformHierarchyDepth(Transform transform)
+    {
+        int depth = 0;
+        for (Transform current = transform;
+             current != null;
+             current = current.parent)
+        {
+            depth++;
+        }
+
+        return depth;
     }
 
     private bool TryBuildInitialAssignmentCatalog(
