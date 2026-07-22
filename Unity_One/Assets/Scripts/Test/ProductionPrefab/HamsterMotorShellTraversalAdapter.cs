@@ -157,6 +157,9 @@ public sealed class HamsterMotorShellTraversalAdapter : MonoBehaviour
     private Transform _targetRoot;
     private GameStateManager _gameStateManager;
     private float _nextGameStateResolveTime = float.NegativeInfinity;
+    private PlayerStatusModule _playerStatusModule;
+    private NetworkObject _playerStatusOwnerNetworkObject;
+    private float _nextPlayerStatusResolveTime = float.NegativeInfinity;
     private bool _requireTraversalInputReleaseBeforeRearm;
     private TraversalState _state;
     private float _lastGlideKeyDownTime = float.NegativeInfinity;
@@ -232,6 +235,13 @@ public sealed class HamsterMotorShellTraversalAdapter : MonoBehaviour
             CacheReferences();
 
         if (IsGameplayPhaseLocked())
+        {
+            if (!_requireTraversalInputReleaseBeforeRearm)
+                CancelTraversalForGameplayPhase();
+            return;
+        }
+
+        if (IsEliminationLocked())
         {
             if (!_requireTraversalInputReleaseBeforeRearm)
                 CancelTraversalForGameplayPhase();
@@ -327,6 +337,13 @@ public sealed class HamsterMotorShellTraversalAdapter : MonoBehaviour
             CacheReferences();
 
         if (IsGameplayPhaseLocked())
+        {
+            if (!_requireTraversalInputReleaseBeforeRearm)
+                CancelTraversalForGameplayPhase();
+            return;
+        }
+
+        if (IsEliminationLocked())
         {
             if (!_requireTraversalInputReleaseBeforeRearm)
                 CancelTraversalForGameplayPhase();
@@ -430,6 +447,60 @@ public sealed class HamsterMotorShellTraversalAdapter : MonoBehaviour
     {
         return !TryGetGameState(out GameStateManager.GameState state) ||
                state != GameStateManager.GameState.Playing;
+    }
+
+    private bool IsEliminationLocked()
+    {
+        NetworkManager networkManager = NetworkManager.Singleton;
+        if (networkManager == null || !networkManager.IsListening)
+            return false;
+
+        return !TryResolvePlayerStatus(out PlayerStatusModule status) ||
+               status.IsEliminated;
+    }
+
+    private bool TryResolvePlayerStatus(out PlayerStatusModule status)
+    {
+        status = null;
+        NetworkObject ownerNetworkObject = ResolveOwnerNetworkObject();
+        if (ownerNetworkObject == null || !ownerNetworkObject.IsSpawned)
+            return false;
+
+        if (_playerStatusModule != null &&
+            _playerStatusOwnerNetworkObject == ownerNetworkObject &&
+            _playerStatusModule.GetComponentInParent<NetworkObject>() ==
+            ownerNetworkObject)
+        {
+            status = _playerStatusModule;
+            return true;
+        }
+
+        _playerStatusModule = null;
+        _playerStatusOwnerNetworkObject = null;
+        if (Time.unscaledTime < _nextPlayerStatusResolveTime)
+            return false;
+
+        _nextPlayerStatusResolveTime =
+            Time.unscaledTime + GameStateResolveRetryInterval;
+        PlayerStatusModule candidate =
+            ownerNetworkObject.GetComponent<PlayerStatusModule>();
+        if (candidate == null)
+        {
+            candidate = ownerNetworkObject
+                .GetComponentInChildren<PlayerStatusModule>(true);
+        }
+
+        if (candidate == null ||
+            candidate.GetComponentInParent<NetworkObject>() !=
+            ownerNetworkObject)
+        {
+            return false;
+        }
+
+        _playerStatusModule = candidate;
+        _playerStatusOwnerNetworkObject = ownerNetworkObject;
+        status = candidate;
+        return true;
     }
 
     private void CancelTraversalForGameplayPhase()
