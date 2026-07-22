@@ -12,6 +12,7 @@ public sealed class HamsterMotorShellSpinDashAdapter : MonoBehaviour
     private const string DizzyReason = "SpinDash:Dizzy";
     private const string CooldownReason = "SpinDash:Cooldown";
     private const string GameplayPhaseLockReason = "GameState:NotPlaying";
+    private const float PlayerStatusResolveRetryInterval = 0.5f;
 
     private enum SpinDashState
     {
@@ -95,6 +96,9 @@ public sealed class HamsterMotorShellSpinDashAdapter : MonoBehaviour
 
     private NetworkObject _ownerNetworkObject;
     private GameStateManager _gameStateManager;
+    private PlayerStatusModule _playerStatusModule;
+    private NetworkObject _playerStatusOwnerNetworkObject;
+    private float _nextPlayerStatusResolveTime = float.NegativeInfinity;
     private Transform _targetRoot;
     private SpinDashState _state;
     private Vector3 _dashDirection = Vector3.forward;
@@ -137,6 +141,13 @@ public sealed class HamsterMotorShellSpinDashAdapter : MonoBehaviour
             return;
         }
 
+        if (IsEliminationLocked())
+        {
+            if (_state != SpinDashState.Idle)
+                CancelSpinDashForGameplayPhase();
+            return;
+        }
+
         if (blockDuringRecovery && IsRecoveryActive())
         {
             CancelSpinDash("RecoveryActive");
@@ -165,6 +176,13 @@ public sealed class HamsterMotorShellSpinDashAdapter : MonoBehaviour
             return;
 
         if (IsGameplayPhaseLocked())
+        {
+            if (_state != SpinDashState.Idle)
+                CancelSpinDashForGameplayPhase();
+            return;
+        }
+
+        if (IsEliminationLocked())
         {
             if (_state != SpinDashState.Idle)
                 CancelSpinDashForGameplayPhase();
@@ -254,6 +272,59 @@ public sealed class HamsterMotorShellSpinDashAdapter : MonoBehaviour
     {
         return !TryGetGameState(out GameStateManager.GameState state) ||
                state != GameStateManager.GameState.Playing;
+    }
+
+    private bool IsEliminationLocked()
+    {
+        NetworkManager networkManager = NetworkManager.Singleton;
+        if (networkManager == null || !networkManager.IsListening)
+            return false;
+
+        return !TryResolvePlayerStatus(out PlayerStatusModule status) ||
+               status.IsEliminated;
+    }
+
+    private bool TryResolvePlayerStatus(out PlayerStatusModule status)
+    {
+        status = null;
+        if (_ownerNetworkObject == null || !_ownerNetworkObject.IsSpawned)
+            return false;
+
+        if (_playerStatusModule != null &&
+            _playerStatusOwnerNetworkObject == _ownerNetworkObject &&
+            _playerStatusModule.GetComponentInParent<NetworkObject>() ==
+            _ownerNetworkObject)
+        {
+            status = _playerStatusModule;
+            return true;
+        }
+
+        _playerStatusModule = null;
+        _playerStatusOwnerNetworkObject = null;
+        if (Time.unscaledTime < _nextPlayerStatusResolveTime)
+            return false;
+
+        _nextPlayerStatusResolveTime =
+            Time.unscaledTime + PlayerStatusResolveRetryInterval;
+        PlayerStatusModule candidate =
+            _ownerNetworkObject.GetComponent<PlayerStatusModule>();
+        if (candidate == null)
+        {
+            candidate = _ownerNetworkObject
+                .GetComponentInChildren<PlayerStatusModule>(true);
+        }
+
+        if (candidate == null ||
+            candidate.GetComponentInParent<NetworkObject>() !=
+            _ownerNetworkObject)
+        {
+            return false;
+        }
+
+        _playerStatusModule = candidate;
+        _playerStatusOwnerNetworkObject = _ownerNetworkObject;
+        status = candidate;
+        return true;
     }
 
     private bool CanReadOwnerInput()
