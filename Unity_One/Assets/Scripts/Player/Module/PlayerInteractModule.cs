@@ -14,6 +14,7 @@ public class PlayerInteractModule : NetworkBehaviour
     private const string GrabberMoveMultiplierKey = "CharacterGrabber";
     private const string GrabbedMoveMultiplierKey = "CharacterGrabbed";
     private const string CharacterGrabEscapeReason = "escape";
+    private const float GameplayGateResolveRetryInterval = 0.5f;
 
     [Header("Raycast")]
     [Tooltip("오너가 사용하는 카메라")]
@@ -180,6 +181,11 @@ public class PlayerInteractModule : NetworkBehaviour
         );
 
     private bool _ownerMode;
+    private GameStateManager _gameplayGateStateManager;
+    private PlayerStatusModule _gameplayGateOwnerStatus;
+    private NetworkObject _gameplayGateOwnerRoot;
+    private float _nextGameplayGateStateResolveTime = float.NegativeInfinity;
+    private float _nextGameplayGateStatusResolveTime = float.NegativeInfinity;
     private bool _pendingAttach;
     private bool _attached;
     private bool _dropInProgress;
@@ -249,6 +255,7 @@ public class PlayerInteractModule : NetworkBehaviour
     {
         base.OnNetworkSpawn();
 
+        ResetGameplayGateCache();
         _cc = GetComponentInParent<CharacterController>();
         _anim = GetComponentInParent<Animator>();
 
@@ -266,6 +273,7 @@ public class PlayerInteractModule : NetworkBehaviour
         ClearExternalHeldItemPoseOverrideInternal("NetworkDespawn", false);
         DestroyLocalHeldVisual();
         CleanupCharacterGrabOnLifecycle("network-despawn");
+        ResetGameplayGateCache();
         base.OnNetworkDespawn();
     }
 
@@ -455,6 +463,7 @@ public class PlayerInteractModule : NetworkBehaviour
     {
         target = default;
 
+        if (!CanProcessLocalOwnerGameplayRequest()) return false;
         if (!_ownerMode) return false;
         if (ownerCamera == null) return false;
         if (HasHeldItem()) return false;
@@ -502,7 +511,7 @@ public class PlayerInteractModule : NetworkBehaviour
 
     public bool ServerTryPickup(NetworkObjectReference target)
     {
-        if (!IsServer) return false;
+        if (!CanProcessServerGameplayMutation()) return false;
         if (!CanPickupItemBecauseOfCharacterGrab()) return false;
         if (ResolveHeldCache()) return false;
 
@@ -539,7 +548,7 @@ public class PlayerInteractModule : NetworkBehaviour
 
     public void ServerTryDrop()
     {
-        if (!IsServer) return;
+        if (!CanProcessServerGameplayMutation()) return;
         if (!ResolveHeldCache()) return;
 
         NetworkObject netObj = _heldCache;
@@ -632,6 +641,7 @@ public class PlayerInteractModule : NetworkBehaviour
     {
         targetStatus = null;
 
+        if (!CanProcessLocalOwnerGameplayRequest()) return false;
         if (!_ownerMode) return false;
         if (!enableCharacterGrab) return false;
         if (ownerCamera == null) return false;
@@ -652,7 +662,7 @@ public class PlayerInteractModule : NetworkBehaviour
 
     public void ServerTryStartCharacterGrab(PlayerStatusModule targetStatus)
     {
-        if (!IsServer) return;
+        if (!CanProcessServerGameplayMutation()) return;
 
         if (!CanStartCharacterGrab(targetStatus, out PlayerInteractModule targetInteract, out NetworkObject selfNetObj, out NetworkObject targetNetObj))
             return;
@@ -702,6 +712,11 @@ public class PlayerInteractModule : NetworkBehaviour
         if (!IsServer) return;
 
         string releaseReason = string.IsNullOrWhiteSpace(reason) ? "release" : reason;
+        if (IsInputDrivenCharacterGrabRelease(releaseReason) &&
+            !CanProcessServerGameplayMutation())
+        {
+            return;
+        }
 
         if (IsGrabbingCharacter)
         {
@@ -734,7 +749,7 @@ public class PlayerInteractModule : NetworkBehaviour
 
     public void ServerRegisterCharacterGrabEscapeTap(ulong senderClientId)
     {
-        if (!IsServer) return;
+        if (!CanProcessServerGameplayMutation()) return;
 
         PlayerInteractModule grabbedInteract = ResolveEscapeTargetInteract();
         if (grabbedInteract == null)
@@ -769,6 +784,9 @@ public class PlayerInteractModule : NetworkBehaviour
 
     public void RequestCharacterGrabEscapeTap()
     {
+        if (!CanProcessLocalOwnerGameplayRequest())
+            return;
+
         if (IsServer)
         {
             ServerRegisterCharacterGrabEscapeTap(OwnerClientId);
@@ -780,6 +798,9 @@ public class PlayerInteractModule : NetworkBehaviour
 
     public void RequestReleaseCharacterGrab()
     {
+        if (!CanProcessLocalOwnerGameplayRequest())
+            return;
+
         if (IsServer)
         {
             if (IsGrabbingCharacter)
@@ -796,6 +817,9 @@ public class PlayerInteractModule : NetworkBehaviour
         if (rpcParams.Receive.SenderClientId != OwnerClientId)
             return;
 
+        if (!CanProcessServerGameplayMutation())
+            return;
+
         ServerRegisterCharacterGrabEscapeTap(OwnerClientId);
     }
 
@@ -803,6 +827,9 @@ public class PlayerInteractModule : NetworkBehaviour
     private void RequestReleaseCharacterGrabServerRpc(ServerRpcParams rpcParams = default)
     {
         if (rpcParams.Receive.SenderClientId != OwnerClientId)
+            return;
+
+        if (!CanProcessServerGameplayMutation())
             return;
 
         if (!IsGrabbingCharacter)
@@ -813,6 +840,9 @@ public class PlayerInteractModule : NetworkBehaviour
 
     public void RequestThrowCarriedCharacter()
     {
+        if (!CanProcessLocalOwnerGameplayRequest())
+            return;
+
         if (IsServer)
         {
             ServerTryThrowCarriedCharacter("Local");
@@ -828,12 +858,15 @@ public class PlayerInteractModule : NetworkBehaviour
         if (rpcParams.Receive.SenderClientId != OwnerClientId)
             return;
 
+        if (!CanProcessServerGameplayMutation())
+            return;
+
         ServerTryThrowCarriedCharacter("Request");
     }
 
     public bool ServerTryThrowCarriedCharacter(string reason = "Throw")
     {
-        if (!IsServer)
+        if (!CanProcessServerGameplayMutation())
             return false;
 
         string throwReason = string.IsNullOrWhiteSpace(reason) ? "Throw" : reason;
@@ -1538,6 +1571,127 @@ public class PlayerInteractModule : NetworkBehaviour
             status = root.GetComponentInChildren<PlayerStatusModule>(true);
 
         return status != null;
+    }
+
+    private bool CanProcessLocalOwnerGameplayRequest()
+    {
+        if (!IsSpawned || !IsOwner)
+            return false;
+
+        NetworkManager networkManager = NetworkManager;
+        if (networkManager == null ||
+            !networkManager.IsListening ||
+            networkManager.LocalClientId != OwnerClientId)
+        {
+            return false;
+        }
+
+        return CanProcessGameplayMutation();
+    }
+
+    private bool CanProcessServerGameplayMutation()
+    {
+        return IsServer && IsSpawned && CanProcessGameplayMutation();
+    }
+
+    private bool CanProcessGameplayMutation()
+    {
+        if (!TryGetGameplayGateState(out GameStateManager.GameState state) ||
+            state != GameStateManager.GameState.Playing)
+        {
+            return false;
+        }
+
+        return TryResolveGameplayGateOwnerStatus(out PlayerStatusModule status) &&
+               !status.IsEliminated;
+    }
+
+    private bool TryGetGameplayGateState(out GameStateManager.GameState state)
+    {
+        if (_gameplayGateStateManager == null ||
+            !_gameplayGateStateManager.IsSpawned)
+        {
+            _gameplayGateStateManager = null;
+            if (Time.unscaledTime < _nextGameplayGateStateResolveTime)
+            {
+                state = default;
+                return false;
+            }
+
+            _nextGameplayGateStateResolveTime =
+                Time.unscaledTime + GameplayGateResolveRetryInterval;
+            _gameplayGateStateManager = FindFirstObjectByType<GameStateManager>();
+        }
+
+        if (_gameplayGateStateManager == null ||
+            !_gameplayGateStateManager.IsSpawned)
+        {
+            state = default;
+            return false;
+        }
+
+        state = _gameplayGateStateManager.GetState();
+        return true;
+    }
+
+    private bool TryResolveGameplayGateOwnerStatus(out PlayerStatusModule status)
+    {
+        status = null;
+        NetworkObject ownerRoot = NetworkObject;
+        if (ownerRoot == null || !ownerRoot.IsSpawned)
+            return false;
+
+        if (_gameplayGateOwnerRoot != ownerRoot)
+        {
+            _gameplayGateOwnerRoot = ownerRoot;
+            _gameplayGateOwnerStatus = null;
+            _nextGameplayGateStatusResolveTime = float.NegativeInfinity;
+        }
+
+        if (_gameplayGateOwnerStatus != null &&
+            _gameplayGateOwnerStatus.IsSpawned &&
+            _gameplayGateOwnerStatus.GetComponentInParent<NetworkObject>() ==
+            ownerRoot)
+        {
+            status = _gameplayGateOwnerStatus;
+            return true;
+        }
+
+        _gameplayGateOwnerStatus = null;
+        if (Time.unscaledTime < _nextGameplayGateStatusResolveTime)
+            return false;
+
+        _nextGameplayGateStatusResolveTime =
+            Time.unscaledTime + GameplayGateResolveRetryInterval;
+        PlayerStatusModule candidate =
+            ownerRoot.GetComponent<PlayerStatusModule>();
+        if (candidate == null)
+            candidate = ownerRoot.GetComponentInChildren<PlayerStatusModule>(true);
+
+        if (candidate == null ||
+            !candidate.IsSpawned ||
+            candidate.GetComponentInParent<NetworkObject>() != ownerRoot)
+        {
+            return false;
+        }
+
+        _gameplayGateOwnerStatus = candidate;
+        status = candidate;
+        return true;
+    }
+
+    private static bool IsInputDrivenCharacterGrabRelease(string reason)
+    {
+        return reason == "DropInput" || reason == "request-release";
+    }
+
+    private void ResetGameplayGateCache()
+    {
+        _gameplayGateStateManager = null;
+        _gameplayGateOwnerStatus = null;
+        _gameplayGateOwnerRoot = null;
+        _nextGameplayGateStateResolveTime = float.NegativeInfinity;
+        _nextGameplayGateStatusResolveTime = float.NegativeInfinity;
     }
 
     private PlayerStatusModule ResolveOwnStatusModule()
