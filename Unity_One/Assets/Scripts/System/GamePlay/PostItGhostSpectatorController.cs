@@ -7,7 +7,6 @@ using UnityEngine.SceneManagement;
 [DisallowMultipleComponent]
 public sealed class PostItGhostSpectatorController : MonoBehaviour
 {
-    private const string InGameSceneName = "InGame";
     private const string BodyHurtboxName = "BodyHurtbox";
     private const string MotorShellBodyName = "MotorShellBody";
     private const ulong InvalidNetworkId = ulong.MaxValue;
@@ -33,6 +32,7 @@ public sealed class PostItGhostSpectatorController : MonoBehaviour
     }
 
     [Header("Scene References")]
+    [SerializeField] private string activeSceneName = "InGame";
     [SerializeField] private Camera spectatorCamera;
     [SerializeField] private AudioListener spectatorAudioListener;
     [SerializeField] private BoxCollider spectatorBounds;
@@ -1013,10 +1013,13 @@ public sealed class PostItGhostSpectatorController : MonoBehaviour
         DisableSpectatorOutputs();
     }
 
-    private static bool IsInGameActiveScene()
+    private bool IsInGameActiveScene()
     {
         Scene scene = SceneManager.GetActiveScene();
-        return scene.IsValid() && scene.isLoaded && scene.name == InGameSceneName;
+        return scene.IsValid() &&
+               scene.isLoaded &&
+               !string.IsNullOrWhiteSpace(activeSceneName) &&
+               scene.name == activeSceneName;
     }
 
     private static Transform FindChildRecursive(Transform parent, string childName)
