@@ -361,7 +361,6 @@ public sealed class TutorialLocalHostLauncher : MonoBehaviour
             FindObjectsSortMode.None);
         if (networkManagers.Length != 1 ||
             _networkManager.transform.parent != null ||
-            _networkManager.gameObject.scene != UnitySceneManager.GetActiveScene() ||
             _networkManager.gameObject == gameObject)
         {
             failure = "MainMenu NetworkManager root가 정확히 하나가 아닙니다.";
@@ -742,7 +741,6 @@ public sealed class TutorialLocalHostLauncher : MonoBehaviour
 
         NetworkManager freshNetworkManager = networkManagers[0];
         if (freshNetworkManager == null ||
-            freshNetworkManager.gameObject.scene != scene ||
             freshNetworkManager.transform.parent != null ||
             freshNetworkManager.IsListening ||
             freshNetworkManager.IsServer ||
