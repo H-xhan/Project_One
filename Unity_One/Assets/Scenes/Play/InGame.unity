@@ -883,6 +883,7 @@ GameObject:
   m_Component:
   - component: {fileID: 57654294}
   - component: {fileID: 57654295}
+  - component: {fileID: 216000000000000001}
   m_Layer: 0
   m_Name: CoinSpawnArea_DeskTop
   m_TagString: Untagged
@@ -926,6 +927,20 @@ BoxCollider:
   serializedVersion: 3
   m_Size: {x: 1, y: 0.05, z: 1}
   m_Center: {x: 0, y: 0, z: 0}
+--- !u!114 &216000000000000001
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 57654293}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 8422d1063c3244eca467c91a7cf6f58d, type: 3}
+  m_Name:
+  m_EditorClassIdentifier:
+  spawnOrder: 0
+  edgePadding: 0.75
 --- !u!1 &60467720
 GameObject:
   m_ObjectHideFlags: 0
@@ -15687,6 +15702,7 @@ GameObject:
   m_Component:
   - component: {fileID: 1975267346}
   - component: {fileID: 1975267347}
+  - component: {fileID: 216000000000000002}
   m_Layer: 0
   m_Name: CoinSpawnArea_DeskTop2
   m_TagString: Untagged
@@ -15730,6 +15746,20 @@ BoxCollider:
   serializedVersion: 3
   m_Size: {x: 1, y: 0.05, z: 1}
   m_Center: {x: 0, y: 0, z: 0}
+--- !u!114 &216000000000000002
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1975267345}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 8422d1063c3244eca467c91a7cf6f58d, type: 3}
+  m_Name:
+  m_EditorClassIdentifier:
+  spawnOrder: 1
+  edgePadding: 0.75
 --- !u!1 &1984664908
 GameObject:
   m_ObjectHideFlags: 0
