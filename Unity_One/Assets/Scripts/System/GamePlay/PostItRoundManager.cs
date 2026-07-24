@@ -21,6 +21,19 @@ public class PostItRoundManager : NetworkBehaviour
     private const uint FallMapDropSeedSalt = 0x46414C4Cu;
     private const uint FallMapDropAngleSalt = 0x414E474Cu;
     private const uint FallMapDropRadiusSalt = 0x52414449u;
+    private const int FallAreaCandidateAttemptsPerArea = 12;
+    private const float FallAreaStrictSeparation = 1f;
+    private const float FallAreaHardDuplicateDistance = 0.1f;
+    private const float FallAreaMaxGroundBelowVolumeTop = 0.5f;
+    private const float FallAreaMaxGroundAboveVolumeTop = 0.25f;
+    private const float FallAreaMinimumUpAlignmentDot = 0.995f;
+    private const float FallAreaSizeDensityThreshold = 1.2f;
+    private const float FallAreaDistanceTieEpsilon = 0.0001f;
+    private const float FallAreaScoreTieEpsilon = 0.0001f;
+    private const float FallAreaGeometryEpsilon = 0.0001f;
+    private const uint FallAreaDropSeedSalt = 0x41524541u;
+    private const uint FallAreaDropUSalt = 0x41524555u;
+    private const uint FallAreaDropVSalt = 0x41524556u;
     private const float ZeroPostItPollIntervalSeconds = 0.25f;
 
     [SerializeField] private int initialDrawingPostItCountPerPlayer = 2;
@@ -151,6 +164,29 @@ public class PostItRoundManager : NetworkBehaviour
     {
         public PostItRuntimeData Payload;
         public PostItWorldDropData PublicData;
+    }
+
+    private struct FallAreaGeometry
+    {
+        public PostItFallSpawnArea Area;
+        public BoxCollider Volume;
+        public float LocalMinimumX;
+        public float LocalMaximumX;
+        public float LocalMinimumZ;
+        public float LocalMaximumZ;
+        public float VolumeTopWorldY;
+        public float UsableWorldArea;
+    }
+
+    private struct FallAreaCandidate
+    {
+        public int AreaIndex;
+        public int AreaTraversalRank;
+        public int AttemptIndex;
+        public Vector3 Position;
+        public Quaternion Rotation;
+        public float DistributionScore;
+        public float MinimumWorldDropSqrDistance;
     }
 
     private void Awake()
@@ -3420,60 +3456,38 @@ public class PostItRoundManager : NetworkBehaviour
             return false;
         }
 
-        if (!TryCollectCanonicalMapSpawnPoints(
-                false,
-                out List<PostItMapSpawnPoint> spawnPoints,
-                out _))
+        if (!TryBuildFallWorldDropPositionSnapshot(
+                authoritativeWorldDropCount,
+                out Vector3[] worldDropPositions))
         {
             return false;
         }
 
-        if (spawnPoints.Count > 0)
-        {
-            if (!TryBuildFallMapDistributionSnapshot(
-                    spawnPoints,
-                    authoritativeWorldDropCount,
-                    out Vector3[] worldDropPositions,
-                    out int[] markerOccupancies))
-            {
-                return false;
-            }
-
-            uint seed = ComputeStableFallMapDropSeed(
-                _lastInitialAssignmentRoundRevision,
+        if (TryCollectCanonicalFallSpawnAreas(
+                out List<FallAreaGeometry> fallAreas,
+                out _) &&
+            fallAreas.Count > 0 &&
+            TryResolveFallAreaWorldDropPose(
                 postItId,
                 sourceOwnerClientId,
-                authoritativeWorldDropCount);
-            int firstMarkerIndex = (int)(seed % (uint)spawnPoints.Count);
-            if (TryResolveFallMapPosePass(
-                    postItId,
-                    spawnPoints,
-                    firstMarkerIndex,
-                    seed,
-                    worldDropPositions,
-                    markerOccupancies,
-                    true,
-                    out bool foundGroundValidCandidate,
-                    out position,
-                    out rotation))
-            {
-                return true;
-            }
+                authoritativeWorldDropCount,
+                fallAreas,
+                worldDropPositions,
+                out position,
+                out rotation))
+        {
+            return true;
+        }
 
-            if (foundGroundValidCandidate)
-            {
-                return TryResolveFallMapPosePass(
-                    postItId,
-                    spawnPoints,
-                    firstMarkerIndex,
-                    seed,
-                    worldDropPositions,
-                    markerOccupancies,
-                    false,
-                    out _,
-                    out position,
-                    out rotation);
-            }
+        if (TryResolveFallMapWorldDropPose(
+                postItId,
+                sourceOwnerClientId,
+                authoritativeWorldDropCount,
+                worldDropPositions,
+                out position,
+                out rotation))
+        {
+            return true;
         }
 
         return TryProjectWorldDropToGround(
@@ -3485,6 +3499,289 @@ public class PostItRoundManager : NetworkBehaviour
             false,
             out position,
             out rotation);
+    }
+
+    private bool TryResolveFallAreaWorldDropPose(
+        int postItId,
+        ulong sourceOwnerClientId,
+        int authoritativeWorldDropCount,
+        IReadOnlyList<FallAreaGeometry> fallAreas,
+        Vector3[] worldDropPositions,
+        out Vector3 position,
+        out Quaternion rotation)
+    {
+        position = Vector3.zero;
+        rotation = Quaternion.identity;
+        if (fallAreas == null ||
+            fallAreas.Count == 0 ||
+            worldDropPositions == null ||
+            !TryBuildFallAreaDistributionSnapshot(
+                fallAreas,
+                worldDropPositions,
+                out int[] areaOccupancies,
+                out bool useDensity))
+        {
+            return false;
+        }
+
+        uint seed = ComputeStableFallAreaDropSeed(
+            _lastInitialAssignmentRoundRevision,
+            postItId,
+            sourceOwnerClientId,
+            authoritativeWorldDropCount);
+        int firstAreaIndex = (int)(seed % (uint)fallAreas.Count);
+        List<FallAreaCandidate> candidates =
+            new List<FallAreaCandidate>(
+                fallAreas.Count * FallAreaCandidateAttemptsPerArea);
+        float hardDuplicateSqrDistance =
+            FallAreaHardDuplicateDistance *
+            FallAreaHardDuplicateDistance;
+
+        for (int areaTraversalRank = 0;
+             areaTraversalRank < fallAreas.Count;
+             areaTraversalRank++)
+        {
+            int areaIndex =
+                (firstAreaIndex + areaTraversalRank) % fallAreas.Count;
+            FallAreaGeometry geometry = fallAreas[areaIndex];
+            float distributionScore = useDensity
+                ? (float)areaOccupancies[areaIndex] /
+                  geometry.UsableWorldArea
+                : areaOccupancies[areaIndex];
+
+            for (int attempt = 0;
+                 attempt < FallAreaCandidateAttemptsPerArea;
+                 attempt++)
+            {
+                if (!TryResolveFallAreaCandidatePose(
+                        postItId,
+                        geometry,
+                        seed,
+                        attempt,
+                        out Vector3 candidatePosition,
+                        out Quaternion candidateRotation))
+                {
+                    continue;
+                }
+
+                float minimumWorldDropSqrDistance =
+                    GetMinimumWorldDropHorizontalSqrDistance(
+                        candidatePosition,
+                        worldDropPositions);
+                if (minimumWorldDropSqrDistance <
+                    hardDuplicateSqrDistance)
+                {
+                    continue;
+                }
+
+                candidates.Add(new FallAreaCandidate
+                {
+                    AreaIndex = areaIndex,
+                    AreaTraversalRank = areaTraversalRank,
+                    AttemptIndex = attempt,
+                    Position = candidatePosition,
+                    Rotation = candidateRotation,
+                    DistributionScore = distributionScore,
+                    MinimumWorldDropSqrDistance =
+                        minimumWorldDropSqrDistance
+                });
+            }
+        }
+
+        if (TrySelectFallAreaCandidate(
+                candidates,
+                true,
+                out FallAreaCandidate selectedCandidate) ||
+            TrySelectFallAreaCandidate(
+                candidates,
+                false,
+                out selectedCandidate))
+        {
+            position = selectedCandidate.Position;
+            rotation = selectedCandidate.Rotation;
+            return true;
+        }
+
+        return false;
+    }
+
+    private bool TryResolveFallAreaCandidatePose(
+        int postItId,
+        FallAreaGeometry geometry,
+        uint seed,
+        int attempt,
+        out Vector3 position,
+        out Quaternion rotation)
+    {
+        position = Vector3.zero;
+        rotation = Quaternion.identity;
+        if (geometry.Area == null ||
+            geometry.Volume == null ||
+            attempt < 0 ||
+            attempt >= FallAreaCandidateAttemptsPerArea)
+        {
+            return false;
+        }
+
+        float u = GetDeterministicFallAreaCoordinate(
+            seed,
+            geometry.Area.SpawnOrder,
+            attempt,
+            FallAreaDropUSalt);
+        float v = GetDeterministicFallAreaCoordinate(
+            seed,
+            geometry.Area.SpawnOrder,
+            attempt,
+            FallAreaDropVSalt);
+        Vector3 volumeCenter = geometry.Volume.center;
+        Vector3 localProbeCenter = new Vector3(
+            Mathf.Lerp(geometry.LocalMinimumX, geometry.LocalMaximumX, u),
+            volumeCenter.y + geometry.Volume.size.y * 0.5f,
+            Mathf.Lerp(geometry.LocalMinimumZ, geometry.LocalMaximumZ, v));
+        Vector3 worldProbeCenter =
+            geometry.Area.transform.TransformPoint(localProbeCenter);
+        return IsFiniteVector(worldProbeCenter) &&
+               TryProjectFallAreaCandidateToGround(
+                   postItId,
+                   geometry,
+                   worldProbeCenter,
+                   out position,
+                   out rotation);
+    }
+
+    private static bool TrySelectFallAreaCandidate(
+        IReadOnlyList<FallAreaCandidate> candidates,
+        bool requireStrictSeparation,
+        out FallAreaCandidate selectedCandidate)
+    {
+        selectedCandidate = default;
+        if (candidates == null || candidates.Count == 0)
+            return false;
+
+        bool hasSelectedCandidate = false;
+        float strictMinimumSqrDistance =
+            FallAreaStrictSeparation * FallAreaStrictSeparation;
+        for (int candidateIndex = 0;
+             candidateIndex < candidates.Count;
+             candidateIndex++)
+        {
+            FallAreaCandidate candidate = candidates[candidateIndex];
+            if (requireStrictSeparation &&
+                candidate.MinimumWorldDropSqrDistance <
+                strictMinimumSqrDistance)
+            {
+                continue;
+            }
+
+            if (!hasSelectedCandidate ||
+                IsFallAreaCandidateBetter(
+                    candidate,
+                    selectedCandidate))
+            {
+                hasSelectedCandidate = true;
+                selectedCandidate = candidate;
+            }
+        }
+
+        return hasSelectedCandidate;
+    }
+
+    private static bool IsFallAreaCandidateBetter(
+        FallAreaCandidate candidate,
+        FallAreaCandidate currentBest)
+    {
+        if (candidate.DistributionScore <
+            currentBest.DistributionScore - FallAreaScoreTieEpsilon)
+        {
+            return true;
+        }
+
+        if (candidate.DistributionScore >
+            currentBest.DistributionScore + FallAreaScoreTieEpsilon)
+        {
+            return false;
+        }
+
+        if (candidate.MinimumWorldDropSqrDistance >
+            currentBest.MinimumWorldDropSqrDistance +
+            FallAreaDistanceTieEpsilon)
+        {
+            return true;
+        }
+
+        if (candidate.MinimumWorldDropSqrDistance <
+            currentBest.MinimumWorldDropSqrDistance -
+            FallAreaDistanceTieEpsilon)
+        {
+            return false;
+        }
+
+        if (candidate.AreaTraversalRank !=
+            currentBest.AreaTraversalRank)
+        {
+            return candidate.AreaTraversalRank <
+                   currentBest.AreaTraversalRank;
+        }
+
+        return candidate.AttemptIndex < currentBest.AttemptIndex;
+    }
+
+    private bool TryResolveFallMapWorldDropPose(
+        int postItId,
+        ulong sourceOwnerClientId,
+        int authoritativeWorldDropCount,
+        Vector3[] worldDropPositions,
+        out Vector3 position,
+        out Quaternion rotation)
+    {
+        position = Vector3.zero;
+        rotation = Quaternion.identity;
+        if (!TryCollectCanonicalMapSpawnPoints(
+                false,
+                out List<PostItMapSpawnPoint> spawnPoints,
+                out _) ||
+            spawnPoints.Count == 0 ||
+            !TryBuildFallMapDistributionSnapshot(
+                spawnPoints,
+                worldDropPositions,
+                out int[] markerOccupancies))
+        {
+            return false;
+        }
+
+        uint seed = ComputeStableFallMapDropSeed(
+            _lastInitialAssignmentRoundRevision,
+            postItId,
+            sourceOwnerClientId,
+            authoritativeWorldDropCount);
+        int firstMarkerIndex = (int)(seed % (uint)spawnPoints.Count);
+        if (TryResolveFallMapPosePass(
+                postItId,
+                spawnPoints,
+                firstMarkerIndex,
+                seed,
+                worldDropPositions,
+                markerOccupancies,
+                true,
+                out bool foundGroundValidCandidate,
+                out position,
+                out rotation))
+        {
+            return true;
+        }
+
+        return foundGroundValidCandidate &&
+               TryResolveFallMapPosePass(
+                   postItId,
+                   spawnPoints,
+                   firstMarkerIndex,
+                   seed,
+                   worldDropPositions,
+                   markerOccupancies,
+                   false,
+                   out _,
+                   out position,
+                   out rotation);
     }
 
     private bool TryResolveFallMapPosePass(
@@ -3584,17 +3881,12 @@ public class PostItRoundManager : NetworkBehaviour
         return hasBestCandidate;
     }
 
-    private bool TryBuildFallMapDistributionSnapshot(
-        IReadOnlyList<PostItMapSpawnPoint> spawnPoints,
+    private bool TryBuildFallWorldDropPositionSnapshot(
         int authoritativeWorldDropCount,
-        out Vector3[] worldDropPositions,
-        out int[] markerOccupancies)
+        out Vector3[] worldDropPositions)
     {
         worldDropPositions = Array.Empty<Vector3>();
-        markerOccupancies = Array.Empty<int>();
-        if (spawnPoints == null ||
-            spawnPoints.Count == 0 ||
-            _networkWorldDrops == null ||
+        if (_networkWorldDrops == null ||
             authoritativeWorldDropCount < 0 ||
             _networkWorldDrops.Count != authoritativeWorldDropCount)
         {
@@ -3602,7 +3894,6 @@ public class PostItRoundManager : NetworkBehaviour
         }
 
         worldDropPositions = new Vector3[authoritativeWorldDropCount];
-        markerOccupancies = new int[spawnPoints.Count];
         for (int worldDropIndex = 0;
              worldDropIndex < authoritativeWorldDropCount;
              worldDropIndex++)
@@ -3615,6 +3906,170 @@ public class PostItRoundManager : NetworkBehaviour
             }
 
             worldDropPositions[worldDropIndex] = worldDrop.Position;
+        }
+
+        return true;
+    }
+
+    private static bool TryBuildFallAreaDistributionSnapshot(
+        IReadOnlyList<FallAreaGeometry> fallAreas,
+        IReadOnlyList<Vector3> worldDropPositions,
+        out int[] areaOccupancies,
+        out bool useDensity)
+    {
+        areaOccupancies = Array.Empty<int>();
+        useDensity = false;
+        if (fallAreas == null ||
+            fallAreas.Count == 0 ||
+            worldDropPositions == null)
+        {
+            return false;
+        }
+
+        float minimumUsableWorldArea = float.PositiveInfinity;
+        float maximumUsableWorldArea = 0f;
+        areaOccupancies = new int[fallAreas.Count];
+        for (int areaIndex = 0;
+             areaIndex < fallAreas.Count;
+             areaIndex++)
+        {
+            FallAreaGeometry geometry = fallAreas[areaIndex];
+            if (geometry.Area == null ||
+                geometry.Volume == null ||
+                !IsFinite(geometry.UsableWorldArea) ||
+                geometry.UsableWorldArea <= FallAreaGeometryEpsilon)
+            {
+                return false;
+            }
+
+            minimumUsableWorldArea = Mathf.Min(
+                minimumUsableWorldArea,
+                geometry.UsableWorldArea);
+            maximumUsableWorldArea = Mathf.Max(
+                maximumUsableWorldArea,
+                geometry.UsableWorldArea);
+        }
+
+        useDensity =
+            maximumUsableWorldArea >
+            minimumUsableWorldArea * FallAreaSizeDensityThreshold;
+        for (int worldDropIndex = 0;
+             worldDropIndex < worldDropPositions.Count;
+             worldDropIndex++)
+        {
+            Vector3 worldDropPosition = worldDropPositions[worldDropIndex];
+            if (!IsFiniteVector(worldDropPosition))
+                return false;
+
+            int assignedAreaIndex = -1;
+            float bestNormalizedCenterSqrDistance =
+                float.PositiveInfinity;
+            for (int areaIndex = 0;
+                 areaIndex < fallAreas.Count;
+                 areaIndex++)
+            {
+                if (!TryGetFallAreaNormalizedCoordinates(
+                        fallAreas[areaIndex],
+                        worldDropPosition,
+                        out float normalizedX,
+                        out float normalizedZ))
+                {
+                    continue;
+                }
+
+                float centerOffsetX = normalizedX - 0.5f;
+                float centerOffsetZ = normalizedZ - 0.5f;
+                float normalizedCenterSqrDistance =
+                    centerOffsetX * centerOffsetX +
+                    centerOffsetZ * centerOffsetZ;
+                if (assignedAreaIndex < 0 ||
+                    normalizedCenterSqrDistance <
+                    bestNormalizedCenterSqrDistance -
+                    FallAreaDistanceTieEpsilon)
+                {
+                    assignedAreaIndex = areaIndex;
+                    bestNormalizedCenterSqrDistance =
+                        normalizedCenterSqrDistance;
+                }
+            }
+
+            if (assignedAreaIndex >= 0)
+                areaOccupancies[assignedAreaIndex]++;
+        }
+
+        return true;
+    }
+
+    private static bool TryGetFallAreaNormalizedCoordinates(
+        FallAreaGeometry geometry,
+        Vector3 worldPosition,
+        out float normalizedX,
+        out float normalizedZ)
+    {
+        normalizedX = 0f;
+        normalizedZ = 0f;
+        if (geometry.Area == null ||
+            !IsFiniteVector(worldPosition))
+        {
+            return false;
+        }
+
+        float usableWidth =
+            geometry.LocalMaximumX - geometry.LocalMinimumX;
+        float usableDepth =
+            geometry.LocalMaximumZ - geometry.LocalMinimumZ;
+        if (!IsFinite(usableWidth) ||
+            !IsFinite(usableDepth) ||
+            usableWidth <= FallAreaGeometryEpsilon ||
+            usableDepth <= FallAreaGeometryEpsilon)
+        {
+            return false;
+        }
+
+        Vector3 localPosition =
+            geometry.Area.transform.InverseTransformPoint(worldPosition);
+        if (!IsFiniteVector(localPosition) ||
+            localPosition.x <
+            geometry.LocalMinimumX - FallAreaGeometryEpsilon ||
+            localPosition.x >
+            geometry.LocalMaximumX + FallAreaGeometryEpsilon ||
+            localPosition.z <
+            geometry.LocalMinimumZ - FallAreaGeometryEpsilon ||
+            localPosition.z >
+            geometry.LocalMaximumZ + FallAreaGeometryEpsilon)
+        {
+            return false;
+        }
+
+        normalizedX =
+            (localPosition.x - geometry.LocalMinimumX) / usableWidth;
+        normalizedZ =
+            (localPosition.z - geometry.LocalMinimumZ) / usableDepth;
+        return IsFinite(normalizedX) && IsFinite(normalizedZ);
+    }
+
+    private static bool TryBuildFallMapDistributionSnapshot(
+        IReadOnlyList<PostItMapSpawnPoint> spawnPoints,
+        IReadOnlyList<Vector3> worldDropPositions,
+        out int[] markerOccupancies)
+    {
+        markerOccupancies = Array.Empty<int>();
+        if (spawnPoints == null ||
+            spawnPoints.Count == 0 ||
+            worldDropPositions == null)
+        {
+            return false;
+        }
+
+        markerOccupancies = new int[spawnPoints.Count];
+        for (int worldDropIndex = 0;
+             worldDropIndex < worldDropPositions.Count;
+             worldDropIndex++)
+        {
+            Vector3 worldDropPosition = worldDropPositions[worldDropIndex];
+            if (!IsFiniteVector(worldDropPosition))
+                return false;
+
             int nearestMarkerIndex = -1;
             float nearestMarkerSqrDistance = float.PositiveInfinity;
             for (int markerIndex = 0;
@@ -3629,7 +4084,7 @@ public class PostItRoundManager : NetworkBehaviour
                 }
 
                 float markerSqrDistance = HorizontalSqrDistance(
-                    worldDrop.Position,
+                    worldDropPosition,
                     spawnPoint.transform.position);
                 if (nearestMarkerIndex < 0 ||
                     markerSqrDistance < nearestMarkerSqrDistance)
@@ -3709,6 +4164,33 @@ public class PostItRoundManager : NetworkBehaviour
         return MixStableHash(hash, FallMapDropSeedSalt);
     }
 
+    private static uint ComputeStableFallAreaDropSeed(
+        int roundRevision,
+        int postItId,
+        ulong sourceOwnerClientId,
+        int authoritativeWorldDropCount)
+    {
+        uint hash = 2166136261u;
+        hash = MixStableHash(hash, (uint)roundRevision);
+        hash = MixStableHash(hash, (uint)postItId);
+        hash = MixStableHash(hash, (uint)sourceOwnerClientId);
+        hash = MixStableHash(hash, (uint)(sourceOwnerClientId >> 32));
+        hash = MixStableHash(hash, (uint)authoritativeWorldDropCount);
+        return MixStableHash(hash, FallAreaDropSeedSalt);
+    }
+
+    private static float GetDeterministicFallAreaCoordinate(
+        uint seed,
+        int spawnOrder,
+        int attempt,
+        uint coordinateSalt)
+    {
+        uint hash = MixStableHash(seed, (uint)spawnOrder);
+        hash = MixStableHash(hash, (uint)attempt);
+        hash = MixStableHash(hash, coordinateSalt);
+        return HashToUnitFloat(hash);
+    }
+
     private static uint MixStableHash(uint hash, uint value)
     {
         return unchecked((hash ^ value) * 16777619u);
@@ -3784,6 +4266,55 @@ public class PostItRoundManager : NetworkBehaviour
         out Vector3 position,
         out Quaternion rotation)
     {
+        return TryProjectWorldDropToGroundCore(
+            postItId,
+            probeCenter,
+            referenceY,
+            hasFallbackPosition,
+            fallbackPosition,
+            constrainToFallbackHeight,
+            false,
+            default,
+            out position,
+            out rotation);
+    }
+
+    private bool TryProjectFallAreaCandidateToGround(
+        int postItId,
+        FallAreaGeometry geometry,
+        Vector3 probeCenter,
+        out Vector3 position,
+        out Quaternion rotation)
+    {
+        Vector3 heightReference = new Vector3(
+            probeCenter.x,
+            geometry.VolumeTopWorldY,
+            probeCenter.z);
+        return TryProjectWorldDropToGroundCore(
+            postItId,
+            probeCenter,
+            geometry.VolumeTopWorldY,
+            true,
+            heightReference,
+            true,
+            true,
+            geometry,
+            out position,
+            out rotation);
+    }
+
+    private bool TryProjectWorldDropToGroundCore(
+        int postItId,
+        Vector3 probeCenter,
+        float referenceY,
+        bool hasFallbackPosition,
+        Vector3 fallbackPosition,
+        bool constrainToFallbackHeight,
+        bool constrainToFallArea,
+        FallAreaGeometry fallArea,
+        out Vector3 position,
+        out Quaternion rotation)
+    {
         position = Vector3.zero;
         rotation = Quaternion.identity;
 
@@ -3813,15 +4344,73 @@ public class PostItRoundManager : NetworkBehaviour
                     constrainToFallbackHeight))
                 continue;
 
+            if (constrainToFallArea &&
+                !IsValidFallAreaGroundHit(hit, fallArea))
+            {
+                continue;
+            }
+
             Vector3 normal = hit.normal.sqrMagnitude > 0.0001f
                 ? hit.normal.normalized
                 : Vector3.up;
-            position = hit.point + normal * Mathf.Max(0f, worldDropGroundOffset);
-            rotation = BuildMarkerRotation(postItId, normal);
-            return IsFiniteVector(position) && IsFiniteQuaternion(rotation);
+            Vector3 candidatePosition =
+                hit.point + normal * Mathf.Max(0f, worldDropGroundOffset);
+            Quaternion candidateRotation =
+                BuildMarkerRotation(postItId, normal);
+            if (!IsFiniteVector(candidatePosition) ||
+                !IsFiniteQuaternion(candidateRotation))
+            {
+                if (!constrainToFallArea)
+                    return false;
+                continue;
+            }
+
+            if (constrainToFallArea &&
+                !IsValidFallAreaProjectedPosition(
+                    candidatePosition,
+                    fallArea))
+            {
+                continue;
+            }
+
+            position = candidatePosition;
+            rotation = candidateRotation;
+            return true;
         }
 
         return false;
+    }
+
+    private static bool IsValidFallAreaGroundHit(
+        RaycastHit hit,
+        FallAreaGeometry geometry)
+    {
+        return IsValidFallAreaProjectedPosition(
+            hit.point,
+            geometry);
+    }
+
+    private static bool IsValidFallAreaProjectedPosition(
+        Vector3 worldPosition,
+        FallAreaGeometry geometry)
+    {
+        if (!IsFiniteVector(worldPosition) ||
+            !IsFinite(geometry.VolumeTopWorldY) ||
+            worldPosition.y <
+            geometry.VolumeTopWorldY -
+            FallAreaMaxGroundBelowVolumeTop ||
+            worldPosition.y >
+            geometry.VolumeTopWorldY +
+            FallAreaMaxGroundAboveVolumeTop)
+        {
+            return false;
+        }
+
+        return TryGetFallAreaNormalizedCoordinates(
+            geometry,
+            worldPosition,
+            out _,
+            out _);
     }
 
     private bool IsValidWorldDropGroundHit(
@@ -4714,6 +5303,150 @@ public class PostItRoundManager : NetworkBehaviour
         return ulong.MaxValue;
     }
 
+    private bool TryCollectCanonicalFallSpawnAreas(
+        out List<FallAreaGeometry> fallAreas,
+        out string validationError)
+    {
+        fallAreas = new List<FallAreaGeometry>();
+        validationError = null;
+        PostItFallSpawnArea[] sceneAreas =
+            FindObjectsByType<PostItFallSpawnArea>(
+                FindObjectsSortMode.None);
+        HashSet<int> spawnOrders = new HashSet<int>();
+        for (int areaIndex = 0;
+             areaIndex < sceneAreas.Length;
+             areaIndex++)
+        {
+            PostItFallSpawnArea area = sceneAreas[areaIndex];
+            if (area == null)
+                continue;
+            if (area.SourceScene != gameObject.scene)
+                continue;
+
+            BoxCollider sourceVolume = area.SourceVolume;
+            if (!area.IsUsable ||
+                area.SpawnOrder < 0 ||
+                !spawnOrders.Add(area.SpawnOrder) ||
+                sourceVolume == null ||
+                sourceVolume.gameObject != area.gameObject ||
+                sourceVolume.attachedRigidbody != null ||
+                area.GetComponentInParent<NetworkObject>(true) != null ||
+                area.GetComponentInParent<NetworkBehaviour>(true) != null ||
+                !TryBuildFallAreaGeometry(
+                    area,
+                    out FallAreaGeometry geometry))
+            {
+                validationError =
+                    "Fall spawn areas require unique non-negative SpawnOrder values and finite static local geometry.";
+                fallAreas.Clear();
+                return false;
+            }
+
+            fallAreas.Add(geometry);
+        }
+
+        fallAreas.Sort(CompareFallAreaGeometryByOrder);
+        return true;
+    }
+
+    private static bool TryBuildFallAreaGeometry(
+        PostItFallSpawnArea area,
+        out FallAreaGeometry geometry)
+    {
+        geometry = default;
+        if (area == null)
+            return false;
+
+        BoxCollider sourceVolume = area.SourceVolume;
+        if (sourceVolume == null)
+            return false;
+
+        Transform areaTransform = area.transform;
+        Vector3 worldXBasis =
+            areaTransform.TransformVector(Vector3.right);
+        Vector3 worldZBasis =
+            areaTransform.TransformVector(Vector3.forward);
+        Vector3 worldUpBasis =
+            areaTransform.TransformVector(Vector3.up);
+        if (!IsFiniteVector(worldXBasis) ||
+            !IsFiniteVector(worldZBasis) ||
+            !IsFiniteVector(worldUpBasis))
+        {
+            return false;
+        }
+
+        float worldUnitsPerLocalX = worldXBasis.magnitude;
+        float worldUnitsPerLocalZ = worldZBasis.magnitude;
+        float worldUnitsPerLocalY = worldUpBasis.magnitude;
+        if (!IsFinite(worldUnitsPerLocalX) ||
+            !IsFinite(worldUnitsPerLocalZ) ||
+            !IsFinite(worldUnitsPerLocalY) ||
+            worldUnitsPerLocalX <= FallAreaGeometryEpsilon ||
+            worldUnitsPerLocalZ <= FallAreaGeometryEpsilon ||
+            worldUnitsPerLocalY <= FallAreaGeometryEpsilon ||
+            Vector3.Dot(
+                worldUpBasis / worldUnitsPerLocalY,
+                Vector3.up) < FallAreaMinimumUpAlignmentDot)
+        {
+            return false;
+        }
+
+        Vector3 center = sourceVolume.center;
+        Vector3 size = sourceVolume.size;
+        float localPaddingX =
+            area.EffectiveEdgePadding / worldUnitsPerLocalX;
+        float localPaddingZ =
+            area.EffectiveEdgePadding / worldUnitsPerLocalZ;
+        float localMinimumX =
+            center.x - size.x * 0.5f + localPaddingX;
+        float localMaximumX =
+            center.x + size.x * 0.5f - localPaddingX;
+        float localMinimumZ =
+            center.z - size.z * 0.5f + localPaddingZ;
+        float localMaximumZ =
+            center.z + size.z * 0.5f - localPaddingZ;
+        float usableLocalWidth = localMaximumX - localMinimumX;
+        float usableLocalDepth = localMaximumZ - localMinimumZ;
+        if (!IsFinite(localMinimumX) ||
+            !IsFinite(localMaximumX) ||
+            !IsFinite(localMinimumZ) ||
+            !IsFinite(localMaximumZ) ||
+            usableLocalWidth <= FallAreaGeometryEpsilon ||
+            usableLocalDepth <= FallAreaGeometryEpsilon)
+        {
+            return false;
+        }
+
+        float usableWorldArea = Vector3.Cross(
+            worldXBasis * usableLocalWidth,
+            worldZBasis * usableLocalDepth).magnitude;
+        Vector3 localTopCenter = new Vector3(
+            center.x,
+            center.y + size.y * 0.5f,
+            center.z);
+        Vector3 worldTopCenter =
+            areaTransform.TransformPoint(localTopCenter);
+        if (!IsFinite(usableWorldArea) ||
+            usableWorldArea <= FallAreaGeometryEpsilon ||
+            !IsFiniteVector(worldTopCenter))
+        {
+            return false;
+        }
+
+        geometry = new FallAreaGeometry
+        {
+            Area = area,
+            Volume = sourceVolume,
+            LocalMinimumX = localMinimumX,
+            LocalMaximumX = localMaximumX,
+            LocalMinimumZ = localMinimumZ,
+            LocalMaximumZ = localMaximumZ,
+            VolumeTopWorldY = worldTopCenter.y,
+            UsableWorldArea = usableWorldArea
+        };
+        return true;
+    }
+
     private bool TryCollectCanonicalMapSpawnPoints(
         bool requireUniqueSpawnOrders,
         out List<PostItMapSpawnPoint> spawnPoints,
@@ -5020,6 +5753,24 @@ public class PostItRoundManager : NetworkBehaviour
         float deltaX = left.x - right.x;
         float deltaZ = left.z - right.z;
         return deltaX * deltaX + deltaZ * deltaZ;
+    }
+
+    private static int CompareFallAreaGeometryByOrder(
+        FallAreaGeometry left,
+        FallAreaGeometry right)
+    {
+        int leftOrder = left.Area != null
+            ? left.Area.SpawnOrder
+            : int.MinValue;
+        int rightOrder = right.Area != null
+            ? right.Area.SpawnOrder
+            : int.MinValue;
+        int orderComparison = leftOrder.CompareTo(rightOrder);
+        return orderComparison != 0
+            ? orderComparison
+            : CompareTransformHierarchy(
+                left.Area != null ? left.Area.transform : null,
+                right.Area != null ? right.Area.transform : null);
     }
 
     private static int CompareMapSpawnPointsByOrder(
@@ -5537,18 +6288,23 @@ public class PostItRoundManager : NetworkBehaviour
 
     private static bool IsFiniteVector(Vector3 value)
     {
-        return !float.IsNaN(value.x) && !float.IsInfinity(value.x) &&
-               !float.IsNaN(value.y) && !float.IsInfinity(value.y) &&
-               !float.IsNaN(value.z) && !float.IsInfinity(value.z);
+        return IsFinite(value.x) &&
+               IsFinite(value.y) &&
+               IsFinite(value.z);
     }
 
     private static bool IsFiniteQuaternion(Quaternion value)
     {
-        return !float.IsNaN(value.x) && !float.IsInfinity(value.x) &&
-               !float.IsNaN(value.y) && !float.IsInfinity(value.y) &&
-               !float.IsNaN(value.z) && !float.IsInfinity(value.z) &&
-               !float.IsNaN(value.w) && !float.IsInfinity(value.w) &&
+        return IsFinite(value.x) &&
+               IsFinite(value.y) &&
+               IsFinite(value.z) &&
+               IsFinite(value.w) &&
                Quaternion.Dot(value, value) > 0.0001f;
+    }
+
+    private static bool IsFinite(float value)
+    {
+        return !float.IsNaN(value) && !float.IsInfinity(value);
     }
 
     private bool CanMutateServerState()
