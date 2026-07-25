@@ -1,6 +1,5 @@
 using System;
 using System.Collections;
-using Unity.Collections;
 using UnityEngine;
 
 public class FaceExpressionController : MonoBehaviour
@@ -250,52 +249,48 @@ public class FaceExpressionController : MonoBehaviour
         if (mesh == null)
             return false;
 
-        Mesh.MeshDataArray meshDataArray = default;
-        NativeArray<Vector2> uvs = default;
-        NativeArray<int> indices = default;
-        bool hasMeshData = false;
+        Mesh readableMesh = mesh;
+        Mesh bakedMesh = null;
 
         try
         {
-            meshDataArray = Mesh.AcquireReadOnlyMeshData(mesh);
-            hasMeshData = true;
+            if (!mesh.isReadable)
+            {
+                if (!(faceRenderer is SkinnedMeshRenderer
+                      unreadableSkinnedMeshRenderer))
+                {
+                    return false;
+                }
 
-            if (meshDataArray.Length != 1)
+                bakedMesh = new Mesh();
+                unreadableSkinnedMeshRenderer.BakeMesh(bakedMesh);
+                readableMesh = bakedMesh;
+            }
+
+            Vector2[] uvs = readableMesh.uv;
+            if (uvs == null || uvs.Length == 0)
                 return false;
 
-            Mesh.MeshData meshData = meshDataArray[0];
             if (materialIndex < 0 ||
-                materialIndex >= meshData.subMeshCount ||
-                meshData.vertexCount <= 0)
+                materialIndex >= readableMesh.subMeshCount)
             {
                 return false;
             }
 
-            int indexCount = meshData.GetSubMesh(materialIndex).indexCount;
-            if (indexCount <= 0)
+            int[] triangles = readableMesh.GetTriangles(materialIndex);
+            if (triangles == null || triangles.Length == 0)
                 return false;
 
-            uvs = new NativeArray<Vector2>(
-                meshData.vertexCount,
-                Allocator.Temp,
-                NativeArrayOptions.UninitializedMemory);
-            indices = new NativeArray<int>(
-                indexCount,
-                Allocator.Temp,
-                NativeArrayOptions.UninitializedMemory);
-            meshData.GetUVs(0, uvs);
-            meshData.GetIndices(indices, materialIndex, true);
-
-            int firstVertexIndex = indices[0];
+            int firstVertexIndex = triangles[0];
             if (firstVertexIndex < 0 || firstVertexIndex >= uvs.Length)
                 return false;
 
             Vector2 min = uvs[firstVertexIndex];
             Vector2 max = uvs[firstVertexIndex];
 
-            for (int i = 1; i < indices.Length; i++)
+            for (int i = 1; i < triangles.Length; i++)
             {
-                int vertexIndex = indices[i];
+                int vertexIndex = triangles[i];
                 if (vertexIndex < 0 || vertexIndex >= uvs.Length)
                     return false;
 
@@ -308,14 +303,8 @@ public class FaceExpressionController : MonoBehaviour
         }
         finally
         {
-            if (indices.IsCreated)
-                indices.Dispose();
-
-            if (uvs.IsCreated)
-                uvs.Dispose();
-
-            if (hasMeshData)
-                meshDataArray.Dispose();
+            if (bakedMesh != null)
+                Destroy(bakedMesh);
         }
     }
 
