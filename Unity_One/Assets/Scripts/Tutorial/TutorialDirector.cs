@@ -303,8 +303,7 @@ public sealed class TutorialDirector : MonoBehaviour
                 readySystem.ToggleLocalReady();
         }
 
-        if (!readySystem.IsLocalReady() ||
-            gameStateManager.GetState() != GameStateManager.GameState.Playing ||
+        if (gameStateManager.GetState() != GameStateManager.GameState.Playing ||
             _inventory.Count != 2 ||
             _playerStatus.IsEliminated ||
             tutorialUiMarker == null ||
@@ -386,7 +385,7 @@ public sealed class TutorialDirector : MonoBehaviour
         {
             _localPlayerObject = playerObject;
             _playerHub = playerObject.GetComponent<PlayerHub>();
-            _playerStatus = playerObject.GetComponent<PlayerStatusModule>();
+            _playerStatus = playerObject.GetComponentInChildren<PlayerStatusModule>(true);
             _inventory = playerObject.GetComponent<PlayerPostItInventory>();
             _motor = playerObject.GetComponentInChildren<HamsterFullRagdollMotor>(true);
             _itemAdapter = playerObject.GetComponentInChildren<HamsterMotorShellItemAdapter>(true);
