@@ -51,6 +51,15 @@ public sealed class PlayerPostItWorldPresenter : MonoBehaviour
     [SerializeField] private bool debugLogs = false;
     [SerializeField] private PostItVisualCatalogSO visualCatalog;
 
+    [Header("Visual Scale")]
+    [SerializeField, Min(0.0001f), Tooltip(
+        "캐릭터 몸에 부착되는 포스트잇 시각 크기 배율입니다. " +
+        "캐릭터 Visual 부모 스케일과 함께 최종 크기가 결정됩니다.")]
+    private float bodyVisualScaleMultiplier = 1f;
+    [SerializeField, Min(0.0001f), Tooltip(
+        "책상 위 World Drop 포스트잇 시각 크기 배율입니다.")]
+    private float worldVisualScaleMultiplier = 1f;
+
     private static readonly int BaseColorPropertyId = Shader.PropertyToID("_BaseColor");
     private static readonly int ColorPropertyId = Shader.PropertyToID("_Color");
     private static readonly int BaseMapPropertyId = Shader.PropertyToID("_BaseMap");
@@ -82,6 +91,7 @@ public sealed class PlayerPostItWorldPresenter : MonoBehaviour
         public bool SupportsCatalogPreview;
         public CatalogWarningState WarningState;
         public PostItPublicVisualData Data;
+        public Vector3 SourceScale;
         public bool HasData;
     }
 
@@ -93,6 +103,7 @@ public sealed class PlayerPostItWorldPresenter : MonoBehaviour
         public bool SupportsCatalogPreview;
         public CatalogWarningState WarningState;
         public PostItWorldDropData Data;
+        public Vector3 SourceScale;
         public bool HasData;
     }
 
@@ -513,6 +524,7 @@ public sealed class PlayerPostItWorldPresenter : MonoBehaviour
                 PropertyBlock = new MaterialPropertyBlock(),
                 SupportsCatalogPreview = SupportsCatalogPreviewTextures(renderers),
                 Data = PostItPublicVisualData.Invalid,
+                SourceScale = instance.transform.localScale,
                 HasData = false
             };
         }
@@ -624,6 +636,10 @@ public sealed class PlayerPostItWorldPresenter : MonoBehaviour
             slot.Data = data;
             slot.HasData = true;
             ApplyVisualData(slot, data);
+            ApplyVisualScale(
+                slot.Instance.transform,
+                slot.SourceScale,
+                bodyVisualScaleMultiplier);
             slot.Instance.SetActive(true);
             _visibleCount++;
         }
@@ -1295,6 +1311,24 @@ public sealed class PlayerPostItWorldPresenter : MonoBehaviour
                float.IsFinite(value.z);
     }
 
+    private static void ApplyVisualScale(
+        Transform target,
+        Vector3 sourceScale,
+        float multiplier)
+    {
+        if (target == null)
+            return;
+
+        target.localScale = sourceScale * SanitizeVisualScaleMultiplier(multiplier);
+    }
+
+    private static float SanitizeVisualScaleMultiplier(float multiplier)
+    {
+        return float.IsFinite(multiplier) && multiplier > 0f
+            ? multiplier
+            : 1f;
+    }
+
     private static bool IsFiniteQuaternion(Quaternion value)
     {
         return float.IsFinite(value.x) &&
@@ -1332,6 +1366,10 @@ public sealed class PlayerPostItWorldPresenter : MonoBehaviour
                 data.IsOriginalOwnerItem,
                 slot.SupportsCatalogPreview,
                 ref slot.WarningState);
+            ApplyVisualScale(
+                slot.Instance.transform,
+                slot.SourceScale,
+                worldVisualScaleMultiplier);
             slot.Instance.SetActive(true);
             _worldVisibleCount++;
         }
@@ -1399,6 +1437,7 @@ public sealed class PlayerPostItWorldPresenter : MonoBehaviour
                 PropertyBlock = new MaterialPropertyBlock(),
                 SupportsCatalogPreview = SupportsCatalogPreviewTextures(renderers),
                 Data = PostItWorldDropData.Invalid,
+                SourceScale = instance.transform.localScale,
                 HasData = false
             });
         }
@@ -1717,6 +1756,10 @@ public sealed class PlayerPostItWorldPresenter : MonoBehaviour
     private void OnValidate()
     {
         acquiredTintStrength = Mathf.Clamp01(acquiredTintStrength);
+        bodyVisualScaleMultiplier =
+            SanitizeVisualScaleMultiplier(bodyVisualScaleMultiplier);
+        worldVisualScaleMultiplier =
+            SanitizeVisualScaleMultiplier(worldVisualScaleMultiplier);
         if (anchors == null)
         {
             anchors = Array.Empty<Transform>();

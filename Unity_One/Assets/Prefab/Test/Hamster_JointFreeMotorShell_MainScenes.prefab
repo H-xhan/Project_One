@@ -785,6 +785,8 @@ MonoBehaviour:
   acquiredTintStrength: 0.35
   debugLogs: 0
   visualCatalog: {fileID: 11400000, guid: 102eeac9b02c4caa9ccbc6da4eb34a3a, type: 2}
+  bodyVisualScaleMultiplier: 1.1304348
+  worldVisualScaleMultiplier: 1.25
 --- !u!114 &6100000000000000113
 MonoBehaviour:
   m_ObjectHideFlags: 0
