@@ -1,3 +1,4 @@
+using System;
 using System.Collections;
 using UnityEngine;
 
@@ -42,7 +43,32 @@ public class FaceExpressionController : MonoBehaviour
 
     private Coroutine _holdRoutine;
     private int _holdToken;
-    private int _currentIndex;
+    private int _currentIndex = -1;
+    private bool _sourceUvBoundsResolved;
+    private bool _hasSourceUvBounds;
+    private Rect _sourceUvBounds;
+
+    public int CurrentExpressionId => _currentIndex;
+
+    public event Action<int> ExpressionChanged;
+
+    public Texture ExpressionAtlasTexture
+    {
+        get
+        {
+            if (_mat == null)
+                return null;
+
+            Texture texture = _mat.HasProperty(BaseMap)
+                ? _mat.GetTexture(BaseMap)
+                : null;
+
+            if (texture == null && _mat.HasProperty(MainTex))
+                texture = _mat.GetTexture(MainTex);
+
+            return texture;
+        }
+    }
 
     private void Awake()
     {
@@ -58,7 +84,7 @@ public class FaceExpressionController : MonoBehaviour
     private void OnValidate()
     {
         if (!Application.isPlaying) return;
-        ApplyFaceIndex(_currentIndex);
+        ApplyFaceIndex(_currentIndex >= 0 ? _currentIndex : defaultIndex);
     }
 
     // 현재 Renderer의 live material을 다시 잡는다
@@ -97,7 +123,7 @@ public class FaceExpressionController : MonoBehaviour
 
     private void ApplyFaceIndex(int index)
     {
-        if (faceRenderer == null || columns <= 0)
+        if (faceRenderer == null)
             return;
 
         // 핵심: 적용할 때마다 현재 live material 다시 캐시
@@ -109,29 +135,21 @@ public class FaceExpressionController : MonoBehaviour
             return;
         }
 
-        _currentIndex = Mathf.Clamp(index, 0, columns - 1);
-
-        float scaleX = uvUsesFullAtlas ? 1f / columns : 1f;
-        float baseOffsetX = (float)_currentIndex / columns;
-
-        Vector2 fine = Vector2.zero;
-        if (perFaceFineOffset != null && _currentIndex < perFaceFineOffset.Length)
-            fine = perFaceFineOffset[_currentIndex];
-
-        Vector2 finalOffset = new Vector2(baseOffsetX, 0f) + fine + globalFineOffset;
+        if (!TryResolveExpressionMaterialUv(index, out int resolvedIndex, out Vector2 textureScale, out Vector2 finalOffset))
+            return;
 
         bool applied = false;
 
         if (_mat.HasProperty(BaseMap))
         {
-            _mat.SetTextureScale(BaseMap, new Vector2(scaleX, 1f));
+            _mat.SetTextureScale(BaseMap, textureScale);
             _mat.SetTextureOffset(BaseMap, finalOffset);
             applied = true;
         }
 
         if (_mat.HasProperty(MainTex))
         {
-            _mat.SetTextureScale(MainTex, new Vector2(scaleX, 1f));
+            _mat.SetTextureScale(MainTex, textureScale);
             _mat.SetTextureOffset(MainTex, finalOffset);
             applied = true;
         }
@@ -142,7 +160,144 @@ public class FaceExpressionController : MonoBehaviour
             return;
         }
 
-        Log($"[FaceExpressionController] Face index={_currentIndex}, offset={finalOffset}, scaleX={scaleX}, mat={_mat.name}");
+        int previousIndex = _currentIndex;
+        _currentIndex = resolvedIndex;
+
+        Log($"[FaceExpressionController] Face index={_currentIndex}, offset={finalOffset}, scaleX={textureScale.x}, mat={_mat.name}");
+
+        if (previousIndex != _currentIndex)
+            ExpressionChanged?.Invoke(_currentIndex);
+    }
+
+    public bool TryGetExpressionUvRect(int expressionId, out Rect uvRect)
+    {
+        uvRect = default;
+
+        if (!TryResolveExpressionMaterialUv(
+                expressionId,
+                out _,
+                out Vector2 textureScale,
+                out Vector2 textureOffset) ||
+            !TryGetSourceUvBounds(out Rect sourceUvBounds))
+        {
+            return false;
+        }
+
+        uvRect = new Rect(
+            textureOffset.x + sourceUvBounds.xMin * textureScale.x,
+            textureOffset.y + sourceUvBounds.yMin * textureScale.y,
+            sourceUvBounds.width * textureScale.x,
+            sourceUvBounds.height * textureScale.y);
+
+        return IsFiniteNormalizedRect(uvRect);
+    }
+
+    private bool TryResolveExpressionMaterialUv(
+        int index,
+        out int resolvedIndex,
+        out Vector2 textureScale,
+        out Vector2 textureOffset)
+    {
+        resolvedIndex = 0;
+        textureScale = Vector2.one;
+        textureOffset = Vector2.zero;
+
+        if (columns <= 0)
+            return false;
+
+        resolvedIndex = Mathf.Clamp(index, 0, columns - 1);
+        textureScale.x = uvUsesFullAtlas ? 1f / columns : 1f;
+
+        Vector2 fine = Vector2.zero;
+        if (perFaceFineOffset != null && resolvedIndex < perFaceFineOffset.Length)
+            fine = perFaceFineOffset[resolvedIndex];
+
+        textureOffset = new Vector2((float)resolvedIndex / columns, 0f) +
+                        fine +
+                        globalFineOffset;
+        return true;
+    }
+
+    private bool TryGetSourceUvBounds(out Rect uvBounds)
+    {
+        if (!_sourceUvBoundsResolved)
+        {
+            _sourceUvBoundsResolved = true;
+            _hasSourceUvBounds = TryResolveSourceUvBounds(out _sourceUvBounds);
+        }
+
+        uvBounds = _sourceUvBounds;
+        return _hasSourceUvBounds;
+    }
+
+    private bool TryResolveSourceUvBounds(out Rect uvBounds)
+    {
+        uvBounds = default;
+
+        Mesh mesh = null;
+        if (faceRenderer is SkinnedMeshRenderer skinnedMeshRenderer)
+        {
+            mesh = skinnedMeshRenderer.sharedMesh;
+        }
+        else if (faceRenderer != null)
+        {
+            MeshFilter meshFilter = faceRenderer.GetComponent<MeshFilter>();
+            if (meshFilter != null)
+                mesh = meshFilter.sharedMesh;
+        }
+
+        if (mesh == null)
+            return false;
+
+        Vector2[] uvs = mesh.uv;
+        if (uvs == null || uvs.Length == 0)
+            return false;
+
+        if (materialIndex < 0 || materialIndex >= mesh.subMeshCount)
+            return false;
+
+        int[] triangles = mesh.GetTriangles(materialIndex);
+        if (triangles == null || triangles.Length == 0)
+            return false;
+
+        int firstVertexIndex = triangles[0];
+        if (firstVertexIndex < 0 || firstVertexIndex >= uvs.Length)
+            return false;
+
+        Vector2 min = uvs[firstVertexIndex];
+        Vector2 max = uvs[firstVertexIndex];
+
+        for (int i = 1; i < triangles.Length; i++)
+        {
+            int vertexIndex = triangles[i];
+            if (vertexIndex < 0 || vertexIndex >= uvs.Length)
+                return false;
+
+            min = Vector2.Min(min, uvs[vertexIndex]);
+            max = Vector2.Max(max, uvs[vertexIndex]);
+        }
+
+        uvBounds = Rect.MinMaxRect(min.x, min.y, max.x, max.y);
+        return IsFiniteNormalizedRect(uvBounds);
+    }
+
+    private static bool IsFiniteNormalizedRect(Rect rect)
+    {
+        return IsFinite(rect.xMin) &&
+               IsFinite(rect.yMin) &&
+               IsFinite(rect.xMax) &&
+               IsFinite(rect.yMax) &&
+               rect.width > 0f &&
+               rect.height > 0f &&
+               rect.xMin >= 0f &&
+               rect.yMin >= 0f &&
+               rect.xMax <= 1f &&
+               rect.yMax <= 1f;
+    }
+
+    private static bool IsFinite(float value)
+    {
+        return !float.IsNaN(value) && !float.IsInfinity(value);
     }
 
     public void SetFaceIndex(int index)
