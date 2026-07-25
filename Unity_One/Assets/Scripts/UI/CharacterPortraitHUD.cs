@@ -4,345 +4,353 @@ using UnityEngine.UI;
 
 public class CharacterPortraitHUD : MonoBehaviour
 {
-    public enum PortraitExpression
-    {
-        Normal,
-        LowStamina,
-        Hit,
-        Grabbed,
-        Carrying,
-        Danger,
-        Success,
-        Fail
-    }
+    [Header("Presentation")]
+    [SerializeField] private CanvasGroup canvasGroup;
+    [SerializeField] private RawImage expressionImage;
+    [SerializeField] private float rebindInterval = 0.25f;
 
-    [SerializeField, Tooltip("초상화를 표시할 UI Image입니다. 비워두면 자식에서 자동 탐색합니다.")]
-    private Image portraitImage;
+    [Header("State")]
+    [SerializeField] private GameStateManager gameStateManager;
 
-    [SerializeField, Tooltip("초상화 UI 전체 루트 오브젝트입니다. 비워두면 자기 gameObject를 사용합니다.")]
-    private GameObject root;
+    [Header("Visibility")]
+    [SerializeField] private bool showOnlyDuringPlaying = true;
+    [SerializeField] private bool hideWhenEliminated = true;
 
-    [SerializeField, Tooltip("기본 상태에서 표시할 초상화 Sprite입니다.")]
-    private Sprite normalSprite;
+    [Header("Debug")]
+    [SerializeField] private bool debugLogs = false;
 
-    [SerializeField, Tooltip("스테미너가 낮을 때 표시할 초상화 Sprite입니다. 비워두면 기본 Sprite를 사용합니다.")]
-    private Sprite lowStaminaSprite;
-
-    [SerializeField, Tooltip("피격 상태에서 표시할 확장용 초상화 Sprite입니다. 1차 MVP에서는 자동 적용하지 않습니다.")]
-    private Sprite hitSprite;
-
-    [SerializeField, Tooltip("잡힌 상태에서 표시할 확장용 초상화 Sprite입니다. 1차 MVP에서는 자동 적용하지 않습니다.")]
-    private Sprite grabbedSprite;
-
-    [SerializeField, Tooltip("다른 캐릭터를 들고 있는 상태에서 표시할 확장용 초상화 Sprite입니다. 1차 MVP에서는 자동 적용하지 않습니다.")]
-    private Sprite carryingSprite;
-
-    [SerializeField, Tooltip("폭탄 등 위험 상태에서 표시할 확장용 초상화 Sprite입니다. 1차 MVP에서는 자동 적용하지 않습니다.")]
-    private Sprite dangerSprite;
-
-    [SerializeField, Tooltip("성공 상태에서 표시할 확장용 초상화 Sprite입니다. 1차 MVP에서는 자동 적용하지 않습니다.")]
-    private Sprite successSprite;
-
-    [SerializeField, Tooltip("실패 상태에서 표시할 확장용 초상화 Sprite입니다. 1차 MVP에서는 자동 적용하지 않습니다.")]
-    private Sprite failSprite;
-
-    [SerializeField, Tooltip("활성화 시 로컬 플레이어를 자동으로 찾아 바인딩할지 여부입니다.")]
-    private bool autoBindLocalPlayer = true;
-
-    [SerializeField, Tooltip("로컬 플레이어 또는 스테미너 모듈을 찾지 못했을 때 다시 탐색하는 간격입니다.")]
-    private float rebindInterval = 0.25f;
-
-    [SerializeField, Tooltip("이 값 이하의 스테미너 비율 또는 수치에서 LowStamina 표정을 표시합니다. 1보다 작거나 같으면 정규화 비율로, 1보다 크면 실제 스테미너 수치로 판단합니다.")]
-    private float lowStaminaThreshold = 25f;
-
-    [SerializeField, Tooltip("수동 표정 적용 시 기본 유지 시간입니다.")]
-    private float expressionHoldSeconds = 0.5f;
-
-    [SerializeField, Tooltip("로컬 플레이어를 찾지 못했을 때 초상화 루트를 숨길지 여부입니다.")]
-    private bool hideWhenNoLocalPlayer = true;
-
-    [SerializeField, Tooltip("초상화 HUD 디버그 로그를 출력할지 여부입니다.")]
-    private bool portraitDebugLogs = false;
-
-    private PlayerHub _boundPlayerHub;
-    private PlayerStaminaModule _boundStaminaModule;
-    private PortraitExpression _currentExpression = PortraitExpression.Normal;
+    private NetworkObject _boundPlayerObject;
+    private FaceExpressionController _boundFaceController;
+    private PlayerStatusModule _boundStatusModule;
     private float _nextBindAttemptTime;
-    private float _manualExpressionUntil;
+    private int _displayedExpressionId = -1;
+    private Texture _displayedAtlas;
+    private bool _hasValidExpression;
+    private bool _visibilityInitialized;
+    private bool _isVisible;
     private bool _loggedWaitingForLocalPlayer;
 
     private void Awake()
     {
-        ResolveRefs();
-        ApplyExpressionSprite(PortraitExpression.Normal);
-        ApplyRootVisibility(!hideWhenNoLocalPlayer);
+        ResolvePresentationReferences();
+        SetVisible(false);
     }
 
     private void OnEnable()
     {
-        ResolveRefs();
+        ResolvePresentationReferences();
         _nextBindAttemptTime = 0f;
-
-        if (autoBindLocalPlayer)
-        {
-            TryBindLocalPlayer();
-        }
-        else
-        {
-            RefreshAutomaticExpression();
-        }
+        TryBindLocalPlayer();
+        RefreshVisibility();
     }
 
     private void OnDisable()
     {
-        UnbindStaminaModule();
+        ClearBinding();
     }
 
     private void OnDestroy()
     {
-        UnbindStaminaModule();
+        ClearBinding();
     }
 
     private void Update()
     {
-        if (_manualExpressionUntil > 0f && Time.unscaledTime >= _manualExpressionUntil)
-        {
-            _manualExpressionUntil = 0f;
-            RefreshAutomaticExpression();
-        }
+        if (_boundPlayerObject != null && !IsBoundLocalOwnerValid())
+            ClearBinding();
 
-        if (!autoBindLocalPlayer || _boundStaminaModule != null)
-            return;
+        if (NeedsBinding() && Time.unscaledTime >= _nextBindAttemptTime)
+            TryBindLocalPlayer();
 
-        if (Time.unscaledTime < _nextBindAttemptTime)
-            return;
-
-        TryBindLocalPlayer();
+        RefreshVisibility();
     }
 
     public void ForceRebind()
     {
-        UnbindStaminaModule();
-        _boundPlayerHub = null;
-        _loggedWaitingForLocalPlayer = false;
+        ClearBinding();
+        gameStateManager = null;
         _nextBindAttemptTime = 0f;
+        _loggedWaitingForLocalPlayer = false;
         TryBindLocalPlayer();
+        RefreshVisibility();
     }
 
-    public void SetExpression(PortraitExpression expression, float holdSeconds = 0f)
+    private void ResolvePresentationReferences()
     {
-        float resolvedHoldSeconds = holdSeconds > 0f ? holdSeconds : expressionHoldSeconds;
-        _manualExpressionUntil = resolvedHoldSeconds > 0f
-            ? Time.unscaledTime + resolvedHoldSeconds
-            : 0f;
+        if (canvasGroup == null)
+            canvasGroup = GetComponent<CanvasGroup>();
 
-        ApplyExpressionSprite(expression);
+        if (expressionImage == null)
+            expressionImage = GetComponentInChildren<RawImage>(true);
     }
 
-    private void ResolveRefs()
+    private bool NeedsBinding()
     {
-        if (root == null)
-            root = gameObject;
-
-        if (portraitImage == null)
-            portraitImage = GetComponentInChildren<Image>(true);
+        return _boundPlayerObject == null ||
+               _boundFaceController == null ||
+               _boundStatusModule == null ||
+               gameStateManager == null;
     }
 
     private void TryBindLocalPlayer()
     {
-        _nextBindAttemptTime = Time.unscaledTime + Mathf.Max(0f, rebindInterval);
+        _nextBindAttemptTime =
+            Time.unscaledTime + Mathf.Max(0f, rebindInterval);
 
-        PlayerHub playerHub = ResolveLocalPlayerHub();
-        if (playerHub == null)
+        ResolveGameStateManager();
+
+        NetworkObject playerObject = ResolveLocalPlayerObject();
+        if (playerObject == null)
         {
-            ShowMissingLocalPlayerState();
+            if (_boundPlayerObject != null)
+                ClearBinding();
+
             LogWaitingForLocalPlayer();
+            RefreshVisibility();
             return;
         }
 
-        PlayerStaminaModule staminaModule = playerHub.GetComponentInChildren<PlayerStaminaModule>(true);
-        if (staminaModule == null)
+        FaceExpressionController faceController =
+            playerObject.GetComponentInChildren<FaceExpressionController>(true);
+        PlayerStatusModule statusModule =
+            playerObject.GetComponentInChildren<PlayerStatusModule>(true);
+
+        if (!IsSamePlayerRoot(playerObject, faceController) ||
+            !IsSamePlayerRoot(playerObject, statusModule))
         {
-            _boundPlayerHub = playerHub;
-            ShowMissingLocalPlayerState();
-            Log("Rebind waiting for local player stamina.");
+            if (_boundPlayerObject != null)
+                ClearBinding();
+
+            LogWaitingForLocalPlayer();
+            RefreshVisibility();
             return;
         }
 
-        _boundPlayerHub = playerHub;
-        BindStaminaModule(staminaModule);
-        _loggedWaitingForLocalPlayer = false;
-        Log("Local player bound.");
+        Bind(playerObject, faceController, statusModule);
     }
 
-    private PlayerHub ResolveLocalPlayerHub()
+    private void ResolveGameStateManager()
+    {
+        if (gameStateManager == null)
+            gameStateManager = FindFirstObjectByType<GameStateManager>();
+    }
+
+    private NetworkObject ResolveLocalPlayerObject()
     {
         NetworkManager networkManager = NetworkManager.Singleton;
         if (networkManager == null || !networkManager.IsListening)
             return null;
 
-        NetworkObject playerObject = null;
         NetworkClient localClient = networkManager.LocalClient;
-        if (localClient != null && localClient.PlayerObject != null)
+        NetworkObject playerObject =
+            localClient != null ? localClient.PlayerObject : null;
+
+        if (playerObject == null ||
+            !playerObject.IsSpawned ||
+            playerObject.OwnerClientId != networkManager.LocalClientId)
         {
-            playerObject = localClient.PlayerObject;
-        }
-        else if (networkManager.IsServer &&
-                 networkManager.ConnectedClients != null &&
-                 networkManager.ConnectedClients.TryGetValue(networkManager.LocalClientId, out NetworkClient connectedClient) &&
-                 connectedClient != null)
-        {
-            playerObject = connectedClient.PlayerObject;
+            return null;
         }
 
-        if (playerObject == null || !playerObject.IsSpawned)
-            return null;
-
-        if (playerObject.OwnerClientId != networkManager.LocalClientId)
-            return null;
-
-        PlayerHub playerHub = playerObject.GetComponentInChildren<PlayerHub>(true);
-        if (!CanBindPlayerHub(playerHub))
-            return null;
-
-        return playerHub;
+        return playerObject;
     }
 
-    private void BindStaminaModule(PlayerStaminaModule staminaModule)
+    private void Bind(
+        NetworkObject playerObject,
+        FaceExpressionController faceController,
+        PlayerStatusModule statusModule)
     {
-        if (_boundStaminaModule == staminaModule)
+        bool bindingUnchanged =
+            _boundPlayerObject == playerObject &&
+            _boundFaceController == faceController &&
+            _boundStatusModule == statusModule;
+
+        if (!bindingUnchanged)
         {
-            ApplyRootVisibility(true);
-            RefreshAutomaticExpression();
+            ClearBinding();
+
+            _boundPlayerObject = playerObject;
+            _boundFaceController = faceController;
+            _boundStatusModule = statusModule;
+            _boundFaceController.ExpressionChanged +=
+                HandleExpressionChanged;
+
+            Log("Local owner bound.");
+        }
+
+        _loggedWaitingForLocalPlayer = false;
+        ApplyExpression(_boundFaceController.CurrentExpressionId);
+        RefreshVisibility();
+    }
+
+    private void ClearBinding()
+    {
+        if (_boundFaceController != null)
+        {
+            _boundFaceController.ExpressionChanged -=
+                HandleExpressionChanged;
+        }
+
+        _boundPlayerObject = null;
+        _boundFaceController = null;
+        _boundStatusModule = null;
+        _displayedExpressionId = -1;
+        _displayedAtlas = null;
+        _hasValidExpression = false;
+
+        if (expressionImage != null)
+            expressionImage.texture = null;
+
+        SetVisible(false);
+    }
+
+    private void HandleExpressionChanged(int expressionId)
+    {
+        ApplyExpression(expressionId);
+        RefreshVisibility();
+    }
+
+    private void ApplyExpression(int expressionId)
+    {
+        if (_boundFaceController == null ||
+            expressionImage == null ||
+            expressionId < 0)
+        {
+            InvalidateExpression();
             return;
         }
 
-        UnbindStaminaModule();
-
-        _boundStaminaModule = staminaModule;
-        _boundStaminaModule.StaminaChanged += OnStaminaChanged;
-        _boundStaminaModule.MaxStaminaChanged += OnMaxStaminaChanged;
-
-        ApplyRootVisibility(true);
-        RefreshAutomaticExpression();
-    }
-
-    private void UnbindStaminaModule()
-    {
-        if (_boundStaminaModule != null)
+        Texture atlas = _boundFaceController.ExpressionAtlasTexture;
+        if (atlas == null)
         {
-            _boundStaminaModule.StaminaChanged -= OnStaminaChanged;
-            _boundStaminaModule.MaxStaminaChanged -= OnMaxStaminaChanged;
+            InvalidateExpression();
+            return;
         }
 
-        _boundStaminaModule = null;
-    }
+        int resolvedExpressionId = expressionId;
+        if (!_boundFaceController.TryGetExpressionUvRect(
+                resolvedExpressionId,
+                out Rect uvRect))
+        {
+            resolvedExpressionId = 0;
+            if (!_boundFaceController.TryGetExpressionUvRect(
+                    resolvedExpressionId,
+                    out uvRect))
+            {
+                InvalidateExpression();
+                return;
+            }
+        }
 
-    private void OnStaminaChanged(float previousStamina, float currentStamina)
-    {
-        RefreshAutomaticExpression();
-    }
-
-    private void OnMaxStaminaChanged(float previousMaxStamina, float currentMaxStamina)
-    {
-        RefreshAutomaticExpression();
-    }
-
-    private void RefreshAutomaticExpression()
-    {
-        if (_manualExpressionUntil > 0f && Time.unscaledTime < _manualExpressionUntil)
+        if (_hasValidExpression &&
+            _displayedExpressionId == resolvedExpressionId &&
+            _displayedAtlas == atlas)
+        {
             return;
+        }
 
-        PortraitExpression nextExpression = ShouldUseLowStaminaExpression()
-            ? PortraitExpression.LowStamina
-            : PortraitExpression.Normal;
+        expressionImage.texture = atlas;
+        expressionImage.uvRect = uvRect;
+        _displayedExpressionId = resolvedExpressionId;
+        _displayedAtlas = atlas;
+        _hasValidExpression = true;
 
-        ApplyExpressionSprite(nextExpression);
+        Log($"Expression {resolvedExpressionId} applied.");
     }
 
-    private bool ShouldUseLowStaminaExpression()
+    private void InvalidateExpression()
     {
-        if (_boundStaminaModule == null)
+        _displayedExpressionId = -1;
+        _displayedAtlas = null;
+        _hasValidExpression = false;
+
+        if (expressionImage != null)
+            expressionImage.texture = null;
+
+        SetVisible(false);
+    }
+
+    private void RefreshVisibility()
+    {
+        SetVisible(ShouldBeVisible());
+    }
+
+    private bool ShouldBeVisible()
+    {
+        if (!isActiveAndEnabled ||
+            !_hasValidExpression ||
+            expressionImage == null ||
+            !IsBoundLocalOwnerValid() ||
+            _boundStatusModule == null ||
+            gameStateManager == null ||
+            !gameStateManager.IsSpawned)
+        {
             return false;
-
-        float threshold = Mathf.Max(0f, lowStaminaThreshold);
-        if (threshold <= 1f)
-            return _boundStaminaModule.NormalizedStamina <= threshold;
-
-        return _boundStaminaModule.CurrentStamina <= threshold;
-    }
-
-    private void ApplyExpressionSprite(PortraitExpression expression)
-    {
-        PortraitExpression previousExpression = _currentExpression;
-        _currentExpression = expression;
-
-        if (portraitImage == null)
-            return;
-
-        Sprite sprite = GetSpriteForExpression(expression);
-        if (sprite == null)
-            sprite = normalSprite;
-
-        if (sprite != null)
-            portraitImage.sprite = sprite;
-
-        if (expression == PortraitExpression.LowStamina && previousExpression != expression)
-            Log("Low stamina expression applied.");
-    }
-
-    private Sprite GetSpriteForExpression(PortraitExpression expression)
-    {
-        switch (expression)
-        {
-            case PortraitExpression.LowStamina:
-                return lowStaminaSprite != null ? lowStaminaSprite : normalSprite;
-            case PortraitExpression.Hit:
-                return hitSprite != null ? hitSprite : normalSprite;
-            case PortraitExpression.Grabbed:
-                return grabbedSprite != null ? grabbedSprite : normalSprite;
-            case PortraitExpression.Carrying:
-                return carryingSprite != null ? carryingSprite : normalSprite;
-            case PortraitExpression.Danger:
-                return dangerSprite != null ? dangerSprite : normalSprite;
-            case PortraitExpression.Success:
-                return successSprite != null ? successSprite : normalSprite;
-            case PortraitExpression.Fail:
-                return failSprite != null ? failSprite : normalSprite;
-            case PortraitExpression.Normal:
-            default:
-                return normalSprite;
-        }
-    }
-
-    private void ShowMissingLocalPlayerState()
-    {
-        ApplyRootVisibility(!hideWhenNoLocalPlayer);
-        ApplyExpressionSprite(PortraitExpression.Normal);
-    }
-
-    private void ApplyRootVisibility(bool visible)
-    {
-        if (root != null && root != gameObject && !transform.IsChildOf(root.transform))
-        {
-            root.SetActive(visible);
-            return;
         }
 
-        // Do not deactivate this component or its parents, or bind retries stop.
-        if (portraitImage != null && portraitImage.gameObject != gameObject)
-            portraitImage.gameObject.SetActive(visible);
-    }
-
-    private bool CanBindPlayerHub(PlayerHub playerHub)
-    {
-        if (playerHub == null)
+        if (showOnlyDuringPlaying &&
+            gameStateManager.GetState() !=
+            GameStateManager.GameState.Playing)
+        {
             return false;
+        }
 
-        if (playerHub.IsSpawned && !playerHub.IsOwner)
+        if (hideWhenEliminated && _boundStatusModule.IsEliminated)
             return false;
 
         return true;
+    }
+
+    private bool IsBoundLocalOwnerValid()
+    {
+        if (_boundPlayerObject == null || !_boundPlayerObject.IsSpawned)
+            return false;
+
+        NetworkManager networkManager = NetworkManager.Singleton;
+        if (networkManager == null ||
+            !networkManager.IsListening ||
+            _boundPlayerObject.OwnerClientId !=
+            networkManager.LocalClientId)
+        {
+            return false;
+        }
+
+        NetworkClient localClient = networkManager.LocalClient;
+        return localClient != null &&
+               localClient.PlayerObject == _boundPlayerObject;
+    }
+
+    private static bool IsSamePlayerRoot(
+        NetworkObject playerObject,
+        Component component)
+    {
+        if (playerObject == null || component == null)
+            return false;
+
+        return component.GetComponentInParent<NetworkObject>() ==
+               playerObject;
+    }
+
+    private void SetVisible(bool visible)
+    {
+        if (_visibilityInitialized && _isVisible == visible)
+            return;
+
+        _visibilityInitialized = true;
+        _isVisible = visible;
+
+        if (canvasGroup != null)
+        {
+            canvasGroup.alpha = visible ? 1f : 0f;
+            canvasGroup.interactable = false;
+            canvasGroup.blocksRaycasts = false;
+        }
+
+        if (expressionImage != null)
+        {
+            expressionImage.enabled = visible;
+            expressionImage.raycastTarget = false;
+        }
     }
 
     private void LogWaitingForLocalPlayer()
@@ -351,12 +359,12 @@ public class CharacterPortraitHUD : MonoBehaviour
             return;
 
         _loggedWaitingForLocalPlayer = true;
-        Log("Rebind waiting for local player.");
+        Log("Waiting for LocalClient.PlayerObject.");
     }
 
     private void Log(string message)
     {
-        if (!portraitDebugLogs)
+        if (!debugLogs)
             return;
 
         Debug.Log($"[CharacterPortraitHUD] {message}", this);
@@ -365,7 +373,5 @@ public class CharacterPortraitHUD : MonoBehaviour
     private void OnValidate()
     {
         rebindInterval = Mathf.Max(0f, rebindInterval);
-        lowStaminaThreshold = Mathf.Max(0f, lowStaminaThreshold);
-        expressionHoldSeconds = Mathf.Max(0f, expressionHoldSeconds);
     }
 }
