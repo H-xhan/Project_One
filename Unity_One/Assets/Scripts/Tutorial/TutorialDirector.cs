@@ -7,6 +7,9 @@ using UnityEngine.SceneManagement;
 [DisallowMultipleComponent]
 public sealed class TutorialDirector : MonoBehaviour
 {
+    private const float InitialLobbyTeleportGuardSeconds = 1f;
+    private const int InitialLobbyTeleportGuardFrames = 6;
+
     public interface ITutorialHitSource
     {
         int HitCount { get; }
@@ -95,8 +98,10 @@ public sealed class TutorialDirector : MonoBehaviour
     private AudioListener[] _presentationAudioListeners = Array.Empty<AudioListener>();
 
     private float _bootstrapDeadline;
+    private float _bootstrapDependenciesReadyAt = float.PositiveInfinity;
     private float _stepStartedAt;
     private float _nextHintAt;
+    private int _bootstrapDependenciesReadyFrame = -1;
     private bool _readyToggleRequested;
     private bool _hasGameSpawnPose;
     private Vector3 _gameSpawnPosition;
@@ -295,6 +300,21 @@ public sealed class TutorialDirector : MonoBehaviour
 
         if (!TryCacheLocalHostDependencies())
             return;
+
+        if (_bootstrapDependenciesReadyFrame < 0)
+        {
+            _bootstrapDependenciesReadyAt = Time.unscaledTime;
+            _bootstrapDependenciesReadyFrame = Time.frameCount;
+            return;
+        }
+
+        if (Time.unscaledTime - _bootstrapDependenciesReadyAt <
+                InitialLobbyTeleportGuardSeconds ||
+            Time.frameCount - _bootstrapDependenciesReadyFrame <
+                InitialLobbyTeleportGuardFrames)
+        {
+            return;
+        }
 
         if (!_readyToggleRequested)
         {
