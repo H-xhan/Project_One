@@ -336,6 +336,8 @@ public class CharacterFollowStaminaHUD : MonoBehaviour
 
     private PlayerHub _boundPlayerHub;
     private PlayerStaminaModule _boundStaminaModule;
+    private PlayerStatusModule _boundStatusModule;
+    private GameStateManager _gameStateManager;
     private Transform _targetTransform;
     private Camera _localPlayerCamera;
     private Vector2 _followVelocity;
@@ -506,6 +508,16 @@ public class CharacterFollowStaminaHUD : MonoBehaviour
             ApplyMissingLocalPlayerState();
         }
 
+        if (_boundStaminaModule != null &&
+            _boundPlayerHub != null &&
+            (_boundStatusModule == null || _gameStateManager == null) &&
+            Time.unscaledTime >= _nextBindAttemptTime)
+        {
+            _nextBindAttemptTime =
+                Time.unscaledTime + Mathf.Max(0f, rebindInterval);
+            ResolveVisibilityDependencies(_boundPlayerHub);
+        }
+
         if (autoBindLocalPlayer && _boundStaminaModule == null && Time.unscaledTime >= _nextBindAttemptTime)
             TryBindLocalPlayer();
 
@@ -627,6 +639,7 @@ public class CharacterFollowStaminaHUD : MonoBehaviour
         if (staminaModule == null)
         {
             _boundPlayerHub = playerHub;
+            ResolveVisibilityDependencies(playerHub);
             _targetTransform = playerHub.transform != null ? playerHub.transform : playerObject.transform;
             _localPlayerCamera = ResolveLocalPlayerCamera(playerHub);
             TryCaptureInitialVisualState(ResolveWorldAnchorTransform(), true);
@@ -637,6 +650,7 @@ public class CharacterFollowStaminaHUD : MonoBehaviour
         }
 
         _boundPlayerHub = playerHub;
+        ResolveVisibilityDependencies(playerHub);
         _targetTransform = playerHub.transform != null ? playerHub.transform : playerObject.transform;
         _localPlayerCamera = ResolveLocalPlayerCamera(playerHub);
         _loggedWaitingForLocalPlayer = false;
@@ -673,6 +687,7 @@ public class CharacterFollowStaminaHUD : MonoBehaviour
         if (staminaModule == null)
         {
             _boundPlayerHub = parentHub;
+            ResolveVisibilityDependencies(parentHub);
             _targetTransform = parentHub.transform;
             _localPlayerCamera = ResolveLocalPlayerCamera(parentHub);
             ApplyMissingLocalPlayerState();
@@ -681,6 +696,7 @@ public class CharacterFollowStaminaHUD : MonoBehaviour
         }
 
         _boundPlayerHub = parentHub;
+        ResolveVisibilityDependencies(parentHub);
         _targetTransform = parentHub.transform;
         _localPlayerCamera = ResolveLocalPlayerCamera(parentHub);
         _loggedWaitingForLocalPlayer = false;
@@ -696,6 +712,7 @@ public class CharacterFollowStaminaHUD : MonoBehaviour
     {
         UnbindStaminaModule();
         _boundPlayerHub = null;
+        _boundStatusModule = null;
         _targetTransform = null;
         _localPlayerCamera = null;
         _hasSnappedToTarget = false;
@@ -729,6 +746,27 @@ public class CharacterFollowStaminaHUD : MonoBehaviour
         return networkManager != null &&
                networkManager.IsListening &&
                playerHub.OwnerClientId == networkManager.LocalClientId;
+    }
+
+    private void ResolveVisibilityDependencies(PlayerHub playerHub)
+    {
+        _boundStatusModule = null;
+
+        if (playerHub != null)
+        {
+            PlayerStatusModule statusModule =
+                playerHub.GetComponentInChildren<PlayerStatusModule>(true);
+
+            if (statusModule != null &&
+                playerHub.NetworkObject != null &&
+                statusModule.NetworkObject == playerHub.NetworkObject)
+            {
+                _boundStatusModule = statusModule;
+            }
+        }
+
+        if (_gameStateManager == null)
+            _gameStateManager = FindFirstObjectByType<GameStateManager>();
     }
 
     private PlayerHub ResolveLocalPlayerHub(out NetworkObject playerObject)
@@ -796,6 +834,7 @@ public class CharacterFollowStaminaHUD : MonoBehaviour
     {
         UnbindStaminaModule();
         _boundPlayerHub = null;
+        _boundStatusModule = null;
         _targetTransform = null;
         _localPlayerCamera = null;
         _hasSnappedToTarget = false;
@@ -2013,6 +2052,9 @@ public class CharacterFollowStaminaHUD : MonoBehaviour
 
     private void SetVisible(bool visible)
     {
+        if (visible && !CanShowForPlayingAliveOwner())
+            visible = false;
+
         if (canvasGroup != null)
         {
             canvasGroup.alpha = visible ? 1f : 0f;
@@ -2035,6 +2077,31 @@ public class CharacterFollowStaminaHUD : MonoBehaviour
 
         if (staminaText != null)
             staminaText.enabled = visible;
+    }
+
+    private bool CanShowForPlayingAliveOwner()
+    {
+        if (_boundPlayerHub == null ||
+            _boundStaminaModule == null ||
+            _boundStatusModule == null ||
+            _gameStateManager == null ||
+            !_boundPlayerHub.IsSpawned ||
+            !_boundStatusModule.IsSpawned ||
+            !_gameStateManager.IsSpawned ||
+            !IsBoundPlayerValid())
+        {
+            return false;
+        }
+
+        NetworkObject playerNetworkObject =
+            _boundPlayerHub.NetworkObject;
+
+        return playerNetworkObject != null &&
+               _boundStatusModule.NetworkObject ==
+               playerNetworkObject &&
+               _gameStateManager.GetState() ==
+               GameStateManager.GameState.Playing &&
+               !_boundStatusModule.IsEliminated;
     }
 
     private bool TrySetObjectActive(GameObject target, bool active)
