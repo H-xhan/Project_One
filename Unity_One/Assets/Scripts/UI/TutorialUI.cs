@@ -1,5 +1,6 @@
 using TMPro;
 using UnityEngine;
+using UnityEngine.InputSystem;
 using UnityEngine.UI;
 
 [DisallowMultipleComponent]
@@ -29,6 +30,9 @@ public sealed class TutorialUI : MonoBehaviour
     [SerializeField] private Button controlsToggleButton;
 
     private bool _directorSubscribed;
+    private bool _cursorStateCaptured;
+    private CursorLockMode _capturedCursorLockMode;
+    private bool _capturedCursorVisible;
 
     private void Awake()
     {
@@ -53,6 +57,36 @@ public sealed class TutorialUI : MonoBehaviour
     private void OnDisable()
     {
         UnsubscribeDirector();
+        RestoreCapturedCursorState();
+    }
+
+    private void Update()
+    {
+        Keyboard keyboard = Keyboard.current;
+        if (keyboard == null)
+            return;
+
+        if (keyboard.escapeKey.wasPressedThisFrame)
+        {
+            if (exitConfirmPanel != null && exitConfirmPanel.activeSelf)
+                OnExitCanceled();
+            else
+                OnExitButtonPressed();
+
+            return;
+        }
+
+        if (keyboard.f1Key.wasPressedThisFrame &&
+            (exitConfirmPanel == null || !exitConfirmPanel.activeSelf))
+        {
+            OnControlsTogglePressed();
+        }
+    }
+
+    private void LateUpdate()
+    {
+        if (RequiresReleasedCursor())
+            ApplyReleasedCursorState();
     }
 
     public void OnExitButtonPressed()
@@ -61,18 +95,23 @@ public sealed class TutorialUI : MonoBehaviour
             return;
 
         SetActive(controlsPanel, false);
+        CaptureCursorState();
         SetActive(exitConfirmPanel, true);
+        ApplyReleasedCursorState();
     }
 
     public void OnExitConfirmed()
     {
         SetActive(exitConfirmPanel, false);
+        ForgetCapturedCursorState();
+        ApplyReleasedCursorState();
         director?.RequestExitTutorial();
     }
 
     public void OnExitCanceled()
     {
         SetActive(exitConfirmPanel, false);
+        RestoreCursorStateIfNoOverlay();
     }
 
     public void OnSkipPeelPressed()
@@ -94,6 +133,8 @@ public sealed class TutorialUI : MonoBehaviour
             return;
         }
 
+        ForgetCapturedCursorState();
+        ApplyReleasedCursorState();
         director.RequestCompleteTutorial();
     }
 
@@ -102,13 +143,25 @@ public sealed class TutorialUI : MonoBehaviour
         if (controlsPanel == null)
             return;
 
+        bool showControls = !controlsPanel.activeSelf;
         SetActive(exitConfirmPanel, false);
-        controlsPanel.SetActive(!controlsPanel.activeSelf);
+        controlsPanel.SetActive(showControls);
+
+        if (showControls)
+        {
+            CaptureCursorState();
+            ApplyReleasedCursorState();
+        }
+        else
+        {
+            RestoreCursorStateIfNoOverlay();
+        }
     }
 
     public void OnControlsClosePressed()
     {
         SetActive(controlsPanel, false);
+        RestoreCursorStateIfNoOverlay();
     }
 
     private void SubscribeDirector()
@@ -203,7 +256,57 @@ public sealed class TutorialUI : MonoBehaviour
         {
             SetActive(exitConfirmPanel, false);
             SetActive(controlsPanel, false);
+            CaptureCursorState();
+            ApplyReleasedCursorState();
         }
+        else
+        {
+            RestoreCursorStateIfNoOverlay();
+        }
+    }
+
+    private void CaptureCursorState()
+    {
+        if (_cursorStateCaptured)
+            return;
+
+        _capturedCursorLockMode = Cursor.lockState;
+        _capturedCursorVisible = Cursor.visible;
+        _cursorStateCaptured = true;
+    }
+
+    private static void ApplyReleasedCursorState()
+    {
+        Cursor.lockState = CursorLockMode.None;
+        Cursor.visible = true;
+    }
+
+    private bool RequiresReleasedCursor()
+    {
+        return (exitConfirmPanel != null && exitConfirmPanel.activeSelf) ||
+               (completePanel != null && completePanel.activeSelf) ||
+               (controlsPanel != null && controlsPanel.activeSelf);
+    }
+
+    private void RestoreCursorStateIfNoOverlay()
+    {
+        if (!RequiresReleasedCursor())
+            RestoreCapturedCursorState();
+    }
+
+    private void RestoreCapturedCursorState()
+    {
+        if (!_cursorStateCaptured)
+            return;
+
+        Cursor.lockState = _capturedCursorLockMode;
+        Cursor.visible = _capturedCursorVisible;
+        _cursorStateCaptured = false;
+    }
+
+    private void ForgetCapturedCursorState()
+    {
+        _cursorStateCaptured = false;
     }
 
     private void RenderProgress(int current, int target)
