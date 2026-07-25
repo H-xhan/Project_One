@@ -1,0 +1,84 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: e646274ed3dd42ef880699289001cc69, type: 3}
+  m_Name: ProjectOneVisualScaleProfile
+  m_EditorClassIdentifier:
+  productionPlayerPrefab: {fileID: 692270962315936511, guid: bbf5381b5913ae443ac31b9d33ae4a5d, type: 3}
+  characterVisualTransformPath: MotorShellBody/VisualPreviewRoot/슈가
+  presenterSerializedPropertyName: bodyVisualScaleMultiplier
+  worldPresenterSerializedPropertyName: worldVisualScaleMultiplier
+  itemRules:
+  - ruleId: BaseballBat
+    displayName: Baseball Bat
+    enabled: 1
+    worldPrefab: {fileID: 1459886359065782981, guid: d29be6a54b6f49146898017ea976affb, type: 3}
+    worldVisualTransformPath: WorldVisualScale
+    equippedPrefab: {fileID: 8493323302479041937, guid: 54ee2aa20ace19840b642ccf40954033, type: 3}
+    equippedVisualTransformPath: BaseballBatMesh
+    mode: 0
+    ratioToCharacter: 0.88
+    fixedFinalScale: 1.1
+    maximumFinalScale: 1.2
+    referenceWorldVisualLocalScale: {x: 1, y: 1, z: 1}
+    referenceEquippedVisualLocalScale: {x: 0.01, y: 0.01, z: 0.01}
+    capturedWorldVisualLocalScale: {x: 1.1, y: 1.1, z: 1.1}
+    capturedEquippedVisualLocalScale: {x: 0.0088, y: 0.0088, z: 0.0088}
+  characterVisualScale: 1.25
+  bodyPostItRatioToCharacter: 1.08
+  worldPostItRatioToCharacter: 1.04
+  presetA:
+    presetId: A_Current_V2
+    displayName: A Current V2
+    characterVisualScale: 1.25
+    bodyPostItRatioToCharacter: 1.08
+    worldPostItRatioToCharacter: 1.04
+    itemValues:
+    - ruleId: BaseballBat
+      mode: 0
+      ratioToCharacter: 0.88
+      fixedFinalScale: 1.1
+      maximumFinalScale: 1.2
+  presetB:
+    presetId: B_Large
+    displayName: B Large
+    characterVisualScale: 1.35
+    bodyPostItRatioToCharacter: 1.08
+    worldPostItRatioToCharacter: 1.04
+    itemValues:
+    - ruleId: BaseballBat
+      mode: 0
+      ratioToCharacter: 0.88
+      fixedFinalScale: 1.1
+      maximumFinalScale: 1.2
+  presetC:
+    presetId: C_ExtraLarge
+    displayName: C Extra Large
+    characterVisualScale: 1.45
+    bodyPostItRatioToCharacter: 1.08
+    worldPostItRatioToCharacter: 1.04
+    itemValues:
+    - ruleId: BaseballBat
+      mode: 0
+      ratioToCharacter: 0.88
+      fixedFinalScale: 1.1
+      maximumFinalScale: 1.2
+  baselineCaptured: 1
+  baselineSourceHead: b0fa18439c709ec7808a6b0732560356ad20308d
+  referenceCharacterVisualLocalScale: {x: 1, y: 1, z: 1}
+  referenceBodyPostItMultiplier: 1
+  referenceWorldPostItMultiplier: 1
+  capturedCharacterVisualLocalScale: {x: 1.25, y: 1.25, z: 1.25}
+  capturedBodyPostItMultiplier: 1.08
+  capturedWorldPostItMultiplier: 1.3
+  capturedCharacterVisualScale: 1.25
+  capturedBodyPostItRatioToCharacter: 1.08
+  capturedWorldPostItRatioToCharacter: 1.04
