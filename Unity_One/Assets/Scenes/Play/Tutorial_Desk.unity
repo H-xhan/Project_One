@@ -9984,7 +9984,7 @@ GameObject:
   - component: {fileID: 1435089174}
   - component: {fileID: 1435089173}
   m_Layer: 0
-  m_Name: AttackTarget
+  m_Name: TutorialAttackTarget
   m_TagString: Untagged
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
@@ -10090,7 +10090,7 @@ Transform:
   m_LocalScale: {x: 1.2, y: 1.7, z: 1.2}
   m_ConstrainProportionsScale: 0
   m_Children: []
-  m_Father: {fileID: 1569823362}
+  m_Father: {fileID: 0}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
 --- !u!1 &1439850580
 GameObject:
@@ -10900,7 +10900,6 @@ Transform:
   - {fileID: 1952731464}
   - {fileID: 1967334741}
   - {fileID: 223709975}
-  - {fileID: 1435089177}
   m_Father: {fileID: 0}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
 --- !u!1 &1572470952
@@ -13858,3 +13857,4 @@ SceneRoots:
   - {fileID: 61943374}
   - {fileID: 1871691827}
   - {fileID: 639801429}
+  - {fileID: 1435089177}
