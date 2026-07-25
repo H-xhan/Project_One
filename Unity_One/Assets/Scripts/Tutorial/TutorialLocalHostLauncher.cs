@@ -818,8 +818,12 @@ public sealed class TutorialLocalHostLauncher : MonoBehaviour
     private static bool HasRequiredTutorialSceneObjects()
     {
         GameObject tutorialFlow = GameObject.Find("TutorialFlow");
-        return tutorialFlow != null &&
-               tutorialFlow.GetComponent("TutorialDirector") != null &&
+        Transform tutorialDirector =
+            tutorialFlow != null
+                ? tutorialFlow.transform.Find("TutorialDirector")
+                : null;
+        return tutorialDirector != null &&
+               tutorialDirector.GetComponent<TutorialDirector>() != null &&
                FindFirstObjectByType<GameStateManager>() != null &&
                FindFirstObjectByType<ReadySystem>() != null &&
                FindFirstObjectByType<InGameMatchManager>() != null &&
