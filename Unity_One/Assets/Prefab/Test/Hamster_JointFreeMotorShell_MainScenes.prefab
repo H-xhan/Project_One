@@ -785,8 +785,8 @@ MonoBehaviour:
   acquiredTintStrength: 0.35
   debugLogs: 0
   visualCatalog: {fileID: 11400000, guid: 102eeac9b02c4caa9ccbc6da4eb34a3a, type: 2}
-  bodyVisualScaleMultiplier: 1.1304348
-  worldVisualScaleMultiplier: 1.25
+  bodyVisualScaleMultiplier: 1.08
+  worldVisualScaleMultiplier: 1.3
 --- !u!114 &6100000000000000113
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -2714,15 +2714,15 @@ PrefabInstance:
       objectReference: {fileID: 0}
     - target: {fileID: -8679921383154817045, guid: 83fbe5706b3039349abb894620751b26, type: 3}
       propertyPath: m_LocalScale.x
-      value: 1.15
+      value: 1.25
       objectReference: {fileID: 0}
     - target: {fileID: -8679921383154817045, guid: 83fbe5706b3039349abb894620751b26, type: 3}
       propertyPath: m_LocalScale.y
-      value: 1.15
+      value: 1.25
       objectReference: {fileID: 0}
     - target: {fileID: -8679921383154817045, guid: 83fbe5706b3039349abb894620751b26, type: 3}
       propertyPath: m_LocalScale.z
-      value: 1.15
+      value: 1.25
       objectReference: {fileID: 0}
     - target: {fileID: -8679921383154817045, guid: 83fbe5706b3039349abb894620751b26, type: 3}
       propertyPath: m_LocalRotation.w
