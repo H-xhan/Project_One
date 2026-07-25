@@ -1,5 +1,6 @@
 using System;
 using System.Collections;
+using Unity.Collections;
 using UnityEngine;
 
 public class FaceExpressionController : MonoBehaviour
@@ -249,36 +250,73 @@ public class FaceExpressionController : MonoBehaviour
         if (mesh == null)
             return false;
 
-        Vector2[] uvs = mesh.uv;
-        if (uvs == null || uvs.Length == 0)
-            return false;
+        Mesh.MeshDataArray meshDataArray = default;
+        NativeArray<Vector2> uvs = default;
+        NativeArray<int> indices = default;
+        bool hasMeshData = false;
 
-        if (materialIndex < 0 || materialIndex >= mesh.subMeshCount)
-            return false;
-
-        int[] triangles = mesh.GetTriangles(materialIndex);
-        if (triangles == null || triangles.Length == 0)
-            return false;
-
-        int firstVertexIndex = triangles[0];
-        if (firstVertexIndex < 0 || firstVertexIndex >= uvs.Length)
-            return false;
-
-        Vector2 min = uvs[firstVertexIndex];
-        Vector2 max = uvs[firstVertexIndex];
-
-        for (int i = 1; i < triangles.Length; i++)
+        try
         {
-            int vertexIndex = triangles[i];
-            if (vertexIndex < 0 || vertexIndex >= uvs.Length)
+            meshDataArray = Mesh.AcquireReadOnlyMeshData(mesh);
+            hasMeshData = true;
+
+            if (meshDataArray.Length != 1)
                 return false;
 
-            min = Vector2.Min(min, uvs[vertexIndex]);
-            max = Vector2.Max(max, uvs[vertexIndex]);
-        }
+            Mesh.MeshData meshData = meshDataArray[0];
+            if (materialIndex < 0 ||
+                materialIndex >= meshData.subMeshCount ||
+                meshData.vertexCount <= 0)
+            {
+                return false;
+            }
 
-        uvBounds = Rect.MinMaxRect(min.x, min.y, max.x, max.y);
-        return IsFiniteNormalizedRect(uvBounds);
+            int indexCount = meshData.GetSubMesh(materialIndex).indexCount;
+            if (indexCount <= 0)
+                return false;
+
+            uvs = new NativeArray<Vector2>(
+                meshData.vertexCount,
+                Allocator.Temp,
+                NativeArrayOptions.UninitializedMemory);
+            indices = new NativeArray<int>(
+                indexCount,
+                Allocator.Temp,
+                NativeArrayOptions.UninitializedMemory);
+            meshData.GetUVs(0, uvs);
+            meshData.GetIndices(indices, materialIndex, true);
+
+            int firstVertexIndex = indices[0];
+            if (firstVertexIndex < 0 || firstVertexIndex >= uvs.Length)
+                return false;
+
+            Vector2 min = uvs[firstVertexIndex];
+            Vector2 max = uvs[firstVertexIndex];
+
+            for (int i = 1; i < indices.Length; i++)
+            {
+                int vertexIndex = indices[i];
+                if (vertexIndex < 0 || vertexIndex >= uvs.Length)
+                    return false;
+
+                min = Vector2.Min(min, uvs[vertexIndex]);
+                max = Vector2.Max(max, uvs[vertexIndex]);
+            }
+
+            uvBounds = Rect.MinMaxRect(min.x, min.y, max.x, max.y);
+            return IsFiniteNormalizedRect(uvBounds);
+        }
+        finally
+        {
+            if (indices.IsCreated)
+                indices.Dispose();
+
+            if (uvs.IsCreated)
+                uvs.Dispose();
+
+            if (hasMeshData)
+                meshDataArray.Dispose();
+        }
     }
 
     private static bool IsFiniteNormalizedRect(Rect rect)
