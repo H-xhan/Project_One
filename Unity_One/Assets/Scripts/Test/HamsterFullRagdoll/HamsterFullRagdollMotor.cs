@@ -15,6 +15,7 @@ public class HamsterFullRagdollMotor : MonoBehaviour
     private const string CameraPivotName = "CameraPivot";
     private const string PlayerCameraName = "PlayerCamera";
     private const string VisualPreviewRootName = "VisualPreviewRoot";
+    private const int MaximumStaminaResolveAttempts = 2;
 
     [Header("References")]
     [SerializeField] private Rigidbody hipsBody;
@@ -68,6 +69,34 @@ public class HamsterFullRagdollMotor : MonoBehaviour
     [SerializeField] private float jumpVisualIntensity = 1.0f;
     [SerializeField] private float landingVisualIntensity = 1.0f;
 
+    [Header("Stamina")]
+    [SerializeField, Tooltip("달리기 중 서버 권한으로 스태미나를 소비할지 여부입니다.")]
+    private bool useStaminaForSprint = true;
+
+    [SerializeField, Tooltip("실제 달리기 중 초당 소비되는 스태미나입니다.")]
+    private float sprintStaminaCostPerSecond = 20f;
+
+    [SerializeField, Tooltip("달리기를 시작하기 위해 필요한 최소 스태미나입니다.")]
+    private float sprintMinimumStaminaToStart = 5f;
+
+    [SerializeField, Tooltip("달리기를 계속하기 위해 필요한 최소 스태미나입니다.")]
+    private float sprintMinimumStaminaToContinue = 0.5f;
+
+    [SerializeField, Tooltip("실제 점프마다 서버 권한으로 스태미나를 소비할지 여부입니다.")]
+    private bool useStaminaForJump = true;
+
+    [SerializeField, Tooltip("성공한 점프 1회에 소비되는 스태미나입니다.")]
+    private float jumpStaminaCost = 5f;
+
+    [SerializeField, Tooltip("점프를 시작하기 위해 필요한 최소 스태미나입니다.")]
+    private float jumpMinimumStaminaToStart = 10f;
+
+    [SerializeField, Tooltip("같은 Player의 스태미나 모듈을 찾지 못했을 때 기존 이동을 허용할지 여부입니다.")]
+    private bool allowMovementWhenStaminaModuleMissing = true;
+
+    [SerializeField, Tooltip("스태미나 bind와 승인 상태 변경 로그를 출력합니다.")]
+    private bool debugStaminaLogs = false;
+
     [Header("Upright")]
     [SerializeField] private float uprightStrength = 75f;
     [SerializeField] private float uprightDamping = 10f;
@@ -114,6 +143,9 @@ public class HamsterFullRagdollMotor : MonoBehaviour
     private bool _isGrounded;
     private bool _legacyInputUnavailable;
     private NetworkObject _ownerNetworkObject;
+    private NetworkObject _staminaModuleOwnerNetworkObject;
+    private PlayerStaminaModule _staminaModule;
+    private HamsterMotorShellRagdollRecoveryAdapter _recoveryAdapter;
     private Vector2 _networkMoveInput;
     private bool _networkSprintHeld;
     private bool _hasNetworkInput;
@@ -156,6 +188,11 @@ public class HamsterFullRagdollMotor : MonoBehaviour
     private bool _suppressJumpUntilKeyRelease;
     private float _sprintLogTimer;
     private bool _lastSprintHeld;
+    private bool _isSprintingWithStamina;
+    private bool _hasLoggedSprintStaminaApproval;
+    private bool _lastLoggedSprintStaminaApproval;
+    private bool _hasResolvedRecoveryAdapter;
+    private int _staminaResolveAttemptCount;
     private float _lastSelectedMaxSpeed;
     private float _nextInputRouteMotorLogTime;
     private Vector3 _lastGroundProbeOrigin;
@@ -328,6 +365,8 @@ public class HamsterFullRagdollMotor : MonoBehaviour
         }
 
         ResolveJumpVisualFollower();
+        ResolveSameRootStaminaModule();
+        ResolveSameRootRecoveryAdapter();
         CaptureInitialPose();
     }
 
@@ -374,8 +413,6 @@ public class HamsterFullRagdollMotor : MonoBehaviour
         _smoothedMoveWorldDirection = BuildMoveDirection(_smoothedMoveInput);
 
         bool sprintHeld = ReadSprintHeld();
-        float maxSpeed = sprintHeld ? maxSprintSpeed : maxWalkSpeed;
-        float acceleration = sprintHeld ? sprintAcceleration : walkAcceleration;
         float groundedMultiplier = _isGrounded ? 1f : airControlMultiplier;
         float effectiveControl = Mathf.Max(0f, controlStrength) * groundedMultiplier;
         if (_externalControlLocked)
@@ -383,15 +420,30 @@ public class HamsterFullRagdollMotor : MonoBehaviour
         else
             effectiveControl *= Mathf.Clamp01(_externalMovementControlScale);
         bool hasMoveInput = _smoothedMoveInput.sqrMagnitude > InputDeadzone * InputDeadzone;
-        acceleration = ApplySprintPivotAssist(_smoothedMoveWorldDirection, sprintHeld, hasMoveInput, acceleration);
-        acceleration = ApplyPostJumpSprintMovementSettle(sprintHeld, acceleration);
+        bool hadPostJumpSprintSettle =
+            _postJumpSprintMovementSettleTimer > 0f;
+        _lastSprintHeld = sprintHeld;
+        TryConsumeJump();
+        bool sprintApproved = TryAuthorizeSprintForFixedStep(
+            sprintHeld,
+            hasMoveInput,
+            effectiveControl,
+            fixedDeltaTime);
+        float maxSpeed = sprintApproved ? maxSprintSpeed : maxWalkSpeed;
+        float acceleration = sprintApproved ? sprintAcceleration : walkAcceleration;
+        acceleration = ApplySprintPivotAssist(_smoothedMoveWorldDirection, sprintApproved, hasMoveInput, acceleration);
+        if (!_jumpConsumedThisFixedStep ||
+            hadPostJumpSprintSettle)
+        {
+            acceleration = ApplyPostJumpSprintMovementSettle(
+                sprintApproved,
+                acceleration);
+        }
         _lastMaxSpeed = maxSpeed;
         _lastSelectedMaxSpeed = maxSpeed;
         _lastSelectedAcceleration = acceleration;
         _lastEffectiveControl = effectiveControl;
-        _lastSprintHeld = sprintHeld;
 
-        TryConsumeJump();
         TickJumpBuffer(fixedDeltaTime);
         ApplyMovementForce(_smoothedMoveWorldDirection, maxSpeed, acceleration, effectiveControl);
         ApplyStopDragAssist(_smoothedMoveInput, effectiveControl);
@@ -514,6 +566,272 @@ public class HamsterFullRagdollMotor : MonoBehaviour
         }
 
         return false;
+    }
+
+    private bool TryAuthorizeSprintForFixedStep(
+        bool sprintHeld,
+        bool hasMoveInput,
+        float effectiveControl,
+        float fixedDeltaTime)
+    {
+        if (!sprintHeld)
+            return SetSprintStaminaApproval(false, "input released", null);
+
+        if (!hasMoveInput)
+            return SetSprintStaminaApproval(false, "no move input", null);
+
+        if (_externalControlLocked ||
+            effectiveControl <= 0.0001f)
+        {
+            return SetSprintStaminaApproval(false, "movement control unavailable", null);
+        }
+
+        if (!IsRecoveryStateNormal())
+            return SetSprintStaminaApproval(false, "recovery state", null);
+
+        if (!useStaminaForSprint)
+            return SetSprintStaminaApproval(true, "stamina disabled", null);
+
+        NetworkManager networkManager = NetworkManager.Singleton;
+        if (networkManager == null || !networkManager.IsListening)
+            return SetSprintStaminaApproval(true, "offline", null);
+
+        if (!networkManager.IsServer)
+            return SetSprintStaminaApproval(true, "client prediction", null);
+
+        PlayerStaminaModule staminaModule =
+            ResolveSameRootStaminaModule();
+        if (staminaModule == null)
+        {
+            return SetSprintStaminaApproval(
+                allowMovementWhenStaminaModuleMissing,
+                "stamina module missing",
+                null);
+        }
+
+        float requiredStamina =
+            _isSprintingWithStamina
+                ? GetFiniteNonNegative(
+                    sprintMinimumStaminaToContinue)
+                : GetFiniteNonNegative(
+                    sprintMinimumStaminaToStart);
+        if (!staminaModule.ServerCanSpendStamina(requiredStamina))
+        {
+            return SetSprintStaminaApproval(
+                false,
+                "minimum stamina unavailable",
+                staminaModule);
+        }
+
+        float spendAmount =
+            GetFiniteNonNegative(
+                sprintStaminaCostPerSecond) *
+            GetFiniteNonNegative(fixedDeltaTime);
+        if (spendAmount > 0f &&
+            !staminaModule.ServerTrySpendStamina(spendAmount))
+        {
+            return SetSprintStaminaApproval(
+                false,
+                "stamina spend rejected",
+                staminaModule);
+        }
+
+        return SetSprintStaminaApproval(
+            true,
+            "approved",
+            staminaModule);
+    }
+
+    private bool SetSprintStaminaApproval(
+        bool approved,
+        string reason,
+        PlayerStaminaModule staminaModule)
+    {
+        bool changed =
+            !_hasLoggedSprintStaminaApproval ||
+            _lastLoggedSprintStaminaApproval != approved;
+        _isSprintingWithStamina = approved;
+
+        if (debugStaminaLogs && changed)
+        {
+            _hasLoggedSprintStaminaApproval = true;
+            _lastLoggedSprintStaminaApproval = approved;
+            string currentStamina =
+                staminaModule != null
+                    ? staminaModule.CurrentStamina.ToString("F2")
+                    : "<unbound>";
+            Debug.Log(
+                $"[HamsterFullRagdollMotor:{gameObject.name}] stamina sprintApproved={approved} reason={reason} current={currentStamina}",
+                this);
+        }
+
+        return approved;
+    }
+
+    private bool TryConsumeApprovedJumpStamina()
+    {
+        float spendAmount =
+            GetFiniteNonNegative(jumpStaminaCost);
+        if (!useStaminaForJump || spendAmount <= 0f)
+            return true;
+
+        if (!IsRecoveryStateNormal())
+        {
+            LogStaminaJumpRejected("recovery state", null);
+            return false;
+        }
+
+        NetworkManager networkManager = NetworkManager.Singleton;
+        if (networkManager == null || !networkManager.IsListening)
+            return true;
+
+        if (!networkManager.IsServer)
+            return true;
+
+        PlayerStaminaModule staminaModule =
+            ResolveSameRootStaminaModule();
+        if (staminaModule == null)
+        {
+            if (!allowMovementWhenStaminaModuleMissing)
+                LogStaminaJumpRejected("stamina module missing", null);
+
+            return allowMovementWhenStaminaModuleMissing;
+        }
+
+        float requiredStamina =
+            GetFiniteNonNegative(
+                jumpMinimumStaminaToStart);
+        if (!staminaModule.ServerCanSpendStamina(requiredStamina))
+        {
+            LogStaminaJumpRejected(
+                "minimum stamina unavailable",
+                staminaModule);
+            return false;
+        }
+
+        if (!staminaModule.ServerTrySpendStamina(spendAmount))
+        {
+            LogStaminaJumpRejected(
+                "stamina spend rejected",
+                staminaModule);
+            return false;
+        }
+
+        return true;
+    }
+
+    private PlayerStaminaModule ResolveSameRootStaminaModule()
+    {
+        NetworkObject ownerNetworkObject =
+            ResolveOwnerNetworkObject();
+        if (_staminaModule != null &&
+            _staminaModuleOwnerNetworkObject ==
+                ownerNetworkObject &&
+            _staminaModule.NetworkObject ==
+                ownerNetworkObject)
+        {
+            return _staminaModule;
+        }
+
+        _staminaModule = null;
+        _staminaModuleOwnerNetworkObject = null;
+        if (ownerNetworkObject == null ||
+            _staminaResolveAttemptCount >=
+                MaximumStaminaResolveAttempts)
+        {
+            return null;
+        }
+
+        _staminaResolveAttemptCount++;
+        PlayerStaminaModule candidate =
+            ownerNetworkObject.GetComponent<PlayerStaminaModule>();
+        if (candidate == null)
+        {
+            candidate =
+                ownerNetworkObject.GetComponentInChildren<PlayerStaminaModule>(
+                    true);
+        }
+
+        if (candidate == null ||
+            candidate.NetworkObject != ownerNetworkObject)
+        {
+            LogStaminaBind(
+                false,
+                ownerNetworkObject,
+                candidate);
+            return null;
+        }
+
+        _staminaModule = candidate;
+        _staminaModuleOwnerNetworkObject =
+            ownerNetworkObject;
+        LogStaminaBind(
+            true,
+            ownerNetworkObject,
+            candidate);
+        return _staminaModule;
+    }
+
+    private void ResolveSameRootRecoveryAdapter()
+    {
+        if (_hasResolvedRecoveryAdapter)
+            return;
+
+        _hasResolvedRecoveryAdapter = true;
+        _recoveryAdapter = null;
+        NetworkObject ownerNetworkObject =
+            ResolveOwnerNetworkObject();
+        if (ownerNetworkObject == null)
+            return;
+
+        HamsterMotorShellRagdollRecoveryAdapter candidate =
+            ownerNetworkObject.GetComponentInChildren<HamsterMotorShellRagdollRecoveryAdapter>(
+                true);
+        if (candidate != null &&
+            candidate.GetComponentInParent<NetworkObject>() ==
+                ownerNetworkObject)
+        {
+            _recoveryAdapter = candidate;
+        }
+    }
+
+    private bool IsRecoveryStateNormal()
+    {
+        if (!_hasResolvedRecoveryAdapter)
+            ResolveSameRootRecoveryAdapter();
+
+        return _recoveryAdapter == null ||
+               _recoveryAdapter.CurrentRecoveryState ==
+               HamsterMotorShellRagdollRecoveryAdapter.RecoveryState.Normal;
+    }
+
+    private void LogStaminaBind(
+        bool succeeded,
+        NetworkObject ownerNetworkObject,
+        PlayerStaminaModule staminaModule)
+    {
+        if (!debugStaminaLogs)
+            return;
+
+        Debug.Log(
+            $"[HamsterFullRagdollMotor:{gameObject.name}] stamina bindSucceeded={succeeded} owner={GetTransformPath(ownerNetworkObject != null ? ownerNetworkObject.transform : null)} module={GetTransformPath(staminaModule != null ? staminaModule.transform : null)} attempt={_staminaResolveAttemptCount}",
+            this);
+    }
+
+    private void LogStaminaJumpRejected(
+        string reason,
+        PlayerStaminaModule staminaModule)
+    {
+        if (!debugStaminaLogs)
+            return;
+
+        string currentStamina =
+            staminaModule != null
+                ? staminaModule.CurrentStamina.ToString("F2")
+                : "<unbound>";
+        Debug.Log(
+            $"[HamsterFullRagdollMotor:{gameObject.name}] stamina jumpApproved=false reason={reason} current={currentStamina}",
+            this);
     }
 
     private float ApplySprintPivotAssist(Vector3 moveDirection, bool sprintHeld, bool hasMoveInput, float selectedAcceleration)
@@ -725,6 +1043,12 @@ public class HamsterFullRagdollMotor : MonoBehaviour
         if (velocityBefore.y > maxUpwardVelocityBeforeJump)
         {
             ClearJumpBufferAndLogSkip($"upward velocity too high y={velocityBefore.y:F2}");
+            return;
+        }
+
+        if (!TryConsumeApprovedJumpStamina())
+        {
+            ClearJumpBufferAndLogSkip("stamina unavailable");
             return;
         }
 
@@ -1836,6 +2160,11 @@ public class HamsterFullRagdollMotor : MonoBehaviour
         return !float.IsNaN(value) && !float.IsInfinity(value);
     }
 
+    private static float GetFiniteNonNegative(float value)
+    {
+        return IsFinite(value) ? Mathf.Max(0f, value) : 0f;
+    }
+
     private void LogMissingRequiredReferences()
     {
         if (_missingRequiredReferenceLogged)
@@ -1876,6 +2205,11 @@ public class HamsterFullRagdollMotor : MonoBehaviour
         landingLogMinVerticalSpeed = Mathf.Max(0f, landingLogMinVerticalSpeed);
         jumpVisualIntensity = Mathf.Max(0f, jumpVisualIntensity);
         landingVisualIntensity = Mathf.Max(0f, landingVisualIntensity);
+        sprintStaminaCostPerSecond = GetFiniteNonNegative(sprintStaminaCostPerSecond);
+        sprintMinimumStaminaToStart = GetFiniteNonNegative(sprintMinimumStaminaToStart);
+        sprintMinimumStaminaToContinue = GetFiniteNonNegative(sprintMinimumStaminaToContinue);
+        jumpStaminaCost = GetFiniteNonNegative(jumpStaminaCost);
+        jumpMinimumStaminaToStart = GetFiniteNonNegative(jumpMinimumStaminaToStart);
         uprightStrength = Mathf.Max(0f, uprightStrength);
         uprightDamping = Mathf.Max(0f, uprightDamping);
         chestUprightMultiplier = Mathf.Max(0f, chestUprightMultiplier);
