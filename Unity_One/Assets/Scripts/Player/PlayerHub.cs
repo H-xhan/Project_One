@@ -3742,8 +3742,13 @@ public class PlayerHub : NetworkBehaviour
         if (!adapter.CanQueueServerAttackFromPlayerHub(out failureReason))
             return false;
 
-        bool shouldSpendStamina = useStaminaForBasicAttack && Mathf.Max(0f, basicAttackStaminaCost) > 0f;
-        PlayerStaminaModule targetStaminaModule = shouldSpendStamina ? StaminaModule : null;
+        bool shouldSpendStamina =
+            useStaminaForBasicAttack &&
+            Mathf.Max(0f, basicAttackStaminaCost) > 0f;
+        PlayerStaminaModule targetStaminaModule =
+            shouldSpendStamina
+                ? ResolveBasicAttackStaminaModule()
+                : null;
         if (shouldSpendStamina)
         {
             if (targetStaminaModule == null)
@@ -3761,18 +3766,39 @@ public class PlayerHub : NetworkBehaviour
             }
         }
 
+        float spentStaminaAmount = 0f;
         if (shouldSpendStamina &&
-            targetStaminaModule != null &&
-            !TryConsumeBasicAttackStamina(targetStaminaModule))
+            targetStaminaModule != null)
         {
-            failureReason = "stamina spend rejected";
-            return false;
+            if (!TryConsumeBasicAttackStamina(targetStaminaModule))
+            {
+                failureReason = "stamina spend rejected";
+                return false;
+            }
+
+            spentStaminaAmount =
+                Mathf.Max(0f, basicAttackStaminaCost);
         }
 
         if (!adapter.ServerTryQueueAttackFromPlayerHub(out failureReason))
         {
+            float restoredStaminaAmount =
+                spentStaminaAmount > 0f &&
+                targetStaminaModule != null
+                    ? targetStaminaModule.ServerRestoreStamina(
+                        spentStaminaAmount)
+                    : 0f;
+            if (!Mathf.Approximately(
+                    restoredStaminaAmount,
+                    spentStaminaAmount))
+            {
+                Debug.LogError(
+                    $"[MSCombat/Hub] invariant=stamina rollback incomplete spent={spentStaminaAmount:F3} restored={restoredStaminaAmount:F3} failureReason={failureReason}",
+                    this);
+            }
+
             Debug.LogWarning(
-                $"[MSCombat/Hub] invariant=queue failed after successful preflight and stamina spend NetworkObjectId={NetworkObjectId} OwnerClientId={OwnerClientId} IsServer={IsServer} IsOwner={IsOwner} route=HamsterAdapter failureReason={failureReason}",
+                $"[MSCombat/Hub] invariant=queue failed after successful preflight spent={spentStaminaAmount:F3} restored={restoredStaminaAmount:F3} NetworkObjectId={NetworkObjectId} OwnerClientId={OwnerClientId} IsServer={IsServer} IsOwner={IsOwner} route=HamsterAdapter failureReason={failureReason}",
                 this);
             return false;
         }
@@ -3792,7 +3818,8 @@ public class PlayerHub : NetworkBehaviour
         if (Mathf.Max(0f, basicAttackStaminaCost) <= 0f)
             return true;
 
-        PlayerStaminaModule targetStaminaModule = StaminaModule;
+        PlayerStaminaModule targetStaminaModule =
+            ResolveBasicAttackStaminaModule();
         if (targetStaminaModule == null)
             return allowBasicAttackWhenStaminaModuleMissing;
 
@@ -3800,6 +3827,20 @@ public class PlayerHub : NetworkBehaviour
             return false;
 
         return TryConsumeBasicAttackStamina(targetStaminaModule);
+    }
+
+    private PlayerStaminaModule ResolveBasicAttackStaminaModule()
+    {
+        PlayerStaminaModule candidate = staminaModule;
+        NetworkObject playerNetworkObject = NetworkObject;
+        if (candidate == null ||
+            playerNetworkObject == null ||
+            candidate.NetworkObject != playerNetworkObject)
+        {
+            return null;
+        }
+
+        return candidate;
     }
 
     private bool CanUseBasicAttackStamina(PlayerStaminaModule targetStaminaModule)
