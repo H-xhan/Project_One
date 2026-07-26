@@ -24,6 +24,14 @@ public class PlayerHub : NetworkBehaviour
     private const string SceneMainCameraName = "Main Camera";
     private const float PostItWorldRecoveryEndpointGroundMinUpDot = 0.35f;
     private const int PostItPhysicsHitBufferSize = 64;
+    private const int DefaultNetworkFaceExpressionId = 0;
+    private const int MaximumNetworkFaceExpressionId = 4;
+
+    private readonly NetworkVariable<byte> _currentFaceExpressionId =
+        new NetworkVariable<byte>(
+            DefaultNetworkFaceExpressionId,
+            NetworkVariableReadPermission.Everyone,
+            NetworkVariableWritePermission.Server);
 
     [Header("Refs")]
     [Tooltip("로컬 소유자만 활성화할 카메라 루트")]
@@ -301,6 +309,8 @@ public class PlayerHub : NetworkBehaviour
     private bool _sprintHeld;
     private bool _gameplayPhaseLockedServer;
     private bool _isGameplayStateChangeSubscribed;
+    private bool _isAuthoritativeFaceExpressionSubscribed;
+    private bool _isReplicatedFaceExpressionSubscribed;
     private float _nextInputRouteOwnerLogTime;
     private float _nextInputRouteServerLogTime;
     private float _nextMotorShellCameraLogTime;
@@ -314,6 +324,7 @@ public class PlayerHub : NetworkBehaviour
     private PlayerPostItInventory _postItInventory;
     private PlayerPostItInventory _subscribedPostItEffectInventory;
     private PostItRoundManager _postItRoundManager;
+    private FaceExpressionController _faceExpressionController;
     private readonly RaycastHit[] _postItPhysicsHitBuffer =
         new RaycastHit[PostItPhysicsHitBufferSize];
     private readonly List<Collider> _postItBodyColliderBuffer = new List<Collider>(16);
@@ -342,6 +353,7 @@ public class PlayerHub : NetworkBehaviour
         base.OnNetworkSpawn();
 
         ResolveRefs();
+        InitializeFaceNetworkState();
         CacheCameraDefaults();
         ApplyOwnerVisuals();
         ApplyDefaultCameraPitchImmediate();
@@ -366,6 +378,7 @@ public class PlayerHub : NetworkBehaviour
 
     public override void OnNetworkDespawn()
     {
+        UnsubscribeFaceNetworkState();
         ForceEndLocalCameraOverride(false);
         ResetPostItPeelHoldState();
         UnsubscribePostItEffectChanges();
@@ -386,6 +399,7 @@ public class PlayerHub : NetworkBehaviour
 
     private void OnDestroy()
     {
+        UnsubscribeFaceNetworkState();
         ForceEndLocalCameraOverride(false);
         ResetPostItPeelHoldState();
         UnsubscribePostItEffectChanges();
@@ -462,6 +476,7 @@ public class PlayerHub : NetworkBehaviour
         if (_ragdollGrabber == null) _ragdollGrabber = GetComponentInChildren<HamsterRagdollGrabber>(true);
         if (_ragdollGrabbable == null) _ragdollGrabbable = GetComponentInChildren<HamsterRagdollGrabbable>(true);
         if (_postItInventory == null) _postItInventory = GetComponentInChildren<PlayerPostItInventory>(true);
+        ResolveFaceExpressionController();
         ResolveMotorShellCombatAdapter();
         if (gameStateManager == null) gameStateManager = FindFirstObjectByType<GameStateManager>();
         if (_readySystem == null) _readySystem = FindFirstObjectByType<ReadySystem>();
@@ -482,6 +497,24 @@ public class PlayerHub : NetworkBehaviour
 
         _motorShellCombatAdapter = null;
         return null;
+    }
+
+    private FaceExpressionController ResolveFaceExpressionController()
+    {
+        if (_faceExpressionController != null)
+            return _faceExpressionController;
+
+        FaceExpressionController candidate =
+            GetComponentInChildren<FaceExpressionController>(true);
+        if (candidate == null)
+            return null;
+
+        NetworkObject hubNetworkObject = GetComponentInParent<NetworkObject>();
+        NetworkObject faceNetworkObject = candidate.GetComponentInParent<NetworkObject>();
+        if (hubNetworkObject != null && faceNetworkObject == hubNetworkObject)
+            _faceExpressionController = candidate;
+
+        return _faceExpressionController;
     }
 
     private SugaActiveRagdollController ResolveActiveRagdollController()
@@ -679,6 +712,118 @@ public class PlayerHub : NetworkBehaviour
         return IsPlayingState();
     }
 
+    private void InitializeFaceNetworkState()
+    {
+        if (!IsSpawned)
+            return;
+
+        FaceExpressionController faceController = ResolveFaceExpressionController();
+        if (IsServer)
+        {
+            if (!_isAuthoritativeFaceExpressionSubscribed && faceController != null)
+            {
+                faceController.ExpressionChanged +=
+                    HandleAuthoritativeFaceExpressionChanged;
+                _isAuthoritativeFaceExpressionSubscribed = true;
+            }
+
+            int currentExpressionId = faceController != null
+                ? faceController.CurrentExpressionId
+                : DefaultNetworkFaceExpressionId;
+            if (!IsValidNetworkFaceExpressionId(currentExpressionId))
+            {
+                faceController?.SetFaceIndex(DefaultNetworkFaceExpressionId);
+                currentExpressionId = DefaultNetworkFaceExpressionId;
+            }
+
+            ServerSetNetworkFaceExpression(currentExpressionId);
+            return;
+        }
+
+        if (!_isReplicatedFaceExpressionSubscribed)
+        {
+            _currentFaceExpressionId.OnValueChanged +=
+                HandleReplicatedFaceExpressionChanged;
+            _isReplicatedFaceExpressionSubscribed = true;
+        }
+
+        ApplyReplicatedFaceExpression(_currentFaceExpressionId.Value);
+    }
+
+    private void UnsubscribeFaceNetworkState()
+    {
+        if (_isAuthoritativeFaceExpressionSubscribed)
+        {
+            if (_faceExpressionController != null)
+            {
+                _faceExpressionController.ExpressionChanged -=
+                    HandleAuthoritativeFaceExpressionChanged;
+            }
+
+            _isAuthoritativeFaceExpressionSubscribed = false;
+        }
+
+        if (_isReplicatedFaceExpressionSubscribed)
+        {
+            _currentFaceExpressionId.OnValueChanged -=
+                HandleReplicatedFaceExpressionChanged;
+            _isReplicatedFaceExpressionSubscribed = false;
+        }
+    }
+
+    private void HandleAuthoritativeFaceExpressionChanged(int expressionId)
+    {
+        ServerSetNetworkFaceExpression(expressionId);
+    }
+
+    private void HandleReplicatedFaceExpressionChanged(
+        byte previousExpressionId,
+        byte currentExpressionId)
+    {
+        ApplyReplicatedFaceExpression(currentExpressionId);
+    }
+
+    private void ApplyReplicatedFaceExpression(byte expressionId)
+    {
+        if (!IsSpawned || IsServer)
+            return;
+
+        int safeExpressionId = IsValidNetworkFaceExpressionId(expressionId)
+            ? expressionId
+            : DefaultNetworkFaceExpressionId;
+        ResolveFaceExpressionController()?.SetFaceIndex(safeExpressionId);
+    }
+
+    private void ServerSetNetworkFaceExpression(int expressionId)
+    {
+        if (!IsSpawned ||
+            !IsServer ||
+            !IsValidNetworkFaceExpressionId(expressionId))
+        {
+            return;
+        }
+
+        byte networkExpressionId = (byte)expressionId;
+        if (_currentFaceExpressionId.Value != networkExpressionId)
+            _currentFaceExpressionId.Value = networkExpressionId;
+    }
+
+    private void ServerResetFaceExpressionToDefault()
+    {
+        if (!IsSpawned || !IsServer)
+            return;
+
+        ResolveFaceExpressionController()?.SetFaceIndex(
+            DefaultNetworkFaceExpressionId);
+        ServerSetNetworkFaceExpression(DefaultNetworkFaceExpressionId);
+    }
+
+    private static bool IsValidNetworkFaceExpressionId(int expressionId)
+    {
+        return expressionId >= DefaultNetworkFaceExpressionId &&
+               expressionId <= MaximumNetworkFaceExpressionId;
+    }
+
     private bool TryGetGameState(out GameStateManager.GameState state)
     {
         if (gameStateManager == null)
@@ -752,7 +897,12 @@ public class PlayerHub : NetworkBehaviour
             ClearPendingGameplayInput();
 
         if (IsServer)
+        {
+            if (gameplayLocked)
+                ServerResetFaceExpressionToDefault();
+
             ApplyGameplayPhaseLockServer(gameplayLocked);
+        }
     }
 
     private void ApplyCurrentGameplayPhaseLock()
@@ -762,7 +912,12 @@ public class PlayerHub : NetworkBehaviour
             ClearPendingGameplayInput();
 
         if (IsServer)
+        {
+            if (gameplayLocked)
+                ServerResetFaceExpressionToDefault();
+
             ApplyGameplayPhaseLockServer(gameplayLocked);
+        }
     }
 
     private void ApplyGameplayPhaseLockServer(bool gameplayLocked)
