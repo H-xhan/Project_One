@@ -184,7 +184,7 @@ MonoBehaviour:
   useStaminaForBasicAttack: 1
   basicAttackStaminaCost: 6
   basicAttackMinimumStaminaToStart: 6
-  allowBasicAttackWhenStaminaModuleMissing: 1
+  allowBasicAttackWhenStaminaModuleMissing: 0
   skipInitialSpawnScenes:
   - InGame
   postItPeelSelectionDistance: 6
@@ -1111,6 +1111,15 @@ MonoBehaviour:
   autoFindVisualFollower: 1
   jumpVisualIntensity: 1
   landingVisualIntensity: 1
+  useStaminaForSprint: 1
+  sprintStaminaCostPerSecond: 20
+  sprintMinimumStaminaToStart: 5
+  sprintMinimumStaminaToContinue: 0.5
+  useStaminaForJump: 1
+  jumpStaminaCost: 5
+  jumpMinimumStaminaToStart: 10
+  allowMovementWhenStaminaModuleMissing: 1
+  debugStaminaLogs: 0
   uprightStrength: 0
   uprightDamping: 0
   chestUprightMultiplier: 0
