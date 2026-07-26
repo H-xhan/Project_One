@@ -219,11 +219,19 @@ public sealed class HamsterMotorShellFaceExpressionAdapter : MonoBehaviour
     {
         if (!IsTargetRoot() ||
             !CanWriteFaceInCurrentNetworkRole() ||
-            !IsGameplayFacePhaseActive() ||
-            IsRecoveryExpressionActive())
+            !IsGameplayFacePhaseActive())
         {
             return;
         }
+
+        if (_isNetworkGameplayPhaseSuppressed)
+        {
+            ExitNetworkGameplayPhaseSuppression();
+            TickRecoveryState(true);
+        }
+
+        if (IsRecoveryExpressionActive())
+            return;
 
         bool hasHeldItem = HasHeldItemForAttack();
         bool shouldOverride = hasHeldItem ? overrideHeldItemAttackExpression : overrideUnarmedAttackExpression;
