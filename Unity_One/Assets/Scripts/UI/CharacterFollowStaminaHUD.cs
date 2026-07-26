@@ -12,7 +12,9 @@ public class CharacterFollowStaminaHUD : MonoBehaviour
         StabilizedWorldAnchor,
         ScreenLockedWorldAnchor,
         CharacterScreenAnchor,
-        PrefabAttachedLocalOwner
+        PrefabAttachedLocalOwner,
+        PrefabAttachedLocalOwnerWorldSpaceAnchor = 6,
+        PrefabAttachedLocalOwnerScreenBounds = 7
     }
 
     public enum FollowOffsetMode
@@ -29,6 +31,56 @@ public class CharacterFollowStaminaHUD : MonoBehaviour
         CameraFacingFixedScale,
         TargetYawLocalRotation
     }
+
+    private enum Mode6FacingSource
+    {
+        Unavailable,
+        DesiredFacingDirection,
+        SmoothedMoveWorldDirection,
+        LastValidDirection,
+        TargetForward,
+        PlayerRootForward
+    }
+
+    private enum StaminaDiagnosticEvent
+    {
+        BindSucceeded,
+        BindFailed,
+        StaminaChanged,
+        MaxStaminaChanged
+    }
+
+    private enum ScreenBoundsPlacement
+    {
+        None,
+        Right,
+        Left,
+        Above
+    }
+
+    private struct ScreenBoundsCandidate
+    {
+        public ScreenBoundsPlacement Placement;
+        public Vector2 PivotScreenPosition;
+        public Rect ScreenRect;
+        public float Clearance;
+        public float OverlapArea;
+        public bool FitsSafeArea;
+
+        public bool IsUsable =>
+            FitsSafeArea &&
+            OverlapArea <= 0.001f;
+
+        public bool HasRequestedClearance =>
+            Clearance >= -0.001f;
+    }
+
+    private const float Mode6FacingDirectionSqrEpsilon = 0.000001f;
+    private const float Mode6ScreenSideSwitchAlignment = 0.1f;
+    private const float ScreenBoundsNearDepth = 0.001f;
+    private const float ScreenBoundsHorizontalMargin = 24f;
+    private const float ScreenBoundsVerticalMargin = 12f;
+    private const float ScreenBoundsSideSwitchHysteresis = 48f;
 
     [Header("UI")]
     [SerializeField, Tooltip("스태미나 UI 전체 루트 RectTransform입니다. 비워두면 자기 RectTransform을 사용합니다.")]
@@ -283,6 +335,10 @@ public class CharacterFollowStaminaHUD : MonoBehaviour
     [SerializeField, Tooltip("프리팹 부착 모드 디버그 로그를 출력합니다.")]
     private bool attachedDebugLogs = false;
 
+    [Header("Prefab Attached Screen Bounds")]
+    [SerializeField, Tooltip("Mode 7에서 화면 Bounds를 계산할 캐릭터 Renderer 루트입니다. Production Prefab에서는 VisualPreviewRoot를 연결합니다.")]
+    private Transform screenBoundsRendererRoot;
+
     [Header("Stamina Visual Fill")]
     [SerializeField, Tooltip("곡선형 스태미나 UI처럼 실제 보이는 영역이 fillAmount 0~1과 다를 때 표시용 fill 범위를 보정합니다.")]
     private bool useStaminaVisualFillRemap = false;
@@ -337,9 +393,13 @@ public class CharacterFollowStaminaHUD : MonoBehaviour
     private PlayerHub _boundPlayerHub;
     private PlayerStaminaModule _boundStaminaModule;
     private PlayerStatusModule _boundStatusModule;
+    private HamsterFullRagdollMotor _boundMode6FacingMotor;
+    private PlayerHub _mode6FacingMotorLookupHub;
+    private PlayerHub _screenBoundsRendererLookupHub;
     private GameStateManager _gameStateManager;
     private Transform _targetTransform;
     private Camera _localPlayerCamera;
+    private Renderer[] _screenBoundsRenderers;
     private Vector2 _followVelocity;
     private Vector3 _worldFollowVelocity;
     private float _worldVerticalVelocity;
@@ -358,7 +418,23 @@ public class CharacterFollowStaminaHUD : MonoBehaviour
     private float _lastRatio = -1f;
     private float _lastLoggedStaminaVisualRatio = -1f;
     private float _lastLoggedStaminaVisualFill = -1f;
+    private float _lastDiagnosticPreviousStamina;
+    private float _lastDiagnosticCurrentStamina;
+    private float _lastDiagnosticPreviousMaxStamina;
+    private float _lastDiagnosticMaxStamina;
+    private float _lastDiagnosticImageFill;
+    private float _lastDiagnosticSliderValue;
+    private float _lastDiagnosticImageFillBefore;
+    private float _lastDiagnosticSliderValueBefore;
+    private float _lastScreenBoundsOverlapArea;
+    private float _lastMode6ScreenSideSign = 1f;
+    private Vector3 _lastValidMode6PlanarFacing;
     private bool _hasSnappedToTarget;
+    private bool _hasResolvedMode6FacingMotor;
+    private bool _hasResolvedScreenBoundsRenderers;
+    private bool _hasLoggedStaminaDiagnostic;
+    private bool _lastDiagnosticIsOwner;
+    private bool _lastDiagnosticVisible;
     private bool _hasInitialWorldAnchorScale;
     private bool _hasInitialVisualScale;
     private bool _hasInitialVisualWorldRotation;
@@ -375,8 +451,20 @@ public class CharacterFollowStaminaHUD : MonoBehaviour
     private bool _hasLoggedPrefabAttachedOwnerBound;
     private bool _loggedWaitingForLocalPlayer;
     private bool _characterScreenTargetInView = true;
+    private bool _screenBoundsTargetInView = true;
+    private bool _isVisible;
+    private int _screenBoundsRendererCount;
+    private ulong _lastDiagnosticOwnerClientId;
+    private PlayerHub _lastDiagnosticPlayerHub;
+    private PlayerStaminaModule _lastDiagnosticStaminaModule;
     private PresentationMode _lastPresentationMode;
     private VisualLockMode _lastLoggedVisualLockMode = VisualLockMode.None;
+    private Mode6FacingSource _currentMode6FacingSource = Mode6FacingSource.Unavailable;
+    private Mode6FacingSource _lastDiagnosticFacingSource = Mode6FacingSource.Unavailable;
+    private StaminaDiagnosticEvent _lastStaminaDiagnosticEvent;
+    private ScreenBoundsPlacement _screenBoundsPlacement = ScreenBoundsPlacement.None;
+    private Rect _lastCharacterScreenRect;
+    private Rect _lastHudScreenRect;
 
     [ContextMenu("Project One/Apply Prefab Attached Stamina HUD Preset")]
     private void ApplyPrefabAttachedStaminaHudPreset()
@@ -479,6 +567,13 @@ public class CharacterFollowStaminaHUD : MonoBehaviour
         _hasLoggedPrefabAttachedOwnerBound = false;
         _lastLoggedVisualLockMode = VisualLockMode.None;
         _characterScreenTargetInView = true;
+        _screenBoundsTargetInView =
+            presentationMode !=
+            PresentationMode.PrefabAttachedLocalOwnerScreenBounds;
+        _screenBoundsPlacement = ScreenBoundsPlacement.None;
+        _lastCharacterScreenRect = default;
+        _lastHudScreenRect = default;
+        _lastScreenBoundsOverlapArea = 0f;
         _lastPresentationMode = presentationMode;
         CaptureAttachedLocalTransforms();
         RestoreAttachedLocalTransforms();
@@ -526,7 +621,7 @@ public class CharacterFollowStaminaHUD : MonoBehaviour
 
     private void LateUpdate()
     {
-        if (IsPrefabAttachedMode())
+        if (IsStaticPrefabAttachedMode())
         {
             if (_lastPresentationMode != presentationMode)
                 ResetPresentationModeState();
@@ -572,7 +667,20 @@ public class CharacterFollowStaminaHUD : MonoBehaviour
 
     private bool IsPrefabAttachedMode()
     {
+        return presentationMode == PresentationMode.PrefabAttachedLocalOwner ||
+               presentationMode == PresentationMode.PrefabAttachedLocalOwnerWorldSpaceAnchor ||
+               presentationMode == PresentationMode.PrefabAttachedLocalOwnerScreenBounds;
+    }
+
+    private bool IsStaticPrefabAttachedMode()
+    {
         return presentationMode == PresentationMode.PrefabAttachedLocalOwner;
+    }
+
+    private bool IsWorldSpaceAnchorMode()
+    {
+        return presentationMode == PresentationMode.WorldSpaceAnchor ||
+               presentationMode == PresentationMode.PrefabAttachedLocalOwnerWorldSpaceAnchor;
     }
 
     private void CaptureAttachedLocalTransforms()
@@ -599,7 +707,7 @@ public class CharacterFollowStaminaHUD : MonoBehaviour
 
     private void RestoreAttachedLocalTransforms()
     {
-        if (!IsPrefabAttachedMode() || !attachedKeepLocalTransform)
+        if (!IsStaticPrefabAttachedMode() || !attachedKeepLocalTransform)
             return;
 
         if (_hasAttachedRootLocalTransform && root != null)
@@ -631,9 +739,20 @@ public class CharacterFollowStaminaHUD : MonoBehaviour
         if (playerHub == null)
         {
             ApplyMissingLocalPlayerState();
+            LogStaminaDiagnostic(
+                StaminaDiagnosticEvent.BindFailed,
+                null,
+                null,
+                0f,
+                0f,
+                0f,
+                0f);
             LogWaitingForLocalPlayer();
             return;
         }
+
+        CacheMode6FacingMotor(playerHub);
+        CacheScreenBoundsRenderers(playerHub);
 
         PlayerStaminaModule staminaModule = playerHub.GetComponentInChildren<PlayerStaminaModule>(true);
         if (staminaModule == null)
@@ -645,6 +764,14 @@ public class CharacterFollowStaminaHUD : MonoBehaviour
             TryCaptureInitialVisualState(ResolveWorldAnchorTransform(), true);
             TryCaptureTargetVisualLocalRotation(ResolveWorldAnchorTransform());
             ApplyMissingLocalPlayerState();
+            LogStaminaDiagnostic(
+                StaminaDiagnosticEvent.BindFailed,
+                playerHub,
+                null,
+                0f,
+                0f,
+                0f,
+                0f);
             Log("Waiting for local player stamina.");
             return;
         }
@@ -682,6 +809,8 @@ public class CharacterFollowStaminaHUD : MonoBehaviour
         }
 
         _prefabAttachedHiddenForNonOwner = false;
+        CacheMode6FacingMotor(parentHub);
+        CacheScreenBoundsRenderers(parentHub);
 
         PlayerStaminaModule staminaModule = parentHub.GetComponentInChildren<PlayerStaminaModule>(true);
         if (staminaModule == null)
@@ -691,6 +820,14 @@ public class CharacterFollowStaminaHUD : MonoBehaviour
             _targetTransform = parentHub.transform;
             _localPlayerCamera = ResolveLocalPlayerCamera(parentHub);
             ApplyMissingLocalPlayerState();
+            LogStaminaDiagnostic(
+                StaminaDiagnosticEvent.BindFailed,
+                parentHub,
+                null,
+                0f,
+                0f,
+                0f,
+                0f);
             LogPrefabAttached("Prefab attached waiting for owner stamina.");
             return true;
         }
@@ -719,6 +856,9 @@ public class CharacterFollowStaminaHUD : MonoBehaviour
         _followVelocity = Vector2.zero;
         _worldFollowVelocity = Vector3.zero;
         _worldVerticalVelocity = 0f;
+        ResetMode6FacingState();
+        ResetScreenBoundsRendererState();
+        _hasLoggedStaminaDiagnostic = false;
         _prefabAttachedHiddenForNonOwner = true;
         _lastRatio = -1f;
 
@@ -815,8 +955,28 @@ public class CharacterFollowStaminaHUD : MonoBehaviour
         _boundStaminaModule.StaminaChanged += OnStaminaChanged;
         _boundStaminaModule.MaxStaminaChanged += OnMaxStaminaChanged;
 
+        float imageFillBefore =
+            staminaFillImage != null
+                ? staminaFillImage.fillAmount
+                : -1f;
+        float sliderValueBefore =
+            staminaSlider != null
+                ? staminaSlider.value
+                : -1f;
         RefreshStaminaUI(false);
         RefreshVisibility();
+        float currentStamina = _boundStaminaModule.CurrentStamina;
+        float maxStamina = _boundStaminaModule.MaxStamina;
+        LogStaminaDiagnostic(
+            StaminaDiagnosticEvent.BindSucceeded,
+            _boundPlayerHub,
+            _boundStaminaModule,
+            currentStamina,
+            currentStamina,
+            maxStamina,
+            maxStamina,
+            imageFillBefore,
+            sliderValueBefore);
     }
 
     private void UnbindStaminaModule()
@@ -841,21 +1001,71 @@ public class CharacterFollowStaminaHUD : MonoBehaviour
         _followVelocity = Vector2.zero;
         _worldFollowVelocity = Vector3.zero;
         _worldVerticalVelocity = 0f;
+        ResetMode6FacingState();
+        ResetScreenBoundsRendererState();
         _hasInitialWorldAnchorScale = false;
         _hasCapturedTargetVisualLocalRotation = false;
         _hasLoggedStaminaVisualFill = false;
+        _hasLoggedStaminaDiagnostic = false;
         _characterScreenTargetInView = true;
+        _screenBoundsTargetInView = true;
+        _screenBoundsPlacement = ScreenBoundsPlacement.None;
+        _lastCharacterScreenRect = default;
+        _lastHudScreenRect = default;
+        _lastScreenBoundsOverlapArea = 0f;
         _lastRatio = -1f;
     }
 
     private void OnStaminaChanged(float previousStamina, float currentStamina)
     {
+        float imageFillBefore =
+            staminaFillImage != null
+                ? staminaFillImage.fillAmount
+                : -1f;
+        float sliderValueBefore =
+            staminaSlider != null
+                ? staminaSlider.value
+                : -1f;
         RefreshStaminaUI(true);
+        float maxStamina = _boundStaminaModule != null
+            ? _boundStaminaModule.MaxStamina
+            : 0f;
+        LogStaminaDiagnostic(
+            StaminaDiagnosticEvent.StaminaChanged,
+            _boundPlayerHub,
+            _boundStaminaModule,
+            previousStamina,
+            currentStamina,
+            maxStamina,
+            maxStamina,
+            imageFillBefore,
+            sliderValueBefore);
     }
 
     private void OnMaxStaminaChanged(float previousMaxStamina, float currentMaxStamina)
     {
+        float imageFillBefore =
+            staminaFillImage != null
+                ? staminaFillImage.fillAmount
+                : -1f;
+        float sliderValueBefore =
+            staminaSlider != null
+                ? staminaSlider.value
+                : -1f;
         RefreshStaminaUI(true);
+        float currentStamina = _boundStaminaModule != null
+            ? _boundStaminaModule.CurrentStamina
+            : 0f;
+        LogStaminaDiagnostic(
+            StaminaDiagnosticEvent.MaxStaminaChanged,
+            _boundPlayerHub,
+            _boundStaminaModule,
+            currentStamina,
+            currentStamina,
+            previousMaxStamina,
+            currentMaxStamina,
+            imageFillBefore,
+            sliderValueBefore);
     }
 
     private void RefreshStaminaUI(bool markChanged)
@@ -935,7 +1145,14 @@ public class CharacterFollowStaminaHUD : MonoBehaviour
         if (_lastPresentationMode != presentationMode)
             ResetPresentationModeState();
 
-        if (presentationMode == PresentationMode.WorldSpaceAnchor)
+        if (presentationMode ==
+            PresentationMode.PrefabAttachedLocalOwnerScreenBounds)
+        {
+            UpdatePrefabAttachedScreenBoundsPosition();
+            return;
+        }
+
+        if (IsWorldSpaceAnchorMode())
         {
             UpdateWorldSpaceAnchorPosition();
             return;
@@ -978,6 +1195,13 @@ public class CharacterFollowStaminaHUD : MonoBehaviour
         _hasLoggedTargetVisualFlipForward = false;
         _lastLoggedVisualLockMode = VisualLockMode.None;
         SetCharacterScreenTargetInView(true);
+        SetScreenBoundsTargetInView(
+            presentationMode !=
+            PresentationMode.PrefabAttachedLocalOwnerScreenBounds);
+        _screenBoundsPlacement = ScreenBoundsPlacement.None;
+        _lastCharacterScreenRect = default;
+        _lastHudScreenRect = default;
+        _lastScreenBoundsOverlapArea = 0f;
         _lastPresentationMode = presentationMode;
     }
 
@@ -989,7 +1213,11 @@ public class CharacterFollowStaminaHUD : MonoBehaviour
 
         CacheWorldAnchorScale(anchorTransform);
 
-        Vector3 targetPosition = GetWorldAnchorTargetPosition();
+        Camera camera = ResolveWorldCamera();
+        Vector3 targetPosition = GetWorldAnchorTargetPosition(camera);
+        if (presentationMode == PresentationMode.PrefabAttachedLocalOwnerWorldSpaceAnchor)
+            targetPosition = ClampWorldAnchorTargetPositionToScreen(camera, targetPosition);
+
         float snapDistance = Mathf.Max(0f, maxWorldSnapDistance);
         float currentDistance = Vector3.Distance(anchorTransform.position, targetPosition);
 
@@ -1023,7 +1251,6 @@ public class CharacterFollowStaminaHUD : MonoBehaviour
             _hasSnappedToTarget = true;
         }
 
-        Camera camera = ResolveWorldCamera();
         ApplyVisualLock(anchorTransform, camera);
 
         if (!ShouldSuppressLegacyBillboard())
@@ -1274,6 +1501,748 @@ public class CharacterFollowStaminaHUD : MonoBehaviour
         _hasSnappedToTarget = true;
     }
 
+    private void UpdatePrefabAttachedScreenBoundsPosition()
+    {
+        RectTransform targetRect = followRect != null ? followRect : root;
+        if (_boundPlayerHub == null ||
+            _targetTransform == null ||
+            targetRect == null ||
+            targetCanvas == null ||
+            targetCanvas.renderMode != RenderMode.ScreenSpaceOverlay)
+        {
+            FailScreenBoundsProjection();
+            return;
+        }
+
+        if (!_hasResolvedScreenBoundsRenderers ||
+            _screenBoundsRendererLookupHub != _boundPlayerHub)
+        {
+            CacheScreenBoundsRenderers(_boundPlayerHub);
+        }
+
+        if (_screenBoundsRendererCount <= 0 ||
+            !TryResolveScreenBoundsCamera(out Camera camera) ||
+            !TryCalculateCharacterScreenRect(
+                camera,
+                out Rect characterScreenRect) ||
+            !TryGetScreenBoundsSafeRect(
+                camera,
+                out Rect safeScreenRect))
+        {
+            FailScreenBoundsProjection();
+            return;
+        }
+
+        RectTransform parentRect =
+            ResolveCharacterScreenParentRect(targetRect);
+        Vector2 hudScreenSize = GetHudScreenSize(targetRect);
+        if (parentRect == null ||
+            !IsFinitePositiveVector2(hudScreenSize))
+        {
+            FailScreenBoundsProjection();
+            return;
+        }
+
+        ResetScreenBoundsRotation(targetRect);
+
+        ScreenBoundsCandidate selectedCandidate =
+            SelectScreenBoundsCandidate(
+                characterScreenRect,
+                safeScreenRect,
+                hudScreenSize,
+                targetRect.pivot);
+        if (selectedCandidate.OverlapArea > 0.001f ||
+            !selectedCandidate.FitsSafeArea ||
+            !IsFiniteVector2(
+                selectedCandidate.PivotScreenPosition))
+        {
+            FailScreenBoundsProjection();
+            return;
+        }
+
+        Camera uiCamera = ResolveUiCamera();
+        if (!RectTransformUtility.ScreenPointToLocalPointInRectangle(
+                parentRect,
+                selectedCandidate.PivotScreenPosition,
+                uiCamera,
+                out Vector2 localPosition))
+        {
+            FailScreenBoundsProjection();
+            return;
+        }
+
+        Vector2 currentScreenPivot =
+            RectTransformUtility.WorldToScreenPoint(
+                uiCamera,
+                targetRect.position);
+        Rect currentHudRect = CreateScreenRectFromPivot(
+            currentScreenPivot,
+            hudScreenSize,
+            targetRect.pivot);
+        float currentOverlap =
+            GetRectOverlapArea(
+                currentHudRect,
+                characterScreenRect);
+        float screenDistance = Vector2.Distance(
+            currentScreenPivot,
+            selectedCandidate.PivotScreenPosition);
+        bool placementChanged =
+            _screenBoundsPlacement !=
+            selectedCandidate.Placement;
+        bool shouldSnap =
+            !_hasSnappedToTarget ||
+            placementChanged ||
+            currentOverlap > 0.001f ||
+            screenDistance >
+            Mathf.Max(0f, characterScreenSnapDistance);
+
+        if (shouldSnap || characterScreenSmoothTime <= 0f)
+        {
+            targetRect.anchoredPosition = localPosition;
+            _followVelocity = Vector2.zero;
+        }
+        else
+        {
+            targetRect.anchoredPosition = Vector2.SmoothDamp(
+                targetRect.anchoredPosition,
+                localPosition,
+                ref _followVelocity,
+                Mathf.Max(
+                    0.001f,
+                    characterScreenSmoothTime),
+                Mathf.Infinity,
+                Time.unscaledDeltaTime);
+        }
+
+        _hasSnappedToTarget = true;
+        _screenBoundsPlacement =
+            selectedCandidate.Placement;
+        _lastCharacterScreenRect =
+            characterScreenRect;
+        if (!UpdateScreenBoundsRuntimeRects(
+                targetRect,
+                uiCamera,
+                hudScreenSize,
+                characterScreenRect,
+                safeScreenRect,
+                localPosition))
+        {
+            FailScreenBoundsProjection();
+            return;
+        }
+
+        SetScreenBoundsTargetInView(true);
+    }
+
+    private void FailScreenBoundsProjection()
+    {
+        _hasSnappedToTarget = false;
+        _followVelocity = Vector2.zero;
+        _screenBoundsPlacement =
+            ScreenBoundsPlacement.None;
+        _lastCharacterScreenRect = default;
+        _lastHudScreenRect = default;
+        _lastScreenBoundsOverlapArea = 0f;
+        SetScreenBoundsTargetInView(false);
+    }
+
+    private bool TryResolveScreenBoundsCamera(
+        out Camera camera)
+    {
+        camera = _localPlayerCamera;
+        if (camera != null &&
+            camera.isActiveAndEnabled &&
+            camera.gameObject.activeInHierarchy)
+        {
+            return true;
+        }
+
+        camera = null;
+        return false;
+    }
+
+    private bool TryCalculateCharacterScreenRect(
+        Camera camera,
+        out Rect screenRect)
+    {
+        screenRect = default;
+        if (camera == null ||
+            _screenBoundsRenderers == null ||
+            _screenBoundsRendererCount <= 0)
+        {
+            return false;
+        }
+
+        float minX = float.PositiveInfinity;
+        float minY = float.PositiveInfinity;
+        float maxX = float.NegativeInfinity;
+        float maxY = float.NegativeInfinity;
+        bool hasProjectedCorner = false;
+
+        for (int i = 0;
+             i < _screenBoundsRendererCount;
+             i++)
+        {
+            Renderer candidate =
+                _screenBoundsRenderers[i];
+            if (candidate == null ||
+                !candidate.enabled ||
+                !candidate.gameObject.activeInHierarchy)
+            {
+                continue;
+            }
+
+            Bounds bounds = candidate.bounds;
+            if (!IsFiniteVector3(bounds.center) ||
+                !IsFiniteVector3(bounds.extents) ||
+                bounds.extents.sqrMagnitude <=
+                Mode6FacingDirectionSqrEpsilon)
+            {
+                continue;
+            }
+
+            Vector3 center = bounds.center;
+            Vector3 extents = bounds.extents;
+            for (int cornerIndex = 0;
+                 cornerIndex < 8;
+                 cornerIndex++)
+            {
+                Vector3 corner = new Vector3(
+                    center.x +
+                    ((cornerIndex & 1) == 0
+                        ? -extents.x
+                        : extents.x),
+                    center.y +
+                    ((cornerIndex & 2) == 0
+                        ? -extents.y
+                        : extents.y),
+                    center.z +
+                    ((cornerIndex & 4) == 0
+                        ? -extents.z
+                        : extents.z));
+                Vector3 projected =
+                    camera.WorldToScreenPoint(corner);
+                if (projected.z <=
+                        ScreenBoundsNearDepth ||
+                    !IsFiniteVector3(projected))
+                {
+                    return false;
+                }
+
+                minX = Mathf.Min(minX, projected.x);
+                minY = Mathf.Min(minY, projected.y);
+                maxX = Mathf.Max(maxX, projected.x);
+                maxY = Mathf.Max(maxY, projected.y);
+                hasProjectedCorner = true;
+            }
+        }
+
+        if (!hasProjectedCorner ||
+            maxX <= minX ||
+            maxY <= minY)
+        {
+            return false;
+        }
+
+        screenRect = Rect.MinMaxRect(
+            minX,
+            minY,
+            maxX,
+            maxY);
+        return RectsOverlap(
+            screenRect,
+            camera.pixelRect);
+    }
+
+    private bool TryGetScreenBoundsSafeRect(
+        Camera camera,
+        out Rect safeRect)
+    {
+        safeRect = default;
+        if (camera == null)
+            return false;
+
+        Rect screenSafeArea = Screen.safeArea;
+        Rect cameraPixelRect = camera.pixelRect;
+        float minX = Mathf.Max(
+            screenSafeArea.xMin,
+            cameraPixelRect.xMin);
+        float minY = Mathf.Max(
+            screenSafeArea.yMin,
+            cameraPixelRect.yMin);
+        float maxX = Mathf.Min(
+            screenSafeArea.xMax,
+            cameraPixelRect.xMax);
+        float maxY = Mathf.Min(
+            screenSafeArea.yMax,
+            cameraPixelRect.yMax);
+        float paddingX = Mathf.Max(
+            0f,
+            screenPadding.x);
+        float paddingY = Mathf.Max(
+            0f,
+            screenPadding.y);
+        minX += paddingX;
+        minY += paddingY;
+        maxX -= paddingX;
+        maxY -= paddingY;
+
+        if (maxX <= minX ||
+            maxY <= minY)
+        {
+            return false;
+        }
+
+        safeRect = Rect.MinMaxRect(
+            minX,
+            minY,
+            maxX,
+            maxY);
+        return true;
+    }
+
+    private Vector2 GetHudScreenSize(
+        RectTransform targetRect)
+    {
+        if (targetRect == null)
+            return Vector2.zero;
+
+        Vector3 scale = targetRect.lossyScale;
+        float canvasScale =
+            targetCanvas != null
+                ? Mathf.Max(
+                    0.0001f,
+                    targetCanvas.scaleFactor)
+                : 1f;
+        return new Vector2(
+            Mathf.Abs(
+                targetRect.rect.width *
+                scale.x *
+                canvasScale),
+            Mathf.Abs(
+                targetRect.rect.height *
+                scale.y *
+                canvasScale));
+    }
+
+    private ScreenBoundsCandidate SelectScreenBoundsCandidate(
+        Rect characterRect,
+        Rect safeRect,
+        Vector2 hudSize,
+        Vector2 pivot)
+    {
+        ScreenBoundsCandidate right =
+            CreateScreenBoundsCandidate(
+                ScreenBoundsPlacement.Right,
+                characterRect,
+                safeRect,
+                hudSize,
+                pivot);
+        ScreenBoundsCandidate left =
+            CreateScreenBoundsCandidate(
+                ScreenBoundsPlacement.Left,
+                characterRect,
+                safeRect,
+                hudSize,
+                pivot);
+        ScreenBoundsCandidate above =
+            CreateScreenBoundsCandidate(
+                ScreenBoundsPlacement.Above,
+                characterRect,
+                safeRect,
+                hudSize,
+                pivot);
+
+        ScreenBoundsCandidate current =
+            GetScreenBoundsCandidate(
+                _screenBoundsPlacement,
+                right,
+                left,
+                above);
+        if (current.IsUsable)
+        {
+            ScreenBoundsCandidate preferred =
+                current;
+            TryPreferScreenBoundsCandidate(
+                current,
+                right,
+                ref preferred);
+            TryPreferScreenBoundsCandidate(
+                current,
+                left,
+                ref preferred);
+            TryPreferScreenBoundsCandidate(
+                current,
+                above,
+                ref preferred);
+            return preferred;
+        }
+
+        if (right.IsUsable &&
+            right.HasRequestedClearance)
+            return right;
+        if (left.IsUsable &&
+            left.HasRequestedClearance)
+            return left;
+        if (above.IsUsable &&
+            above.HasRequestedClearance)
+            return above;
+
+        ScreenBoundsCandidate fallback = right;
+        if (IsBetterScreenBoundsFallback(
+                left,
+                fallback))
+        {
+            fallback = left;
+        }
+
+        if (IsBetterScreenBoundsFallback(
+                above,
+                fallback))
+        {
+            fallback = above;
+        }
+
+        return fallback;
+    }
+
+    private ScreenBoundsCandidate CreateScreenBoundsCandidate(
+        ScreenBoundsPlacement placement,
+        Rect characterRect,
+        Rect safeRect,
+        Vector2 hudSize,
+        Vector2 pivot)
+    {
+        Vector2 center;
+        float clearance;
+        if (placement ==
+            ScreenBoundsPlacement.Left)
+        {
+            center = new Vector2(
+                characterRect.xMin -
+                ScreenBoundsHorizontalMargin -
+                hudSize.x * 0.5f,
+                characterRect.center.y +
+                ScreenBoundsVerticalMargin);
+            clearance =
+                characterRect.xMin -
+                ScreenBoundsHorizontalMargin -
+                hudSize.x -
+                safeRect.xMin;
+        }
+        else if (placement ==
+                 ScreenBoundsPlacement.Above)
+        {
+            center = new Vector2(
+                characterRect.center.x,
+                characterRect.yMax +
+                ScreenBoundsVerticalMargin +
+                hudSize.y * 0.5f);
+            clearance =
+                safeRect.yMax -
+                characterRect.yMax -
+                ScreenBoundsVerticalMargin -
+                hudSize.y;
+        }
+        else
+        {
+            center = new Vector2(
+                characterRect.xMax +
+                ScreenBoundsHorizontalMargin +
+                hudSize.x * 0.5f,
+                characterRect.center.y +
+                ScreenBoundsVerticalMargin);
+            clearance =
+                safeRect.xMax -
+                characterRect.xMax -
+                ScreenBoundsHorizontalMargin -
+                hudSize.x;
+        }
+
+        Rect candidateRect = new Rect(
+            center.x - hudSize.x * 0.5f,
+            center.y - hudSize.y * 0.5f,
+            hudSize.x,
+            hudSize.y);
+        candidateRect =
+            ClampScreenRectToSafeArea(
+                candidateRect,
+                safeRect);
+
+        return new ScreenBoundsCandidate
+        {
+            Placement = placement,
+            PivotScreenPosition = new Vector2(
+                candidateRect.xMin +
+                hudSize.x * pivot.x,
+                candidateRect.yMin +
+                hudSize.y * pivot.y),
+            ScreenRect = candidateRect,
+            Clearance = clearance,
+            OverlapArea = GetRectOverlapArea(
+                candidateRect,
+                characterRect),
+            FitsSafeArea = RectContains(
+                safeRect,
+                candidateRect)
+        };
+    }
+
+    private static Rect ClampScreenRectToSafeArea(
+        Rect candidateRect,
+        Rect safeRect)
+    {
+        float x = candidateRect.x;
+        float y = candidateRect.y;
+        if (candidateRect.width <= safeRect.width)
+        {
+            x = Mathf.Clamp(
+                x,
+                safeRect.xMin,
+                safeRect.xMax -
+                candidateRect.width);
+        }
+        else
+        {
+            x = safeRect.center.x -
+                candidateRect.width * 0.5f;
+        }
+
+        if (candidateRect.height <= safeRect.height)
+        {
+            y = Mathf.Clamp(
+                y,
+                safeRect.yMin,
+                safeRect.yMax -
+                candidateRect.height);
+        }
+        else
+        {
+            y = safeRect.center.y -
+                candidateRect.height * 0.5f;
+        }
+
+        return new Rect(
+            x,
+            y,
+            candidateRect.width,
+            candidateRect.height);
+    }
+
+    private static ScreenBoundsCandidate
+        GetScreenBoundsCandidate(
+            ScreenBoundsPlacement placement,
+            ScreenBoundsCandidate right,
+            ScreenBoundsCandidate left,
+            ScreenBoundsCandidate above)
+    {
+        if (placement ==
+            ScreenBoundsPlacement.Left)
+        {
+            return left;
+        }
+
+        if (placement ==
+            ScreenBoundsPlacement.Above)
+        {
+            return above;
+        }
+
+        return placement ==
+               ScreenBoundsPlacement.Right
+            ? right
+            : default;
+    }
+
+    private static void TryPreferScreenBoundsCandidate(
+        ScreenBoundsCandidate current,
+        ScreenBoundsCandidate candidate,
+        ref ScreenBoundsCandidate preferred)
+    {
+        if (!candidate.IsUsable ||
+            candidate.Placement ==
+            current.Placement)
+        {
+            return;
+        }
+
+        bool currentNeedsFallback =
+            !current.HasRequestedClearance &&
+            candidate.HasRequestedClearance;
+        if (!currentNeedsFallback &&
+            candidate.Clearance <
+            current.Clearance +
+            ScreenBoundsSideSwitchHysteresis)
+        {
+            return;
+        }
+
+        if (preferred.Placement ==
+                current.Placement ||
+            candidate.Clearance >
+            preferred.Clearance)
+        {
+            preferred = candidate;
+        }
+    }
+
+    private static bool IsBetterScreenBoundsFallback(
+        ScreenBoundsCandidate candidate,
+        ScreenBoundsCandidate current)
+    {
+        if (candidate.OverlapArea <
+            current.OverlapArea - 0.001f)
+        {
+            return true;
+        }
+
+        return Mathf.Abs(
+                   candidate.OverlapArea -
+                   current.OverlapArea) <= 0.001f &&
+               candidate.Clearance >
+               current.Clearance;
+    }
+
+    private bool UpdateScreenBoundsRuntimeRects(
+        RectTransform targetRect,
+        Camera uiCamera,
+        Vector2 hudSize,
+        Rect characterRect,
+        Rect safeRect,
+        Vector2 exactLocalPosition)
+    {
+        Vector2 actualScreenPivot =
+            RectTransformUtility.WorldToScreenPoint(
+                uiCamera,
+                targetRect.position);
+        Rect actualHudRect =
+            CreateScreenRectFromPivot(
+                actualScreenPivot,
+                hudSize,
+                targetRect.pivot);
+        float overlapArea =
+            GetRectOverlapArea(
+                actualHudRect,
+                characterRect);
+
+        if (overlapArea > 0.001f)
+        {
+            targetRect.anchoredPosition =
+                exactLocalPosition;
+            _followVelocity = Vector2.zero;
+            actualScreenPivot =
+                RectTransformUtility.WorldToScreenPoint(
+                    uiCamera,
+                    targetRect.position);
+            actualHudRect =
+                CreateScreenRectFromPivot(
+                    actualScreenPivot,
+                    hudSize,
+                    targetRect.pivot);
+            overlapArea =
+                GetRectOverlapArea(
+                    actualHudRect,
+                    characterRect);
+        }
+
+        _lastHudScreenRect = actualHudRect;
+        _lastScreenBoundsOverlapArea =
+            overlapArea;
+        return overlapArea <= 0.001f &&
+               RectContains(
+                   safeRect,
+                   actualHudRect);
+    }
+
+    private static Rect CreateScreenRectFromPivot(
+        Vector2 pivotScreenPosition,
+        Vector2 size,
+        Vector2 pivot)
+    {
+        return new Rect(
+            pivotScreenPosition.x -
+            size.x * pivot.x,
+            pivotScreenPosition.y -
+            size.y * pivot.y,
+            size.x,
+            size.y);
+    }
+
+    private static float GetRectOverlapArea(
+        Rect first,
+        Rect second)
+    {
+        float width = Mathf.Max(
+            0f,
+            Mathf.Min(first.xMax, second.xMax) -
+            Mathf.Max(first.xMin, second.xMin));
+        float height = Mathf.Max(
+            0f,
+            Mathf.Min(first.yMax, second.yMax) -
+            Mathf.Max(first.yMin, second.yMin));
+        return width * height;
+    }
+
+    private static bool RectContains(
+        Rect outer,
+        Rect inner)
+    {
+        return inner.xMin >= outer.xMin - 0.001f &&
+               inner.xMax <= outer.xMax + 0.001f &&
+               inner.yMin >= outer.yMin - 0.001f &&
+               inner.yMax <= outer.yMax + 0.001f;
+    }
+
+    private static bool RectsOverlap(
+        Rect first,
+        Rect second)
+    {
+        return first.xMax > second.xMin &&
+               first.xMin < second.xMax &&
+               first.yMax > second.yMin &&
+               first.yMin < second.yMax;
+    }
+
+    private static bool IsFinitePositiveVector2(
+        Vector2 value)
+    {
+        return IsFiniteVector2(value) &&
+               value.x > 0.001f &&
+               value.y > 0.001f;
+    }
+
+    private static bool IsFiniteVector2(
+        Vector2 value)
+    {
+        return !float.IsNaN(value.x) &&
+               !float.IsInfinity(value.x) &&
+               !float.IsNaN(value.y) &&
+               !float.IsInfinity(value.y);
+    }
+
+    private static bool IsFiniteVector3(
+        Vector3 value)
+    {
+        return !float.IsNaN(value.x) &&
+               !float.IsInfinity(value.x) &&
+               !float.IsNaN(value.y) &&
+               !float.IsInfinity(value.y) &&
+               !float.IsNaN(value.z) &&
+               !float.IsInfinity(value.z);
+    }
+
+    private void ResetScreenBoundsRotation(
+        RectTransform targetRect)
+    {
+        if (root != null)
+            root.rotation =
+                Quaternion.identity;
+
+        if (targetRect != null)
+            targetRect.localRotation =
+                Quaternion.identity;
+    }
+
     private RectTransform ResolveCharacterScreenParentRect(RectTransform targetRect)
     {
         if (targetRect != null && targetRect.parent is RectTransform targetParentRect)
@@ -1338,15 +2307,374 @@ public class CharacterFollowStaminaHUD : MonoBehaviour
         return transform;
     }
 
-    private Vector3 GetWorldAnchorTargetPosition()
+    private Vector3 GetWorldAnchorTargetPosition(Camera camera = null)
     {
         if (_targetTransform == null)
             return Vector3.zero;
+
+        if (presentationMode == PresentationMode.PrefabAttachedLocalOwnerWorldSpaceAnchor)
+        {
+            Transform stablePlayerRoot = ResolveMode6StablePlayerRoot();
+            Vector3 selectedOffset = useTargetLocalOffset
+                ? targetLocalOffset
+                : worldOffset;
+            ResolveMode6CameraPlanarBasis(
+                camera,
+                out Vector3 cameraPlanarRight,
+                out Vector3 cameraPlanarForward);
+
+            float screenSideSign = _lastMode6ScreenSideSign;
+            if (TryResolveMode6PlanarFacing(out Vector3 planarForward, out _))
+            {
+                screenSideSign = ResolveMode6ScreenSideSign(
+                    planarForward,
+                    cameraPlanarRight,
+                    selectedOffset.x);
+            }
+
+            return stablePlayerRoot.position
+                + cameraPlanarRight *
+                  (Mathf.Abs(selectedOffset.x) * screenSideSign)
+                + Vector3.up * selectedOffset.y
+                + cameraPlanarForward * selectedOffset.z;
+        }
 
         if (useTargetLocalOffset)
             return _targetTransform.TransformPoint(targetLocalOffset);
 
         return _targetTransform.position + worldOffset;
+    }
+
+    private Transform ResolveMode6StablePlayerRoot()
+    {
+        if (_boundPlayerHub != null)
+            return _boundPlayerHub.transform;
+
+        return _targetTransform;
+    }
+
+    private void ResolveMode6CameraPlanarBasis(
+        Camera camera,
+        out Vector3 planarRight,
+        out Vector3 planarForward)
+    {
+        Camera resolvedCamera = camera != null ? camera : ResolveWorldCamera();
+        if (resolvedCamera != null &&
+            TryNormalizePlanarDirection(
+                resolvedCamera.transform.right,
+                out planarRight))
+        {
+            planarForward =
+                Vector3.Cross(planarRight, Vector3.up).normalized;
+            return;
+        }
+
+        planarRight = Vector3.right;
+        planarForward = Vector3.forward;
+    }
+
+    private float ResolveMode6ScreenSideSign(
+        Vector3 planarForward,
+        Vector3 cameraPlanarRight,
+        float horizontalOffset)
+    {
+        if (Mathf.Abs(horizontalOffset) <=
+            Mode6FacingDirectionSqrEpsilon)
+        {
+            return _lastMode6ScreenSideSign;
+        }
+
+        Vector3 characterSide =
+            Vector3.Cross(Vector3.up, planarForward).normalized;
+        if (horizontalOffset < 0f)
+            characterSide = -characterSide;
+
+        float screenSideAlignment =
+            Vector3.Dot(characterSide, cameraPlanarRight);
+        if (_lastMode6ScreenSideSign > 0f &&
+            screenSideAlignment <=
+            -Mode6ScreenSideSwitchAlignment)
+            _lastMode6ScreenSideSign = -1f;
+        else if (_lastMode6ScreenSideSign < 0f &&
+                 screenSideAlignment >=
+                 Mode6ScreenSideSwitchAlignment)
+            _lastMode6ScreenSideSign = 1f;
+
+        return _lastMode6ScreenSideSign;
+    }
+
+    private void CacheMode6FacingMotor(PlayerHub playerHub)
+    {
+        if (presentationMode != PresentationMode.PrefabAttachedLocalOwnerWorldSpaceAnchor)
+            return;
+
+        if (_hasResolvedMode6FacingMotor &&
+            _mode6FacingMotorLookupHub == playerHub)
+        {
+            return;
+        }
+
+        _hasResolvedMode6FacingMotor = true;
+        _mode6FacingMotorLookupHub = playerHub;
+        _boundMode6FacingMotor = null;
+        _lastValidMode6PlanarFacing = Vector3.zero;
+        _lastMode6ScreenSideSign = 1f;
+        _currentMode6FacingSource = Mode6FacingSource.Unavailable;
+
+        if (playerHub == null)
+            return;
+
+        HamsterFullRagdollMotor candidate =
+            playerHub.GetComponentInChildren<HamsterFullRagdollMotor>(true);
+        if (candidate == null)
+            return;
+
+        Transform playerTransform = playerHub.transform;
+        Transform candidateTransform = candidate.transform;
+        bool isSamePlayerRoot =
+            candidateTransform == playerTransform ||
+            (candidateTransform.IsChildOf(playerTransform) &&
+             candidateTransform.root == playerTransform.root);
+        if (isSamePlayerRoot)
+            _boundMode6FacingMotor = candidate;
+    }
+
+    private void ResetMode6FacingState()
+    {
+        _boundMode6FacingMotor = null;
+        _mode6FacingMotorLookupHub = null;
+        _hasResolvedMode6FacingMotor = false;
+        _lastValidMode6PlanarFacing = Vector3.zero;
+        _lastMode6ScreenSideSign = 1f;
+        _currentMode6FacingSource = Mode6FacingSource.Unavailable;
+    }
+
+    private void CacheScreenBoundsRenderers(PlayerHub playerHub)
+    {
+        if (presentationMode !=
+            PresentationMode.PrefabAttachedLocalOwnerScreenBounds)
+        {
+            return;
+        }
+
+        if (_hasResolvedScreenBoundsRenderers &&
+            _screenBoundsRendererLookupHub == playerHub)
+        {
+            return;
+        }
+
+        ResetScreenBoundsRendererState();
+        _hasResolvedScreenBoundsRenderers = true;
+        _screenBoundsRendererLookupHub = playerHub;
+
+        if (playerHub == null)
+            return;
+
+        Transform playerRoot = playerHub.transform;
+        Transform rendererRoot = screenBoundsRendererRoot;
+        if (rendererRoot == null ||
+            rendererRoot == playerRoot ||
+            !rendererRoot.IsChildOf(playerRoot))
+        {
+            return;
+        }
+
+        Renderer[] candidates =
+            rendererRoot.GetComponentsInChildren<Renderer>(true);
+        int count = 0;
+        for (int i = 0; i < candidates.Length; i++)
+        {
+            Renderer candidate = candidates[i];
+            if (!IsScreenBoundsRendererCandidate(
+                    candidate,
+                    playerHub,
+                    rendererRoot))
+            {
+                continue;
+            }
+
+            candidates[count++] = candidate;
+        }
+
+        for (int i = count; i < candidates.Length; i++)
+            candidates[i] = null;
+
+        _screenBoundsRenderers = candidates;
+        _screenBoundsRendererCount = count;
+    }
+
+    private bool IsScreenBoundsRendererCandidate(
+        Renderer candidate,
+        PlayerHub playerHub,
+        Transform rendererRoot)
+    {
+        if (candidate == null ||
+            playerHub == null ||
+            rendererRoot == null ||
+            (!(candidate is SkinnedMeshRenderer) &&
+             !(candidate is MeshRenderer)))
+        {
+            return false;
+        }
+
+        Transform candidateTransform = candidate.transform;
+        if (candidateTransform == null ||
+            (candidateTransform != rendererRoot &&
+             !candidateTransform.IsChildOf(rendererRoot)) ||
+            candidateTransform == transform ||
+            candidateTransform.IsChildOf(transform))
+        {
+            return false;
+        }
+
+        PlayerHub candidateHub =
+            candidate.GetComponentInParent<PlayerHub>(true);
+        return candidateHub == playerHub;
+    }
+
+    private void ResetScreenBoundsRendererState()
+    {
+        _screenBoundsRenderers = null;
+        _screenBoundsRendererCount = 0;
+        _screenBoundsRendererLookupHub = null;
+        _hasResolvedScreenBoundsRenderers = false;
+        _screenBoundsTargetInView =
+            presentationMode !=
+            PresentationMode.PrefabAttachedLocalOwnerScreenBounds;
+        _screenBoundsPlacement = ScreenBoundsPlacement.None;
+        _lastCharacterScreenRect = default;
+        _lastHudScreenRect = default;
+        _lastScreenBoundsOverlapArea = 0f;
+    }
+
+    private bool TryResolveMode6PlanarFacing(
+        out Vector3 planarFacing,
+        out Mode6FacingSource facingSource)
+    {
+        planarFacing = Vector3.zero;
+        facingSource = Mode6FacingSource.Unavailable;
+
+        if (IsBoundMode6FacingMotorUsable())
+        {
+            if (TryNormalizePlanarDirection(
+                    _boundMode6FacingMotor.DesiredFacingDirection,
+                    out planarFacing))
+            {
+                return StoreResolvedMode6Facing(
+                    planarFacing,
+                    Mode6FacingSource.DesiredFacingDirection,
+                    out facingSource);
+            }
+
+            if (TryNormalizePlanarDirection(
+                    _boundMode6FacingMotor.SmoothedMoveWorldDirection,
+                    out planarFacing))
+            {
+                return StoreResolvedMode6Facing(
+                    planarFacing,
+                    Mode6FacingSource.SmoothedMoveWorldDirection,
+                    out facingSource);
+            }
+        }
+
+        if (TryNormalizePlanarDirection(
+                _lastValidMode6PlanarFacing,
+                out planarFacing))
+        {
+            _currentMode6FacingSource = Mode6FacingSource.LastValidDirection;
+            facingSource = _currentMode6FacingSource;
+            return true;
+        }
+
+        if (_targetTransform != null &&
+            TryNormalizePlanarDirection(
+                _targetTransform.forward,
+                out planarFacing))
+        {
+            return StoreResolvedMode6Facing(
+                planarFacing,
+                Mode6FacingSource.TargetForward,
+                out facingSource);
+        }
+
+        Transform playerRoot =
+            _boundPlayerHub != null ? _boundPlayerHub.transform : null;
+        if (playerRoot != null &&
+            playerRoot != _targetTransform &&
+            TryNormalizePlanarDirection(
+                playerRoot.forward,
+                out planarFacing))
+        {
+            return StoreResolvedMode6Facing(
+                planarFacing,
+                Mode6FacingSource.PlayerRootForward,
+                out facingSource);
+        }
+
+        return false;
+    }
+
+    private bool StoreResolvedMode6Facing(
+        Vector3 planarFacing,
+        Mode6FacingSource source,
+        out Mode6FacingSource facingSource)
+    {
+        _lastValidMode6PlanarFacing = planarFacing;
+        _currentMode6FacingSource = source;
+        facingSource = source;
+        return true;
+    }
+
+    private bool IsBoundMode6FacingMotorUsable()
+    {
+        if (_boundMode6FacingMotor == null ||
+            !_boundMode6FacingMotor.isActiveAndEnabled ||
+            _boundPlayerHub == null)
+        {
+            return false;
+        }
+
+        Transform playerTransform = _boundPlayerHub.transform;
+        Transform motorTransform = _boundMode6FacingMotor.transform;
+        return motorTransform == playerTransform ||
+               (motorTransform.IsChildOf(playerTransform) &&
+                motorTransform.root == playerTransform.root);
+    }
+
+    private static bool TryNormalizePlanarDirection(
+        Vector3 candidate,
+        out Vector3 normalizedDirection)
+    {
+        candidate =
+            Vector3.ProjectOnPlane(candidate, Vector3.up);
+        normalizedDirection = Vector3.zero;
+        if (float.IsNaN(candidate.x) ||
+            float.IsInfinity(candidate.x) ||
+            float.IsNaN(candidate.z) ||
+            float.IsInfinity(candidate.z) ||
+            candidate.sqrMagnitude <= Mode6FacingDirectionSqrEpsilon)
+        {
+            return false;
+        }
+
+        normalizedDirection = candidate.normalized;
+        return true;
+    }
+
+    private Vector3 ClampWorldAnchorTargetPositionToScreen(Camera camera, Vector3 worldPosition)
+    {
+        if (!clampToScreen || camera == null)
+            return worldPosition;
+
+        Vector3 screenPosition = camera.WorldToScreenPoint(worldPosition);
+        if (screenPosition.z <= 0.001f)
+            return worldPosition;
+
+        Vector2 clampedScreenPosition = ClampScreenPosition(
+            new Vector2(screenPosition.x, screenPosition.y));
+        screenPosition.x = clampedScreenPosition.x;
+        screenPosition.y = clampedScreenPosition.y;
+        return camera.ScreenToWorldPoint(screenPosition);
     }
 
     private Vector3 GetStabilizedWorldAnchorTargetPosition(Camera camera)
@@ -1809,7 +3137,7 @@ public class CharacterFollowStaminaHUD : MonoBehaviour
 
     private bool IsWorldSpaceVisualMode()
     {
-        if (presentationMode == PresentationMode.WorldSpaceAnchor ||
+        if (IsWorldSpaceAnchorMode() ||
             presentationMode == PresentationMode.StabilizedWorldAnchor)
         {
             return true;
@@ -1996,6 +3324,15 @@ public class CharacterFollowStaminaHUD : MonoBehaviour
         RefreshVisibility();
     }
 
+    private void SetScreenBoundsTargetInView(bool inView)
+    {
+        if (_screenBoundsTargetInView == inView)
+            return;
+
+        _screenBoundsTargetInView = inView;
+        RefreshVisibility();
+    }
+
     private void RefreshVisibility()
     {
         if (IsPrefabAttachedMode() && _prefabAttachedHiddenForNonOwner)
@@ -2011,6 +3348,14 @@ public class CharacterFollowStaminaHUD : MonoBehaviour
         }
 
         if (presentationMode == PresentationMode.CharacterScreenAnchor && !_characterScreenTargetInView)
+        {
+            SetVisible(false);
+            return;
+        }
+
+        if (presentationMode ==
+                PresentationMode.PrefabAttachedLocalOwnerScreenBounds &&
+            !_screenBoundsTargetInView)
         {
             SetVisible(false);
             return;
@@ -2055,6 +3400,8 @@ public class CharacterFollowStaminaHUD : MonoBehaviour
         if (visible && !CanShowForPlayingAliveOwner())
             visible = false;
 
+        _isVisible = visible;
+
         if (canvasGroup != null)
         {
             canvasGroup.alpha = visible ? 1f : 0f;
@@ -2095,9 +3442,28 @@ public class CharacterFollowStaminaHUD : MonoBehaviour
 
         NetworkObject playerNetworkObject =
             _boundPlayerHub.NetworkObject;
+        if (playerNetworkObject == null)
+            return false;
 
-        return playerNetworkObject != null &&
-               _boundStatusModule.NetworkObject ==
+        if (presentationMode ==
+            PresentationMode.PrefabAttachedLocalOwnerScreenBounds)
+        {
+            NetworkManager networkManager =
+                NetworkManager.Singleton;
+            if (networkManager == null ||
+                !networkManager.IsListening ||
+                networkManager.LocalClient == null ||
+                networkManager.LocalClient.PlayerObject !=
+                    playerNetworkObject ||
+                !_boundStaminaModule.IsSpawned ||
+                _boundStaminaModule.NetworkObject !=
+                    playerNetworkObject)
+            {
+                return false;
+            }
+        }
+
+        return _boundStatusModule.NetworkObject ==
                playerNetworkObject &&
                _gameStateManager.GetState() ==
                GameStateManager.GameState.Playing &&
@@ -2159,7 +3525,7 @@ public class CharacterFollowStaminaHUD : MonoBehaviour
         if (_targetTransform == null)
             return;
 
-        if (presentationMode == PresentationMode.PrefabAttachedLocalOwner)
+        if (IsStaticPrefabAttachedMode())
         {
             LogPrefabAttached($"Prefab attached mode active. positionFollowDisabled={attachedDisablePositionFollow} rotationFollowDisabled={attachedDisableRotationFollow}");
             return;
@@ -2171,10 +3537,18 @@ public class CharacterFollowStaminaHUD : MonoBehaviour
             return;
         }
 
+        if (presentationMode ==
+            PresentationMode.PrefabAttachedLocalOwnerScreenBounds)
+        {
+            LogPrefabAttached(
+                $"Screen bounds mode active. renderers={_screenBoundsRendererCount}");
+            return;
+        }
+
         if (!followStaminaDebugLogs)
             return;
 
-        if (presentationMode == PresentationMode.WorldSpaceAnchor)
+        if (IsWorldSpaceAnchorMode())
         {
             Vector3 worldAnchorPosition = GetWorldAnchorTargetPosition();
             Log($"WorldSpaceAnchor bound. useTargetLocalOffset={useTargetLocalOffset} anchor={worldAnchorPosition}");
@@ -2282,6 +3656,157 @@ public class CharacterFollowStaminaHUD : MonoBehaviour
         _lastLoggedStaminaVisualRatio = ratio;
         _lastLoggedStaminaVisualFill = visualFillAmount;
         Debug.Log($"[CharacterFollowStaminaHUD] stamina ratio={ratio:0.###} visualFill={visualFillAmount:0.###}", this);
+    }
+
+    private void LogStaminaDiagnostic(
+        StaminaDiagnosticEvent diagnosticEvent,
+        PlayerHub playerHub,
+        PlayerStaminaModule staminaModule,
+        float previousStamina,
+        float currentStamina,
+        float previousMaxStamina,
+        float maxStamina,
+        float imageFillBefore = -1f,
+        float sliderValueBefore = -1f)
+    {
+        if (!followStaminaDebugLogs ||
+            (presentationMode !=
+                 PresentationMode.PrefabAttachedLocalOwnerWorldSpaceAnchor &&
+             presentationMode !=
+                 PresentationMode.PrefabAttachedLocalOwnerScreenBounds))
+        {
+            return;
+        }
+
+        Mode6FacingSource facingSource =
+            Mode6FacingSource.Unavailable;
+        if (presentationMode ==
+            PresentationMode.PrefabAttachedLocalOwnerWorldSpaceAnchor)
+        {
+            TryResolveMode6PlanarFacing(
+                out _,
+                out facingSource);
+        }
+
+        bool isOwner = playerHub != null && playerHub.IsOwner;
+        ulong ownerClientId =
+            playerHub != null ? playerHub.OwnerClientId : ulong.MaxValue;
+        float normalizedStamina =
+            CalculateStaminaRatio(currentStamina, maxStamina);
+        float imageFill =
+            staminaFillImage != null ? staminaFillImage.fillAmount : -1f;
+        float sliderValue =
+            staminaSlider != null ? staminaSlider.value : -1f;
+
+        if (_hasLoggedStaminaDiagnostic &&
+            _lastStaminaDiagnosticEvent == diagnosticEvent &&
+            _lastDiagnosticPlayerHub == playerHub &&
+            _lastDiagnosticStaminaModule == staminaModule &&
+            _lastDiagnosticIsOwner == isOwner &&
+            _lastDiagnosticVisible == _isVisible &&
+            _lastDiagnosticOwnerClientId == ownerClientId &&
+            _lastDiagnosticFacingSource == facingSource &&
+            Mathf.Approximately(
+                _lastDiagnosticPreviousStamina,
+                previousStamina) &&
+            Mathf.Approximately(
+                _lastDiagnosticCurrentStamina,
+                currentStamina) &&
+            Mathf.Approximately(
+                _lastDiagnosticPreviousMaxStamina,
+                previousMaxStamina) &&
+            Mathf.Approximately(
+                _lastDiagnosticMaxStamina,
+                maxStamina) &&
+            Mathf.Approximately(
+                _lastDiagnosticImageFill,
+                imageFill) &&
+            Mathf.Approximately(
+                _lastDiagnosticSliderValue,
+                sliderValue) &&
+            Mathf.Approximately(
+                _lastDiagnosticImageFillBefore,
+                imageFillBefore) &&
+            Mathf.Approximately(
+                _lastDiagnosticSliderValueBefore,
+                sliderValueBefore))
+        {
+            return;
+        }
+
+        _hasLoggedStaminaDiagnostic = true;
+        _lastStaminaDiagnosticEvent = diagnosticEvent;
+        _lastDiagnosticPlayerHub = playerHub;
+        _lastDiagnosticStaminaModule = staminaModule;
+        _lastDiagnosticIsOwner = isOwner;
+        _lastDiagnosticVisible = _isVisible;
+        _lastDiagnosticOwnerClientId = ownerClientId;
+        _lastDiagnosticFacingSource = facingSource;
+        _lastDiagnosticPreviousStamina = previousStamina;
+        _lastDiagnosticCurrentStamina = currentStamina;
+        _lastDiagnosticPreviousMaxStamina = previousMaxStamina;
+        _lastDiagnosticMaxStamina = maxStamina;
+        _lastDiagnosticImageFill = imageFill;
+        _lastDiagnosticSliderValue = sliderValue;
+        _lastDiagnosticImageFillBefore =
+            imageFillBefore;
+        _lastDiagnosticSliderValueBefore =
+            sliderValueBefore;
+
+        string ownerClientIdText =
+            playerHub != null ? ownerClientId.ToString() : "<unbound>";
+        string modulePath = GetTransformPath(
+            staminaModule != null ? staminaModule.transform : null);
+        string imageFillText =
+            staminaFillImage != null
+                ? imageFill.ToString("0.###")
+                : "<null>";
+        string sliderValueText =
+            staminaSlider != null
+                ? sliderValue.ToString("0.###")
+                : "<null>";
+        string imageFillBeforeText =
+            staminaFillImage != null
+                ? imageFillBefore.ToString("0.###")
+                : "<null>";
+        string sliderValueBeforeText =
+            staminaSlider != null
+                ? sliderValueBefore.ToString("0.###")
+                : "<null>";
+        string characterRectText =
+            FormatDiagnosticRect(
+                _lastCharacterScreenRect);
+        string hudRectText =
+            FormatDiagnosticRect(
+                _lastHudScreenRect);
+
+        Debug.Log(
+            $"[CharacterFollowStaminaHUD/StaminaDiagnostic] event={diagnosticEvent} mode={presentationMode} IsOwner={isOwner} OwnerClientId={ownerClientIdText} modulePath={modulePath} previousStamina={previousStamina:0.###} currentStamina={currentStamina:0.###} previousMaxStamina={previousMaxStamina:0.###} maxStamina={maxStamina:0.###} normalizedStamina={normalizedStamina:0.###} imageFillBefore={imageFillBeforeText} imageFillAfter={imageFillText} sliderBefore={sliderValueBeforeText} sliderAfter={sliderValueText} visible={_isVisible} characterRect={characterRectText} hudRect={hudRectText} overlapArea={_lastScreenBoundsOverlapArea:0.###} placement={_screenBoundsPlacement} facingSource={facingSource}",
+            this);
+    }
+
+    private static string FormatDiagnosticRect(
+        Rect value)
+    {
+        return
+            $"({value.x:0.#},{value.y:0.#}," +
+            $"{value.width:0.#},{value.height:0.#})";
+    }
+
+    private static string GetTransformPath(Transform target)
+    {
+        if (target == null)
+            return "<null>";
+
+        string path = target.name;
+        Transform parent = target.parent;
+        while (parent != null)
+        {
+            path = parent.name + "/" + path;
+            parent = parent.parent;
+        }
+
+        return path;
     }
 
     private void Log(string message)
