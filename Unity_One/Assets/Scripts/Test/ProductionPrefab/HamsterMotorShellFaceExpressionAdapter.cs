@@ -1,8 +1,12 @@
+using Unity.Netcode;
 using UnityEngine;
 
 public sealed class HamsterMotorShellFaceExpressionAdapter : MonoBehaviour
 {
     private const string TargetRootName = "Hamster_JointFreeMotorShell_MainScenes";
+    private const int DefaultNetworkFaceExpressionIndex = 0;
+    private const int MaximumNetworkFaceExpressionIndex = 4;
+    private const float GameStateResolveRetryInterval = 0.25f;
 
     [Header("References")]
     [SerializeField] private FaceExpressionController faceController;
@@ -57,14 +61,32 @@ public sealed class HamsterMotorShellFaceExpressionAdapter : MonoBehaviour
     private float _nextAttackFaceReapplyTime;
     private float _normalReturnTime = -1f;
     private int _currentExpressionIndex = int.MinValue;
+    private GameStateManager _gameStateManager;
+    private float _nextGameStateResolveTime;
+    private bool _isNonAuthoritativeWriterSuppressed;
+    private bool _isNetworkGameplayPhaseSuppressed;
 
     private void OnEnable()
     {
         if (!IsTargetRoot())
             return;
 
+        if (!CanWriteFaceInCurrentNetworkRole())
+        {
+            SuppressNonAuthoritativeWriter();
+            return;
+        }
+
         CacheReferences();
         SubscribeCombatAdapter();
+        _isNonAuthoritativeWriterSuppressed = false;
+        if (!IsGameplayFacePhaseActive())
+        {
+            EnterNetworkGameplayPhaseSuppression("OnEnable");
+            return;
+        }
+
+        ExitNetworkGameplayPhaseSuppression();
         _hasRecoveryState = false;
         ApplyNormal("OnEnable");
     }
@@ -74,14 +96,34 @@ public sealed class HamsterMotorShellFaceExpressionAdapter : MonoBehaviour
         if (!IsTargetRoot())
             return;
 
+        if (!CanWriteFaceInCurrentNetworkRole())
+        {
+            SuppressNonAuthoritativeWriter();
+            return;
+        }
+
         CacheReferences();
         SubscribeCombatAdapter();
+        _isNonAuthoritativeWriterSuppressed = false;
+        if (!IsGameplayFacePhaseActive())
+        {
+            EnterNetworkGameplayPhaseSuppression("Start");
+            return;
+        }
+
+        ExitNetworkGameplayPhaseSuppression();
         TickRecoveryState(true);
     }
 
     private void OnDisable()
     {
         UnsubscribeCombatAdapter();
+        ClearTransientExpressionState();
+        _currentExpressionIndex = int.MinValue;
+        _gameStateManager = null;
+        _nextGameStateResolveTime = 0f;
+        _isNonAuthoritativeWriterSuppressed = false;
+        _isNetworkGameplayPhaseSuppressed = false;
     }
 
     private void Update()
@@ -89,8 +131,22 @@ public sealed class HamsterMotorShellFaceExpressionAdapter : MonoBehaviour
         if (!IsTargetRoot())
             return;
 
+        if (!CanWriteFaceInCurrentNetworkRole())
+        {
+            SuppressNonAuthoritativeWriter();
+            return;
+        }
+
         CacheReferences();
         SubscribeCombatAdapter();
+        _isNonAuthoritativeWriterSuppressed = false;
+        if (!IsGameplayFacePhaseActive())
+        {
+            EnterNetworkGameplayPhaseSuppression("Update");
+            return;
+        }
+
+        ExitNetworkGameplayPhaseSuppression();
         TickRecoveryState(false);
     }
 
@@ -99,6 +155,19 @@ public sealed class HamsterMotorShellFaceExpressionAdapter : MonoBehaviour
         if (!IsTargetRoot())
             return;
 
+        if (!CanWriteFaceInCurrentNetworkRole())
+        {
+            SuppressNonAuthoritativeWriter();
+            return;
+        }
+
+        if (!IsGameplayFacePhaseActive())
+        {
+            EnterNetworkGameplayPhaseSuppression("LateUpdate");
+            return;
+        }
+
+        ExitNetworkGameplayPhaseSuppression();
         TickAttackFaceHold(Time.deltaTime);
         TickTimedNormalReturn();
     }
@@ -148,8 +217,13 @@ public sealed class HamsterMotorShellFaceExpressionAdapter : MonoBehaviour
 
     private void HandleAttackStarted()
     {
-        if (!IsTargetRoot() || IsRecoveryExpressionActive())
+        if (!IsTargetRoot() ||
+            !CanWriteFaceInCurrentNetworkRole() ||
+            !IsGameplayFacePhaseActive() ||
+            IsRecoveryExpressionActive())
+        {
             return;
+        }
 
         bool hasHeldItem = HasHeldItemForAttack();
         bool shouldOverride = hasHeldItem ? overrideHeldItemAttackExpression : overrideUnarmedAttackExpression;
@@ -288,6 +362,24 @@ public sealed class HamsterMotorShellFaceExpressionAdapter : MonoBehaviour
 
     private void ApplyExpression(int expressionIndex, string reason, bool force)
     {
+        if (!CanWriteFaceInCurrentNetworkRole())
+            return;
+
+        if (IsListeningNetworkSession())
+        {
+            if (expressionIndex < DefaultNetworkFaceExpressionIndex ||
+                expressionIndex > MaximumNetworkFaceExpressionIndex)
+            {
+                return;
+            }
+
+            if (!IsGameplayFacePhaseActive() &&
+                expressionIndex != DefaultNetworkFaceExpressionIndex)
+            {
+                return;
+            }
+        }
+
         if (faceController == null)
             return;
 
@@ -298,6 +390,87 @@ public sealed class HamsterMotorShellFaceExpressionAdapter : MonoBehaviour
         _currentExpressionIndex = safeIndex;
         faceController.SetFaceIndex(safeIndex);
         Log($"face={safeIndex} reason={reason}");
+    }
+
+    private static bool CanWriteFaceInCurrentNetworkRole()
+    {
+        NetworkManager networkManager = NetworkManager.Singleton;
+        return networkManager == null ||
+               !networkManager.IsListening ||
+               networkManager.IsServer;
+    }
+
+    private static bool IsListeningNetworkSession()
+    {
+        NetworkManager networkManager = NetworkManager.Singleton;
+        return networkManager != null && networkManager.IsListening;
+    }
+
+    private bool IsGameplayFacePhaseActive()
+    {
+        NetworkManager networkManager = NetworkManager.Singleton;
+        if (networkManager == null || !networkManager.IsListening)
+            return true;
+
+        if (!networkManager.IsServer)
+            return false;
+
+        GameStateManager manager = ResolveGameStateManager();
+        return manager != null &&
+               manager.GetState() == GameStateManager.GameState.Playing;
+    }
+
+    private GameStateManager ResolveGameStateManager()
+    {
+        if (_gameStateManager != null)
+            return _gameStateManager;
+
+        if (Time.unscaledTime < _nextGameStateResolveTime)
+            return null;
+
+        _nextGameStateResolveTime =
+            Time.unscaledTime + GameStateResolveRetryInterval;
+        _gameStateManager = FindFirstObjectByType<GameStateManager>();
+        return _gameStateManager;
+    }
+
+    private void SuppressNonAuthoritativeWriter()
+    {
+        if (_isNonAuthoritativeWriterSuppressed)
+            return;
+
+        UnsubscribeCombatAdapter();
+        ClearTransientExpressionState();
+        _currentExpressionIndex = int.MinValue;
+        _isNonAuthoritativeWriterSuppressed = true;
+        _isNetworkGameplayPhaseSuppressed = false;
+    }
+
+    private void EnterNetworkGameplayPhaseSuppression(string reason)
+    {
+        if (_isNetworkGameplayPhaseSuppressed)
+            return;
+
+        ClearTransientExpressionState();
+        _hasRecoveryState = false;
+        ApplyNormal($"GameplayPhaseLocked:{reason}");
+        _isNetworkGameplayPhaseSuppressed = true;
+    }
+
+    private void ExitNetworkGameplayPhaseSuppression()
+    {
+        if (!_isNetworkGameplayPhaseSuppressed)
+            return;
+
+        _isNetworkGameplayPhaseSuppressed = false;
+        _hasRecoveryState = false;
+    }
+
+    private void ClearTransientExpressionState()
+    {
+        ClearAttackFaceHold();
+        _normalReturnTime = -1f;
+        _hasRecoveryState = false;
     }
 
     private bool IsTargetRoot()
