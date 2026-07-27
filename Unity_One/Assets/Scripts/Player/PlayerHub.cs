@@ -330,6 +330,7 @@ public class PlayerHub : NetworkBehaviour
     private readonly List<Collider> _postItBodyColliderBuffer = new List<Collider>(16);
     private int _postItPeelEvaluatedFrame = -1;
     private bool _postItPeelConsumedInEvaluatedFrame;
+    private int _characterGrabReservedInteractFrame = -1;
     private float _nextPostItPeelServerTime;
     private PostItPeelHoldState _postItPeelHoldState;
     private ulong _postItPeelTrackedTargetNetworkObjectId = ulong.MaxValue;
@@ -952,6 +953,7 @@ public class PlayerHub : NetworkBehaviour
         NeutralizeRoutedGameplayInput();
         _postItPeelEvaluatedFrame = -1;
         _postItPeelConsumedInEvaluatedFrame = false;
+        _characterGrabReservedInteractFrame = -1;
         CancelPostItPeelHold();
     }
 
@@ -1169,6 +1171,7 @@ public class PlayerHub : NetworkBehaviour
                 }
                 else if (interactModule.TryFindCharacterGrabTarget(out PlayerStatusModule targetStatus))
                 {
+                    _characterGrabReservedInteractFrame = Time.frameCount;
                     RequestCharacterGrab(targetStatus);
                 }
             }
@@ -1235,7 +1238,13 @@ public class PlayerHub : NetworkBehaviour
 
     public bool TryConsumePostItPeelInteractThisFrame()
     {
+        if (interactModule != null && interactModule.IsCharacterGrabBusy)
+            return true;
+
         int currentFrame = Time.frameCount;
+        if (_characterGrabReservedInteractFrame == currentFrame)
+            return true;
+
         if (_postItPeelEvaluatedFrame == currentFrame)
         {
             return _postItPeelConsumedInEvaluatedFrame;
@@ -1461,6 +1470,7 @@ public class PlayerHub : NetworkBehaviour
 
     private void ResetPostItPeelHoldState()
     {
+        _characterGrabReservedInteractFrame = -1;
         _postItPeelHoldState = PostItPeelHoldState.Idle;
         _postItPeelTrackedTargetNetworkObjectId = ulong.MaxValue;
         _postItPeelTrackedPostItId = -1;
