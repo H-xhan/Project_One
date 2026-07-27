@@ -1,4 +1,5 @@
 using System;
+using System.Collections;
 using System.Collections.Generic;
 using Unity.Netcode;
 using UnityEngine;
@@ -40,6 +41,8 @@ public sealed class CharacterPortraitLiveRenderer : MonoBehaviour
         Shader.PropertyToID("_BaseMap");
     private static readonly int MainTex =
         Shader.PropertyToID("_MainTex");
+    private static readonly WaitForEndOfFrame EndOfFrame =
+        new WaitForEndOfFrame();
 
     private struct PosePair
     {
@@ -86,6 +89,9 @@ public sealed class CharacterPortraitLiveRenderer : MonoBehaviour
     private Transform _motionRoot;
     private Camera _portraitCamera;
     private RenderTexture _outputTexture;
+    private UniversalRenderPipeline.SingleCameraRequest
+        _singleCameraRequest;
+    private Coroutine _renderLoop;
     private PosePair[] _posePairs = Array.Empty<PosePair>();
     private RendererPair[] _rendererPairs =
         Array.Empty<RendererPair>();
@@ -121,17 +127,21 @@ public sealed class CharacterPortraitLiveRenderer : MonoBehaviour
     public int SourceRendererCount => _rendererPairs.Length;
     public int MappedTransformCount => _posePairs.Length;
     public bool IsRenderingActive =>
-        _portraitCamera != null && _portraitCamera.enabled;
+        isActiveAndEnabled &&
+        _renderingRequested &&
+        IsReady;
     public string LastFailureReason => _lastFailureReason;
 
     private void OnEnable()
     {
         SubscribeRenderCallback();
+        StartRenderLoop();
         ApplyRenderingState();
     }
 
     private void OnDisable()
     {
+        StopRenderLoop();
         UnsubscribeRenderCallback();
 
         if (_portraitCamera != null)
@@ -142,6 +152,7 @@ public sealed class CharacterPortraitLiveRenderer : MonoBehaviour
     {
         Unbind();
         DestroyRenderResources();
+        StopRenderLoop();
         UnsubscribeRenderCallback();
     }
 
@@ -510,6 +521,13 @@ public sealed class CharacterPortraitLiveRenderer : MonoBehaviour
         }
 
         _portraitCamera.targetTexture = _outputTexture;
+        if (_singleCameraRequest == null)
+        {
+            _singleCameraRequest =
+                new UniversalRenderPipeline.SingleCameraRequest();
+        }
+
+        _singleCameraRequest.destination = _outputTexture;
         return true;
     }
 
@@ -895,6 +913,70 @@ public sealed class CharacterPortraitLiveRenderer : MonoBehaviour
         _renderCallbackSubscribed = false;
     }
 
+    private void StartRenderLoop()
+    {
+        if (_renderLoop == null && isActiveAndEnabled)
+            _renderLoop = StartCoroutine(RenderAtEndOfFrame());
+    }
+
+    private void StopRenderLoop()
+    {
+        if (_renderLoop == null)
+            return;
+
+        StopCoroutine(_renderLoop);
+        _renderLoop = null;
+    }
+
+    private IEnumerator RenderAtEndOfFrame()
+    {
+        while (true)
+        {
+            yield return EndOfFrame;
+
+            if (!IsRenderingActive)
+                continue;
+
+            RenderPortraitFrame();
+        }
+    }
+
+    private void RenderPortraitFrame()
+    {
+        _lastPoseCopyFrame = Time.frameCount;
+        CopyFinalSourcePose();
+
+        if (!IsReady)
+            return;
+
+        if (RenderPipelineManager.currentPipeline == null)
+        {
+            _portraitCamera.Render();
+            return;
+        }
+
+        _singleCameraRequest.destination = _outputTexture;
+        if (!RenderPipeline.SupportsRenderRequest(
+                _portraitCamera,
+                _singleCameraRequest))
+        {
+            _lastFailureReason =
+                "Active Render Pipeline does not support a single-camera " +
+                "portrait render request.";
+            _renderingRequested = false;
+            ApplyRenderingState();
+            Debug.LogError(
+                $"[CharacterPortraitLiveRenderer] " +
+                $"{_lastFailureReason}",
+                this);
+            return;
+        }
+
+        RenderPipeline.SubmitRenderRequest(
+            _portraitCamera,
+            _singleCameraRequest);
+    }
+
     private void HandleBeginCameraRendering(
         ScriptableRenderContext context,
         Camera renderingCamera)
@@ -1169,7 +1251,7 @@ public sealed class CharacterPortraitLiveRenderer : MonoBehaviour
         }
 
         if (_portraitCamera != null)
-            _portraitCamera.enabled = shouldRender;
+            _portraitCamera.enabled = false;
     }
 
     private bool FailBind(string failureReason)
