@@ -198,7 +198,7 @@ MonoBehaviour:
   locomotionModule: {fileID: 0}
   animModule: {fileID: 0}
   combatModule: {fileID: 0}
-  interactModule: {fileID: 0}
+  interactModule: {fileID: 6100000000000000114}
   statusModule: {fileID: 3943672698140307548}
   coinWalletModule: {fileID: 6100000000000000005}
   staminaModule: {fileID: 6100000000000000006}
@@ -801,7 +801,7 @@ MonoBehaviour:
   m_EditorClassIdentifier: 
   inventory: {fileID: 6100000000000000110}
   playerHub: {fileID: 6100000000000000002}
-  interactModule: {fileID: 0}
+  interactModule: {fileID: 6100000000000000114}
   statusModule: {fileID: 3943672698140307548}
   itemAdapter: {fileID: 6100000000000000101}
   ragdollGrabber: {fileID: 5469712445494703521}
@@ -2632,6 +2632,7 @@ GameObject:
   - component: {fileID: 6100000000000000005}
   - component: {fileID: 6100000000000000006}
   - component: {fileID: 3943672698140307548}
+  - component: {fileID: 6100000000000000114}
   m_Layer: 6
   m_Name: Module
   m_TagString: Player
@@ -2808,6 +2809,73 @@ MonoBehaviour:
   enableDebugLogs: 0
   enableTemporaryControlLockDebugLogs: 1
   enableStandUpControlLockDebugLogs: 0
+--- !u!114 &6100000000000000114
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 6100000000000000003}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 6b98e61678530b64a91fbdbb7ad9794b, type: 3}
+  m_Name:
+  m_EditorClassIdentifier:
+  ShowTopMostFoldoutHeaderGroup: 1
+  ownerCamera: {fileID: 6100000000000000009}
+  pickupDistance: 6
+  pickupMask:
+    serializedVersion: 2
+    m_Bits: 0
+  pickupRayRadius: 0.2
+  pickupFallbackOriginHeight: 1
+  pickupFallbackForwardOffset: 0.35
+  rightHandBone: {fileID: 0}
+  leftHandBone: {fileID: 0}
+  defaultHeldLocalPosition: {x: 0, y: 0, z: 0}
+  defaultHeldLocalEulerAngles: {x: 0, y: 0, z: 0}
+  defaultHeldLocalScale: {x: 1, y: 1, z: 1}
+  preferLocalHeldVisual: 1
+  fallbackToWorldAttachWhenNoVisual: 1
+  disableCharacterControllerWhilePickingUp: 1
+  pickupPendingTime: 1.5
+  throwForwardForce: 5
+  throwUpForce: 2
+  dropHandForwardOffset: 0.15
+  dropHandUpOffset: 0.05
+  characterGrabOnlyMode: 1
+  enableCharacterGrab: 1
+  characterGrabDistance: 2
+  characterGrabRadius: 0.45
+  characterGrabMask:
+    serializedVersion: 2
+    m_Bits: 4294967295
+  grabberMoveSpeedMultiplier: 0.65
+  grabbedMoveSpeedMultiplier: 0.2
+  liftChargeDuration: 1.2
+  maxCharacterGrabDuration: 5
+  escapeTapRequiredCount: 6
+  escapeTapMinInterval: 0.1
+  escapeRegrabImmunitySeconds: 0.75
+  characterGrabDebugLogs: 0
+  enableCharacterCarryFollow: 1
+  characterCarryForwardOffset: 0.75
+  characterCarryUpOffset: 0.5
+  characterCarryRightOffset: 0
+  characterCarryFollowLerp: 18
+  characterCarryMaxDistance: 4
+  characterCarryDisableTargetController: 1
+  characterCarrySetTargetRigidbodyKinematic: 1
+  characterCarryFaceGrabberForward: 1
+  characterCarryGroundReleaseYOffset: 0.05
+  enableCharacterThrow: 1
+  characterThrowForwardImpulse: 14
+  characterThrowUpImpulse: 3
+  characterThrowReleaseForwardOffset: 0.75
+  characterThrowReleaseUpOffset: 0.35
+  characterThrowRegrabImmunitySeconds: 0.75
+  characterThrowUseCarryAnchorDirection: 1
+  enableDebugLogs: 0
 --- !u!1 &6100000000000000007
 GameObject:
   m_ObjectHideFlags: 0
