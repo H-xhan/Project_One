@@ -80,6 +80,9 @@ public class PlayerInteractModule : NetworkBehaviour
     [SerializeField] private float dropHandUpOffset = 0.05f;
 
     [Header("Character Grab")]
+    [Tooltip("Production MotorShell에서 legacy item route를 끄고 Character Grab/Lift/Throw만 사용합니다.")]
+    [SerializeField] private bool characterGrabOnlyMode = false;
+
     [Tooltip("빈손 상태에서 다른 캐릭터를 잡을 수 있게 할지 여부입니다.")]
     [SerializeField] private bool enableCharacterGrab = true;
 
@@ -184,6 +187,10 @@ public class PlayerInteractModule : NetworkBehaviour
     private GameStateManager _gameplayGateStateManager;
     private PlayerStatusModule _gameplayGateOwnerStatus;
     private NetworkObject _gameplayGateOwnerRoot;
+    private PostItRoundManager _postItRoundManager;
+    private PlayerPostItInventory _postItInventory;
+    private HamsterMotorShellRagdollRecoveryAdapter _motorShellRecoveryAdapter;
+    private HamsterMotorShellItemAdapter _motorShellItemAdapter;
     private float _nextGameplayGateStateResolveTime = float.NegativeInfinity;
     private float _nextGameplayGateStatusResolveTime = float.NegativeInfinity;
     private bool _pendingAttach;
@@ -262,9 +269,12 @@ public class PlayerInteractModule : NetworkBehaviour
         AutoFindRefs();
         _heldItem.OnValueChanged += OnHeldItemChanged;
 
-        ResolveHeldCache();
-        CacheHeldMeta();
-        RefreshHeldPresentation();
+        if (!characterGrabOnlyMode)
+        {
+            ResolveHeldCache();
+            CacheHeldMeta();
+            RefreshHeldPresentation();
+        }
     }
 
     public override void OnNetworkDespawn()
@@ -320,6 +330,14 @@ public class PlayerInteractModule : NetworkBehaviour
 
     private void OnHeldItemChanged(NetworkObjectReference previousValue, NetworkObjectReference newValue)
     {
+        if (characterGrabOnlyMode)
+        {
+            ClearHeldRuntimeCache();
+            ResetHeldMetaCache();
+            DestroyLocalHeldVisual();
+            return;
+        }
+
         bool hadHeldItem = TryGetNetworkObjectSafe(previousValue, out NetworkObject previousItem) && previousItem != null;
 
         RestorePreviousWorldItemVisual(previousValue);
@@ -348,6 +366,9 @@ public class PlayerInteractModule : NetworkBehaviour
         if (IsServer)
             ServerTickCharacterGrab();
 
+        if (characterGrabOnlyMode)
+            return;
+
         if (_pendingAttach && !_attached && ShouldMaintainWorldAttachFallback())
         {
             if (Time.time - _pendingStartTime >= pickupPendingTime || TryApplyHeldWorldPose(false))
@@ -357,6 +378,9 @@ public class PlayerInteractModule : NetworkBehaviour
 
     private void LateUpdate()
     {
+        if (characterGrabOnlyMode)
+            return;
+
         if (_hasExternalHeldItemPoseOverride)
             ForceRefreshHeldItemPoseForExternalOverride();
 
@@ -366,12 +390,18 @@ public class PlayerInteractModule : NetworkBehaviour
 
     public bool HasHeldItem()
     {
+        if (characterGrabOnlyMode)
+            return false;
+
         return ResolveHeldCache();
     }
 
     public bool TryGetHeldItemId(out int itemId)
     {
         itemId = 0;
+
+        if (characterGrabOnlyMode)
+            return false;
 
         if (!ResolveHeldCache())
             return false;
@@ -403,6 +433,9 @@ public class PlayerInteractModule : NetworkBehaviour
 
     public WeaponItemDataSO GetHeldWeaponData()
     {
+        if (characterGrabOnlyMode)
+            return null;
+
         if (!ResolveHeldCache())
         {
             ClearHeldRuntimeCache();
@@ -424,6 +457,9 @@ public class PlayerInteractModule : NetworkBehaviour
 
     public void SetExternalHeldItemPoseOverride(Vector3 eulerOffset, string source = null)
     {
+        if (characterGrabOnlyMode)
+            return;
+
         _hasExternalHeldItemPoseOverride = true;
         _externalHeldItemPoseEulerOffset = eulerOffset;
         _externalHeldItemPoseSource = source;
@@ -435,6 +471,9 @@ public class PlayerInteractModule : NetworkBehaviour
 
     public void ClearExternalHeldItemPoseOverride(string source = null)
     {
+        if (characterGrabOnlyMode)
+            return;
+
         ClearExternalHeldItemPoseOverrideInternal(source, true);
     }
 
@@ -442,6 +481,9 @@ public class PlayerInteractModule : NetworkBehaviour
 
     public Transform GetHeldItemVisualTransform()
     {
+        if (characterGrabOnlyMode)
+            return null;
+
         if (_localHeldVisualInstance != null)
             return _localHeldVisualInstance.transform;
 
@@ -463,10 +505,13 @@ public class PlayerInteractModule : NetworkBehaviour
     {
         target = default;
 
+        if (characterGrabOnlyMode)
+            return false;
+
         if (!CanProcessLocalOwnerGameplayRequest()) return false;
         if (!_ownerMode) return false;
         if (ownerCamera == null) return false;
-        if (HasHeldItem()) return false;
+        if (HasHeldItemBlockingCharacterGrab()) return false;
         if (!CanPickupItemBecauseOfCharacterGrab()) return false;
 
         Ray cameraRay = ownerCamera.ViewportPointToRay(new Vector3(0.5f, 0.5f, 0f));
@@ -511,6 +556,9 @@ public class PlayerInteractModule : NetworkBehaviour
 
     public bool ServerTryPickup(NetworkObjectReference target)
     {
+        if (characterGrabOnlyMode)
+            return false;
+
         if (!CanProcessServerGameplayMutation()) return false;
         if (!CanPickupItemBecauseOfCharacterGrab()) return false;
         if (ResolveHeldCache()) return false;
@@ -548,6 +596,9 @@ public class PlayerInteractModule : NetworkBehaviour
 
     public void ServerTryDrop()
     {
+        if (characterGrabOnlyMode)
+            return;
+
         if (!CanProcessServerGameplayMutation()) return;
         if (!ResolveHeldCache()) return;
 
@@ -645,7 +696,7 @@ public class PlayerInteractModule : NetworkBehaviour
         if (!_ownerMode) return false;
         if (!enableCharacterGrab) return false;
         if (ownerCamera == null) return false;
-        if (HasHeldItem()) return false;
+        if (HasHeldItemBlockingCharacterGrab()) return false;
         if (IsCharacterGrabBusy) return false;
 
         Ray cameraRay = ownerCamera.ViewportPointToRay(new Vector3(0.5f, 0.5f, 0f));
@@ -896,6 +947,20 @@ public class PlayerInteractModule : NetworkBehaviour
             return false;
         }
 
+        if (characterGrabOnlyMode &&
+            (!ServerIsCurrentPlayingParticipant() ||
+             !targetInteract.ServerIsCurrentPlayingParticipant() ||
+             IsMotorShellRecoveryBlockingCharacterGrab() ||
+             targetInteract.IsMotorShellRecoveryBlockingCharacterGrab() ||
+             HasHeldItemBlockingCharacterGrab() ||
+             targetInteract.HasHeldItemBlockingCharacterGrab()))
+        {
+            CharacterGrabLog(
+                $"[PlayerInteract] Character throw failed reason=ProductionStateInvalid");
+            ServerReleaseCharacterGrab("ThrowProductionStateInvalid");
+            return false;
+        }
+
         Vector3 throwDirection = GetCharacterThrowDirection(targetRoot);
         Vector3 releasePosition = GetCharacterThrowReleasePosition(throwDirection);
         Quaternion releaseRotation = Quaternion.LookRotation(throwDirection, Vector3.up);
@@ -931,11 +996,32 @@ public class PlayerInteractModule : NetworkBehaviour
             return;
         }
 
+        if (characterGrabOnlyMode &&
+            (!ServerIsCurrentPlayingParticipant() ||
+             IsMotorShellRecoveryBlockingCharacterGrab() ||
+             HasHeldItemBlockingCharacterGrab()))
+        {
+            ServerReleaseCharacterGrab("production-state-invalid");
+            return;
+        }
+
         if (IsGrabbingCharacter)
         {
             if (!ResolveGrabbedCharacterRefs() || !IsCharacterGrabLinkValidAsGrabber())
             {
                 ServerReleaseCharacterGrab("invalid-target");
+                return;
+            }
+
+            if (characterGrabOnlyMode &&
+                (!_grabbedCharacterInteract
+                    .ServerIsCurrentPlayingParticipant() ||
+                  _grabbedCharacterInteract
+                    .IsMotorShellRecoveryBlockingCharacterGrab() ||
+                 _grabbedCharacterInteract
+                    .HasHeldItemBlockingCharacterGrab()))
+            {
+                ServerReleaseCharacterGrab("target-production-state-invalid");
                 return;
             }
 
@@ -1024,7 +1110,7 @@ public class PlayerInteractModule : NetworkBehaviour
         if (!enableCharacterGrab)
             return false;
 
-        if (HasHeldItem())
+        if (HasHeldItemBlockingCharacterGrab())
             return false;
 
         if (IsCharacterGrabBusy)
@@ -1048,7 +1134,90 @@ public class PlayerInteractModule : NetworkBehaviour
         if (selfNetObj == targetNetObj)
             return false;
 
+        if (characterGrabOnlyMode &&
+            (!ServerIsCurrentPlayingParticipant() ||
+             !targetInteract.ServerIsCurrentPlayingParticipant() ||
+             IsMotorShellRecoveryBlockingCharacterGrab() ||
+             targetInteract.IsMotorShellRecoveryBlockingCharacterGrab() ||
+             targetInteract.HasHeldItemBlockingCharacterGrab()))
+        {
+            return false;
+        }
+
         return IsCharacterGrabTargetInServerRange(targetStatus);
+    }
+
+    private bool ServerIsCurrentPlayingParticipant()
+    {
+        if (!characterGrabOnlyMode)
+            return true;
+
+        if (!IsServer || !IsSpawned)
+            return false;
+
+        if (_postItRoundManager == null)
+            _postItRoundManager = FindFirstObjectByType<PostItRoundManager>();
+
+        if (_postItRoundManager == null)
+            return false;
+
+        NetworkObject ownerRoot = ResolveRootNetworkObject(this);
+        if (ownerRoot == null || !ownerRoot.IsSpawned)
+            return false;
+
+        if (_postItInventory == null ||
+            _postItInventory.NetworkObject != ownerRoot)
+        {
+            _postItInventory =
+                ownerRoot.GetComponentInChildren<PlayerPostItInventory>(true);
+        }
+
+        return _postItInventory != null &&
+               _postItInventory.NetworkObject == ownerRoot &&
+               _postItRoundManager.ServerIsCurrentPlayingParticipant(
+                   _postItInventory);
+    }
+
+    private bool IsMotorShellRecoveryBlockingCharacterGrab()
+    {
+        if (!characterGrabOnlyMode)
+            return false;
+
+        NetworkObject ownerRoot = ResolveRootNetworkObject(this);
+        if (ownerRoot == null)
+            return true;
+
+        if (_motorShellRecoveryAdapter == null ||
+            _motorShellRecoveryAdapter.transform.root != ownerRoot.transform)
+        {
+            _motorShellRecoveryAdapter =
+                ownerRoot.GetComponentInChildren<
+                    HamsterMotorShellRagdollRecoveryAdapter>(true);
+        }
+
+        return _motorShellRecoveryAdapter == null ||
+               _motorShellRecoveryAdapter.IsKnockedOrRecovering;
+    }
+
+    private bool HasHeldItemBlockingCharacterGrab()
+    {
+        if (!characterGrabOnlyMode)
+            return HasHeldItem();
+
+        NetworkObject ownerRoot = ResolveRootNetworkObject(this);
+        if (ownerRoot == null)
+            return true;
+
+        if (_motorShellItemAdapter == null ||
+            _motorShellItemAdapter.transform.root != ownerRoot.transform)
+        {
+            _motorShellItemAdapter =
+                ownerRoot.GetComponentInChildren<
+                    HamsterMotorShellItemAdapter>(true);
+        }
+
+        return _motorShellItemAdapter != null &&
+               _motorShellItemAdapter.HasHeldItem;
     }
 
     private bool IsValidCharacterGrabCandidate(PlayerStatusModule candidateStatus)
