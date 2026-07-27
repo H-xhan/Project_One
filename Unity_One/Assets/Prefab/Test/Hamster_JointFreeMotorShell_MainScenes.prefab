@@ -48,7 +48,6 @@ Transform:
   - {fileID: 8055494772537699747}
   - {fileID: 6100000000000000010}
   - {fileID: 6100000000000000020}
-  - {fileID: 6074875407441159112}
   m_Father: {fileID: 0}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
 --- !u!114 &6100000000000000001
@@ -1787,6 +1786,7 @@ Transform:
   m_Children:
   - {fileID: 6061055755674054613}
   - {fileID: 4188326212060322117}
+  - {fileID: 6074875407441159112}
   m_Father: {fileID: 8055494772537699747}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
 --- !u!1 &3611532498571920667
@@ -2080,7 +2080,7 @@ RectTransform:
   m_GameObject: {fileID: 4216791943675690143}
   m_LocalRotation: {x: -0, y: -0, z: -0, w: 1}
   m_LocalPosition: {x: 0, y: 0, z: 0}
-  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_LocalScale: {x: 0.004, y: 0.004, z: 0.004}
   m_ConstrainProportionsScale: 0
   m_Children:
   - {fileID: 8173743733793029827}
@@ -2100,7 +2100,7 @@ Canvas:
   m_GameObject: {fileID: 4216791943675690143}
   m_Enabled: 1
   serializedVersion: 3
-  m_RenderMode: 0
+  m_RenderMode: 2
   m_Camera: {fileID: 0}
   m_PlaneDistance: 100
   m_PixelPerfect: 0
@@ -2136,7 +2136,7 @@ MonoBehaviour:
   m_FallbackScreenDPI: 96
   m_DefaultSpriteDPI: 96
   m_DynamicPixelsPerUnit: 1
-  m_PresetInfoIsWorld: 0
+  m_PresetInfoIsWorld: 1
 --- !u!225 &3431264797884229283
 CanvasGroup:
   m_ObjectHideFlags: 0
@@ -2168,7 +2168,7 @@ MonoBehaviour:
   staminaSlider: {fileID: 0}
   canvasGroup: {fileID: 3431264797884229283}
   staminaText: {fileID: 0}
-  presentationMode: 7
+  presentationMode: 5
   followOffsetMode: 1
   worldOffset: {x: 0.75, y: 1, z: 0}
   useTargetLocalOffset: 1
@@ -3108,12 +3108,12 @@ Transform:
   m_GameObject: {fileID: 8263679169058548570}
   serializedVersion: 2
   m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
-  m_LocalPosition: {x: 0.35, y: 0.3, z: 0}
+  m_LocalPosition: {x: 0.38560095, y: 1.3762548, z: 0}
   m_LocalScale: {x: 1, y: 1, z: 1}
   m_ConstrainProportionsScale: 0
   m_Children:
   - {fileID: 4628322740411856878}
-  m_Father: {fileID: 2153839895803566005}
+  m_Father: {fileID: 4015340420288901693}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
 --- !u!1 &8891045383990305626
 GameObject:

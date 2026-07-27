@@ -11,9 +11,9 @@ MonoBehaviour:
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: e646274ed3dd42ef880699289001cc69, type: 3}
   m_Name: ProjectOneVisualScaleProfile
-  m_EditorClassIdentifier:
+  m_EditorClassIdentifier: 
   productionPlayerPrefab: {fileID: 692270962315936511, guid: bbf5381b5913ae443ac31b9d33ae4a5d, type: 3}
-  characterVisualTransformPath: MotorShellBody/VisualPreviewRoot/슈가
+  characterVisualTransformPath: "MotorShellBody/VisualPreviewRoot/\uC288\uAC00"
   presenterSerializedPropertyName: bodyVisualScaleMultiplier
   worldPresenterSerializedPropertyName: worldVisualScaleMultiplier
   itemRules:
@@ -32,7 +32,7 @@ MonoBehaviour:
     referenceEquippedVisualLocalScale: {x: 0.01, y: 0.01, z: 0.01}
     capturedWorldVisualLocalScale: {x: 1.1, y: 1.1, z: 1.1}
     capturedEquippedVisualLocalScale: {x: 0.0088, y: 0.0088, z: 0.0088}
-  characterVisualScale: 1.25
+  characterVisualScale: 1.5
   bodyPostItRatioToCharacter: 1.08
   worldPostItRatioToCharacter: 1.04
   presetA:
