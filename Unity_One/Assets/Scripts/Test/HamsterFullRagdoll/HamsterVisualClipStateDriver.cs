@@ -7,6 +7,12 @@ public sealed class HamsterVisualClipStateDriver : MonoBehaviour
     private const float ClientDiagnosticsLargeDeltaDistance = 1f;
     private const string PlayerBuildMotionFallbackGlideReason = "TraversalGlide";
     private const string PlayerBuildMotionFallbackGlideStateName = "Glide";
+    private const string PlayerBuildMotionFallbackWallReason = "TraversalWall";
+    private const string PlayerBuildMotionFallbackWallClingStateName = "WallCling";
+    private const string PlayerBuildMotionFallbackWallUpStateName = "WallMove_Up";
+    private const string PlayerBuildMotionFallbackWallDownStateName = "WallMove_Down";
+    private const string PlayerBuildMotionFallbackWallLeftStateName = "WallMove_Left";
+    private const string PlayerBuildMotionFallbackWallRightStateName = "WallMove_Right";
 
     [Header("References")]
     [SerializeField] private Animator visualAnimator;
@@ -748,8 +754,9 @@ public sealed class HamsterVisualClipStateDriver : MonoBehaviour
         }
 
         bool allowPlayerBuildStateExistenceFallback =
-            reason == PlayerBuildMotionFallbackGlideReason &&
-            stateName == PlayerBuildMotionFallbackGlideStateName;
+            IsPlayerBuildMotionStateExistenceFallbackAllowed(
+                reason,
+                stateName);
 
         if (_externalOneShotActive)
         {
@@ -812,6 +819,23 @@ public sealed class HamsterVisualClipStateDriver : MonoBehaviour
         ResetClientAnimatorResyncState();
         ClearInteractionState();
         return true;
+    }
+
+    private static bool IsPlayerBuildMotionStateExistenceFallbackAllowed(
+        string reason,
+        string stateName)
+    {
+        if (reason == PlayerBuildMotionFallbackGlideReason)
+            return stateName == PlayerBuildMotionFallbackGlideStateName;
+
+        if (reason != PlayerBuildMotionFallbackWallReason)
+            return false;
+
+        return stateName == PlayerBuildMotionFallbackWallClingStateName ||
+               stateName == PlayerBuildMotionFallbackWallUpStateName ||
+               stateName == PlayerBuildMotionFallbackWallDownStateName ||
+               stateName == PlayerBuildMotionFallbackWallLeftStateName ||
+               stateName == PlayerBuildMotionFallbackWallRightStateName;
     }
 
     public void EndExternalSustainedState(string reason)
