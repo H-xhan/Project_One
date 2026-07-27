@@ -543,7 +543,48 @@ public class PlayerStatusModule : NetworkBehaviour, IDamageable
     public bool ServerTryApplyThrowCombatKnockback(Vector3 impulse, ulong actorClientId)
     {
         LogActiveRagdollProfile($"[PlayerStatus] Throw combat knockback requested actor={actorClientId}");
-        return ServerTryApplyCombatKnockbackInternal(impulse, actorClientId, true, ActiveRagdollImpactSource.Throw);
+        if (CanStartKnockbackServer())
+        {
+            return ServerTryApplyCombatKnockbackInternal(
+                impulse,
+                actorClientId,
+                true,
+                ActiveRagdollImpactSource.Throw);
+        }
+
+        return ServerTryApplyMotorShellThrowImpact(impulse, actorClientId);
+    }
+
+    private bool ServerTryApplyMotorShellThrowImpact(
+        Vector3 impulse,
+        ulong actorClientId)
+    {
+        if (!IsServer || IsEliminated || isKnocked)
+            return false;
+
+        if (!HamsterMotorShellImpactTarget.TryFindOnTransform(
+                transform,
+                out HamsterMotorShellImpactTarget impactTarget))
+        {
+            return false;
+        }
+
+        Transform expectedRoot =
+            rootNetObj != null ? rootNetObj.transform : transform.root;
+        if (expectedRoot == null || impactTarget.TargetRoot != expectedRoot)
+            return false;
+
+        bool acceptedContributor =
+            ServerRecordRecentCombatFallContributor(actorClientId);
+        bool appliedImpact = impactTarget.ApplyCombatHitLikeSugar(
+            impulse,
+            impactTarget.CenterPosition,
+            "CharacterThrow");
+
+        LogActiveRagdollProfile(
+            $"[PlayerStatus] MotorShell throw recovery impact " +
+            $"applied={appliedImpact} contributor={acceptedContributor}");
+        return appliedImpact && acceptedContributor;
     }
 
     public bool ServerTryApplyGimmickKnockback(Vector3 impulse)
