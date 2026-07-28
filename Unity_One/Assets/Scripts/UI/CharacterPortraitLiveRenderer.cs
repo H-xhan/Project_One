@@ -452,15 +452,6 @@ public sealed class CharacterPortraitLiveRenderer : MonoBehaviour
             return false;
         }
 
-        if (!IsSupportedFaceExpression(
-                faceController.CurrentExpressionId))
-        {
-            failureReason =
-                $"Initial Face{faceController.CurrentExpressionId} " +
-                "is outside the approved Face0-4 range.";
-            return false;
-        }
-
         return true;
     }
 
