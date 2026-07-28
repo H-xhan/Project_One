@@ -123,47 +123,49 @@ public class FaceExpressionController : MonoBehaviour
 
     private void ApplyFaceIndex(int index)
     {
-        if (faceRenderer == null)
-            return;
-
-        // 핵심: 적용할 때마다 현재 live material 다시 캐시
-        CacheMaterial(true);
-
-        if (_mat == null)
-        {
-            Debug.LogWarning("[FaceExpressionController] Face material not found.");
-            return;
-        }
-
         if (!TryResolveExpressionMaterialUv(index, out int resolvedIndex, out Vector2 textureScale, out Vector2 finalOffset))
             return;
-
-        bool applied = false;
-
-        if (_mat.HasProperty(BaseMap))
-        {
-            _mat.SetTextureScale(BaseMap, textureScale);
-            _mat.SetTextureOffset(BaseMap, finalOffset);
-            applied = true;
-        }
-
-        if (_mat.HasProperty(MainTex))
-        {
-            _mat.SetTextureScale(MainTex, textureScale);
-            _mat.SetTextureOffset(MainTex, finalOffset);
-            applied = true;
-        }
-
-        if (!applied)
-        {
-            Debug.LogWarning($"[FaceExpressionController] Material '{_mat.name}' has neither _BaseMap nor _MainTex.");
-            return;
-        }
 
         int previousIndex = _currentIndex;
         _currentIndex = resolvedIndex;
 
-        Log($"[FaceExpressionController] Face index={_currentIndex}, offset={finalOffset}, scaleX={textureScale.x}, mat={_mat.name}");
+        if (faceRenderer != null)
+        {
+            // 핵심: 적용할 때마다 현재 live material 다시 캐시
+            CacheMaterial(true);
+
+            if (_mat == null)
+            {
+                Debug.LogWarning("[FaceExpressionController] Face material not found.");
+            }
+            else
+            {
+                bool applied = false;
+
+                if (_mat.HasProperty(BaseMap))
+                {
+                    _mat.SetTextureScale(BaseMap, textureScale);
+                    _mat.SetTextureOffset(BaseMap, finalOffset);
+                    applied = true;
+                }
+
+                if (_mat.HasProperty(MainTex))
+                {
+                    _mat.SetTextureScale(MainTex, textureScale);
+                    _mat.SetTextureOffset(MainTex, finalOffset);
+                    applied = true;
+                }
+
+                if (!applied)
+                {
+                    Debug.LogWarning($"[FaceExpressionController] Material '{_mat.name}' has neither _BaseMap nor _MainTex.");
+                }
+                else
+                {
+                    Log($"[FaceExpressionController] Face index={_currentIndex}, offset={finalOffset}, scaleX={textureScale.x}, mat={_mat.name}");
+                }
+            }
+        }
 
         if (previousIndex != _currentIndex)
             ExpressionChanged?.Invoke(_currentIndex);
