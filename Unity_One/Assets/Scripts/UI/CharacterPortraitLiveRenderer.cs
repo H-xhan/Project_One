@@ -29,7 +29,7 @@ public sealed class CharacterPortraitLiveRenderer : MonoBehaviour
     private const int RenderTextureAntiAliasing = 2;
     private const float MaximumPresentationOffset = 0.25f;
     private const float MinimumOrthographicSize = 0.2f;
-    private const float MaximumOrthographicSize = 0.44f;
+    private const float MaximumOrthographicSize = 0.40f;
     private const float UpperBodyBottomRatio = 0.375f;
     private const float UpperBodyTargetFaceWeight = 0.55f;
     private const float UpperBodyHorizontalMargin = 1.12f;
