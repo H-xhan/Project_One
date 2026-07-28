@@ -28,9 +28,15 @@ public sealed class CharacterPortraitLiveRenderer : MonoBehaviour
     private const int RenderTextureDepth = 24;
     private const int RenderTextureAntiAliasing = 2;
     private const float MaximumPresentationOffset = 0.25f;
-    private const float MinimumOrthographicSize = 0.62f;
-    private const float MaximumOrthographicSize = 0.9f;
-    private const float BoundsMargin = 1.15f;
+    private const float MinimumOrthographicSize = 0.2f;
+    private const float MaximumOrthographicSize = 0.36f;
+    private const float UpperBodyBottomRatio = 0.375f;
+    private const float UpperBodyTargetFaceWeight = 0.55f;
+    private const float UpperBodyHorizontalMargin = 1.12f;
+    private const float UpperBodyVerticalMargin = 1.08f;
+    private const float LegacyMinimumOrthographicSize = 0.62f;
+    private const float LegacyMaximumOrthographicSize = 0.9f;
+    private const float LegacyBoundsMargin = 1.15f;
     private const float CameraDistance = 2.5f;
     private const float CameraHeightOffset = 0.12f;
     private const float FacingEpsilon = 0.0001f;
@@ -867,6 +873,172 @@ public sealed class CharacterPortraitLiveRenderer : MonoBehaviour
     private void ResolveFixedFraming(
         SkinnedMeshRenderer[] sourceRenderers)
     {
+        if (!TryGetCombinedBoundsInVisualLocalSpace(
+                sourceRenderers,
+                out Bounds bodyBounds) ||
+            !TryGetBoundsInVisualLocalSpace(
+                _sourceFaceRenderer,
+                out Bounds faceBounds) ||
+            bodyBounds.size.y <= FacingEpsilon)
+        {
+            ResolveLegacyFixedFraming(sourceRenderers);
+            return;
+        }
+
+        float upperBottomY = Mathf.Lerp(
+            bodyBounds.min.y,
+            bodyBounds.max.y,
+            UpperBodyBottomRatio);
+        float upperTopY = Mathf.Max(
+            bodyBounds.max.y,
+            faceBounds.max.y);
+        if (!IsFinite(upperBottomY) ||
+            !IsFinite(upperTopY) ||
+            upperTopY - upperBottomY <= FacingEpsilon)
+        {
+            ResolveLegacyFixedFraming(sourceRenderers);
+            return;
+        }
+
+        Vector3 chestPoint = new Vector3(
+            bodyBounds.center.x,
+            Mathf.Lerp(
+                upperBottomY,
+                faceBounds.center.y,
+                0.5f),
+            bodyBounds.center.z);
+        Vector3 target = Vector3.Lerp(
+            chestPoint,
+            faceBounds.center,
+            UpperBodyTargetFaceWeight);
+        target.y = Mathf.Clamp(
+            target.y,
+            upperBottomY,
+            upperTopY);
+
+        Vector3 visualScale =
+            SanitizeScale(_sourceVisualRoot.lossyScale);
+        float verticalScale = Mathf.Abs(visualScale.y);
+        float planarScale = Mathf.Max(
+            Mathf.Abs(visualScale.x),
+            Mathf.Abs(visualScale.z));
+        float requiredHalfHeight = Mathf.Max(
+                target.y - upperBottomY,
+                upperTopY - target.y) *
+            verticalScale *
+            UpperBodyVerticalMargin;
+
+        float requiredHalfWidth = Mathf.Max(
+                Mathf.Max(
+                    target.x - bodyBounds.min.x,
+                    bodyBounds.max.x - target.x),
+                Mathf.Max(
+                    target.z - bodyBounds.min.z,
+                    bodyBounds.max.z - target.z)) *
+            planarScale *
+            UpperBodyHorizontalMargin /
+            ((float)RenderTextureWidth / RenderTextureHeight);
+
+        float requiredSize = Mathf.Max(
+            requiredHalfHeight,
+            requiredHalfWidth);
+        if (!IsFiniteVector(target) ||
+            !IsFinite(requiredSize) ||
+            requiredSize <= FacingEpsilon)
+        {
+            ResolveLegacyFixedFraming(sourceRenderers);
+            return;
+        }
+
+        _focusPointInVisualLocalSpace = target;
+        _orthographicSize = Mathf.Clamp(
+            requiredSize,
+            MinimumOrthographicSize,
+            MaximumOrthographicSize);
+        _portraitCamera.orthographicSize = _orthographicSize;
+    }
+
+    private bool TryGetCombinedBoundsInVisualLocalSpace(
+        SkinnedMeshRenderer[] sourceRenderers,
+        out Bounds combinedBounds)
+    {
+        combinedBounds = default;
+        bool hasBounds = false;
+        for (int i = 0; i < sourceRenderers.Length; i++)
+        {
+            if (!TryGetBoundsInVisualLocalSpace(
+                    sourceRenderers[i],
+                    out Bounds rendererBounds))
+            {
+                return false;
+            }
+
+            if (!hasBounds)
+            {
+                combinedBounds = rendererBounds;
+                hasBounds = true;
+            }
+            else
+            {
+                combinedBounds.Encapsulate(rendererBounds);
+            }
+        }
+
+        return hasBounds;
+    }
+
+    private bool TryGetBoundsInVisualLocalSpace(
+        SkinnedMeshRenderer renderer,
+        out Bounds localBounds)
+    {
+        localBounds = default;
+        if (renderer == null || _sourceVisualRoot == null)
+            return false;
+
+        Bounds worldBounds = renderer.bounds;
+        Vector3 minimum = worldBounds.min;
+        Vector3 maximum = worldBounds.max;
+        bool hasPoint = false;
+
+        for (int cornerIndex = 0;
+             cornerIndex < 8;
+             cornerIndex++)
+        {
+            Vector3 worldPoint = new Vector3(
+                (cornerIndex & 1) == 0
+                    ? minimum.x
+                    : maximum.x,
+                (cornerIndex & 2) == 0
+                    ? minimum.y
+                    : maximum.y,
+                (cornerIndex & 4) == 0
+                    ? minimum.z
+                    : maximum.z);
+            Vector3 localPoint =
+                _sourceVisualRoot.InverseTransformPoint(
+                    worldPoint);
+            if (!IsFiniteVector(localPoint))
+                return false;
+
+            if (!hasPoint)
+            {
+                localBounds = new Bounds(
+                    localPoint,
+                    Vector3.zero);
+                hasPoint = true;
+            }
+            else
+            {
+                localBounds.Encapsulate(localPoint);
+            }
+        }
+
+        return hasPoint;
+    }
+
+    private void ResolveLegacyFixedFraming(
+        SkinnedMeshRenderer[] sourceRenderers)
+    {
         Bounds combinedBounds = sourceRenderers[0].bounds;
         for (int i = 1; i < sourceRenderers.Length; i++)
             combinedBounds.Encapsulate(sourceRenderers[i].bounds);
@@ -878,9 +1050,9 @@ public sealed class CharacterPortraitLiveRenderer : MonoBehaviour
             _sourceVisualRoot.InverseTransformVector(
                 combinedBounds.extents).magnitude;
         _orthographicSize = Mathf.Clamp(
-            radiusInVisualSpace * BoundsMargin,
-            MinimumOrthographicSize,
-            MaximumOrthographicSize);
+            radiusInVisualSpace * LegacyBoundsMargin,
+            LegacyMinimumOrthographicSize,
+            LegacyMaximumOrthographicSize);
         _portraitCamera.orthographicSize = _orthographicSize;
     }
 
