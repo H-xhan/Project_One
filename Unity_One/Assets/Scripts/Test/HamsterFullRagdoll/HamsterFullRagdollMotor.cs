@@ -181,10 +181,6 @@ public class HamsterFullRagdollMotor : MonoBehaviour
     private bool _motorJumpConsumedSinceStableGround;
     private bool _motorJumpNeedsAirborneBeforeRearm;
     private float _motorJumpStableGroundTimer;
-    private float _lastUpwardSupportContactFixedTime = float.NegativeInfinity;
-    private string _lastUpwardSupportName = "<none>";
-    private int _lastUpwardSupportLayer = -1;
-    private float _lastUpwardSupportNormalUpDot = float.NaN;
     private float _postJumpSprintMovementSettleTimer;
     private bool _wasGroundedForJump;
     private float _lastAirborneVerticalSpeed;
@@ -308,7 +304,6 @@ public class HamsterFullRagdollMotor : MonoBehaviour
         _motorJumpConsumedSinceStableGround = false;
         _motorJumpNeedsAirborneBeforeRearm = false;
         _motorJumpStableGroundTimer = 0f;
-        ResetJumpSupportContactEvidence();
         _postJumpSprintMovementSettleTimer = 0f;
         _wasGroundedForJump = _isGrounded;
 
@@ -377,18 +372,12 @@ public class HamsterFullRagdollMotor : MonoBehaviour
 
     private void OnEnable()
     {
-        ResetJumpSupportContactEvidence();
         ResolveJumpVisualFollower();
 
         if (captureInitialPoseOnEnable && HasRequiredReferences())
             CaptureInitialPose();
 
         LogMotorEnabledState();
-    }
-
-    private void OnDisable()
-    {
-        ResetJumpSupportContactEvidence();
     }
 
     private void Update()
@@ -959,11 +948,10 @@ public class HamsterFullRagdollMotor : MonoBehaviour
         if (!requireGroundedForJump)
             return true;
 
-        if (_isGrounded || HasRecentUpwardSupportContact())
+        if (_isGrounded)
             return true;
 
-        return Time.time - GetLatestMotorJumpGroundEvidenceTime() <=
-               Mathf.Max(0f, jumpCoyoteTime);
+        return Time.time - _lastGroundedTime <= Mathf.Max(0f, jumpCoyoteTime);
     }
 
     private void TickJumpBuffer(float deltaTime)
@@ -1044,14 +1032,8 @@ public class HamsterFullRagdollMotor : MonoBehaviour
             return;
         }
 
-        bool hasRecentSupportContact = HasRecentUpwardSupportContact();
-        bool canUseCoyote =
-            Time.time - GetLatestMotorJumpGroundEvidenceTime() <=
-            Mathf.Max(0f, jumpCoyoteTime);
-        if (requireGroundedForJump &&
-            !_isGrounded &&
-            !hasRecentSupportContact &&
-            !canUseCoyote)
+        bool canUseCoyote = Time.time - _lastGroundedTime <= Mathf.Max(0f, jumpCoyoteTime);
+        if (requireGroundedForJump && !_isGrounded && !canUseCoyote)
         {
             ClearJumpBufferAndLogSkip("not grounded");
             return;
@@ -1175,11 +1157,9 @@ public class HamsterFullRagdollMotor : MonoBehaviour
 
     private bool IsMotorJumpRearmGroundStableNow()
     {
-        bool nearGroundProbe =
-            _isGrounded &&
-            !float.IsNaN(_lastGroundHitDistance) &&
-            _lastGroundHitDistance <= MaxMotorJumpRearmGroundHitDistance;
-        return nearGroundProbe || HasRecentUpwardSupportContact();
+        return _isGrounded &&
+               !float.IsNaN(_lastGroundHitDistance) &&
+               _lastGroundHitDistance <= MaxMotorJumpRearmGroundHitDistance;
     }
 
     private void NotifyJumpVisualReaction()
@@ -1920,106 +1900,6 @@ public class HamsterFullRagdollMotor : MonoBehaviour
         return false;
     }
 
-    private void OnCollisionStay(Collision collision)
-    {
-        if (collision == null || hipsBody == null)
-            return;
-
-        Transform ownerRoot = transform.root;
-        Collider bestSupport = null;
-        float bestNormalUpDot = float.NegativeInfinity;
-        int contactCount = collision.contactCount;
-        for (int i = 0; i < contactCount; i++)
-        {
-            ContactPoint contact = collision.GetContact(i);
-            Collider selfCollider = contact.thisCollider;
-            Collider otherCollider = contact.otherCollider;
-            bool selfIsHips =
-                selfCollider != null &&
-                selfCollider.attachedRigidbody == hipsBody;
-            bool otherIsHips =
-                otherCollider != null &&
-                otherCollider.attachedRigidbody == hipsBody;
-            if (selfIsHips == otherIsHips)
-                continue;
-
-            Collider supportCollider =
-                selfIsHips ? otherCollider : selfCollider;
-            if (supportCollider == null ||
-                !supportCollider.enabled ||
-                !supportCollider.gameObject.activeInHierarchy ||
-                supportCollider.isTrigger)
-            {
-                continue;
-            }
-
-            Transform supportTransform = supportCollider.transform;
-            if (ownerRoot != null &&
-                (supportTransform == ownerRoot ||
-                 supportTransform.IsChildOf(ownerRoot)))
-            {
-                continue;
-            }
-
-            int supportLayer = supportCollider.gameObject.layer;
-            if ((groundMask.value & (1 << supportLayer)) == 0)
-                continue;
-
-            Vector3 supportNormal =
-                selfIsHips ? contact.normal : -contact.normal;
-            if (!IsFinite(supportNormal) ||
-                supportNormal.sqrMagnitude <= 0.0001f)
-            {
-                continue;
-            }
-
-            float normalUpDot =
-                Vector3.Dot(supportNormal.normalized, Vector3.up);
-            if (!IsFinite(normalUpDot) ||
-                normalUpDot < MinimumGroundNormalUpDot ||
-                normalUpDot <= bestNormalUpDot)
-            {
-                continue;
-            }
-
-            bestSupport = supportCollider;
-            bestNormalUpDot = normalUpDot;
-        }
-
-        if (bestSupport == null)
-            return;
-
-        _lastUpwardSupportContactFixedTime = Time.fixedTime;
-        _lastUpwardSupportName = bestSupport.name;
-        _lastUpwardSupportLayer = bestSupport.gameObject.layer;
-        _lastUpwardSupportNormalUpDot = bestNormalUpDot;
-    }
-
-    private bool HasRecentUpwardSupportContact()
-    {
-        float age =
-            Time.fixedTime - _lastUpwardSupportContactFixedTime;
-        float maximumAge = Mathf.Max(0f, Time.fixedDeltaTime * 2f);
-        return IsFinite(age) &&
-               age >= 0f &&
-               age <= maximumAge;
-    }
-
-    private float GetLatestMotorJumpGroundEvidenceTime()
-    {
-        return Mathf.Max(
-            _lastGroundedTime,
-            _lastUpwardSupportContactFixedTime);
-    }
-
-    private void ResetJumpSupportContactEvidence()
-    {
-        _lastUpwardSupportContactFixedTime = float.NegativeInfinity;
-        _lastUpwardSupportName = "<none>";
-        _lastUpwardSupportLayer = -1;
-        _lastUpwardSupportNormalUpDot = float.NaN;
-    }
-
     private bool CheckGrounded()
     {
         Vector3 origin = hipsBody.worldCenterOfMass + Vector3.up * groundCheckRadius;
@@ -2130,9 +2010,8 @@ public class HamsterFullRagdollMotor : MonoBehaviour
 
     private void LogInputRouteGround()
     {
-        bool supportContactRecent = HasRecentUpwardSupportContact();
         Debug.Log(
-            $"[InputRoute/Ground:{GetInputRouteObjectName()}] grounded={_isGrounded} probeOrigin={FormatVector3(_lastGroundProbeOrigin)} probeRadius={_lastGroundProbeRadius:F2} probeDistance={_lastGroundProbeDistance:F2} colliderBottomY={FormatFloat(_lastGroundColliderBottomY)} rbCenterOfMassY={FormatFloat(_lastGroundRbCenterOfMassY)} hit={_lastGroundHit} hitName={_lastGroundHitName} hitLayer={_lastGroundHitLayer} hitDistance={FormatFloat(_lastGroundHitDistance)} hitNormalUpDot={FormatFloat(_lastGroundHitNormalUpDot)} minGroundNormalUpDot={MinimumGroundNormalUpDot:F2} groundMask={groundMask.value} ignoreLayerCollision={_lastGroundIgnoreLayerCollision} jumpLatch={_motorJumpConsumedSinceStableGround} needsAirborne={_motorJumpNeedsAirborneBeforeRearm} rearmTimer={_motorJumpStableGroundTimer:F3} supportContactRecent={supportContactRecent} supportName={_lastUpwardSupportName} supportLayer={_lastUpwardSupportLayer} supportNormalUpDot={FormatFloat(_lastUpwardSupportNormalUpDot)}",
+            $"[InputRoute/Ground:{GetInputRouteObjectName()}] grounded={_isGrounded} probeOrigin={FormatVector3(_lastGroundProbeOrigin)} probeRadius={_lastGroundProbeRadius:F2} probeDistance={_lastGroundProbeDistance:F2} colliderBottomY={FormatFloat(_lastGroundColliderBottomY)} rbCenterOfMassY={FormatFloat(_lastGroundRbCenterOfMassY)} hit={_lastGroundHit} hitName={_lastGroundHitName} hitLayer={_lastGroundHitLayer} hitDistance={FormatFloat(_lastGroundHitDistance)} hitNormalUpDot={FormatFloat(_lastGroundHitNormalUpDot)} minGroundNormalUpDot={MinimumGroundNormalUpDot:F2} groundMask={groundMask.value} ignoreLayerCollision={_lastGroundIgnoreLayerCollision}",
             this);
     }
 
