@@ -1219,6 +1219,14 @@ public class PlayerInteractModule : NetworkBehaviour
                 return;
             }
 
+            if (!_isCarryingCharacter &&
+                !IsCharacterGrabTargetWithinMaintenanceDistance(
+                    _grabbedCharacterStatus))
+            {
+                ServerReleaseCharacterGrab("target-out-of-range");
+                return;
+            }
+
             float maxDuration = Mathf.Max(0f, maxCharacterGrabDuration);
             if (maxDuration > 0f &&
                 Time.time - _characterGrabStartedAt >= maxDuration)
@@ -1458,6 +1466,24 @@ public class PlayerInteractModule : NetworkBehaviour
         return (targetPoint - closestPoint).sqrMagnitude <= radius * radius;
     }
 
+    private bool IsCharacterGrabTargetWithinMaintenanceDistance(
+        PlayerStatusModule targetStatus)
+    {
+        if (targetStatus == null)
+            return false;
+
+        float maximumDistance =
+            Mathf.Max(0f, characterGrabDistance) +
+            Mathf.Max(0.01f, characterGrabRadius);
+        if (maximumDistance <= 0f)
+            return false;
+
+        Vector3 origin = GetCharacterGrabServerOrigin();
+        Vector3 targetPoint = GetCharacterGrabTargetPoint(targetStatus);
+        return (targetPoint - origin).sqrMagnitude <=
+               maximumDistance * maximumDistance;
+    }
+
     private Vector3 GetCharacterGrabServerDirection()
     {
         if (ownerCamera != null &&
@@ -1626,8 +1652,10 @@ public class PlayerInteractModule : NetworkBehaviour
             return 1f;
 
         double now = GetCharacterGrabServerTime();
-        return Mathf.Clamp01(
-            (float)((now - state.ServerStartedAt) / duration));
+        return Mathf.Min(
+            0.999f,
+            Mathf.Clamp01(
+                (float)((now - state.ServerStartedAt) / duration)));
     }
 
     private double GetCharacterGrabServerTime()
@@ -1690,7 +1718,9 @@ public class PlayerInteractModule : NetworkBehaviour
             ResolveGrabbedCharacterInteract();
         if (targetInteract == null ||
             !ResolveGrabbedCharacterRefs() ||
-            !IsCharacterGrabLinkValidAsGrabber())
+            !IsCharacterGrabLinkValidAsGrabber() ||
+            !IsCharacterGrabTargetWithinMaintenanceDistance(
+                _grabbedCharacterStatus))
         {
             ServerReleaseCharacterGrab("invalid-target");
             return false;
