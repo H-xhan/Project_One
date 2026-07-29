@@ -361,6 +361,7 @@ public class PlayerInteractModule : NetworkBehaviour
         ClearExternalHeldItemPoseOverrideInternal("NetworkDespawn", false);
         DestroyLocalHeldVisual();
         CleanupCharacterGrabOnLifecycle("network-despawn");
+        _characterGrabPresentationState.Reset();
         ResetGameplayGateCache();
         base.OnNetworkDespawn();
     }
@@ -822,12 +823,13 @@ public class PlayerInteractModule : NetworkBehaviour
             out targetStatus);
     }
 
-    public void ServerTryStartCharacterGrab(PlayerStatusModule targetStatus)
+    public bool ServerTryStartCharacterGrab(PlayerStatusModule targetStatus)
     {
-        if (!CanProcessServerGameplayMutation()) return;
+        if (!CanProcessServerGameplayMutation())
+            return false;
 
         if (!CanStartCharacterGrab(targetStatus, out PlayerInteractModule targetInteract, out NetworkObject selfNetObj, out NetworkObject targetNetObj))
-            return;
+            return false;
 
         float now = Time.time;
         float liftDuration = Mathf.Max(0f, liftChargeDuration);
@@ -876,6 +878,8 @@ public class PlayerInteractModule : NetworkBehaviour
 
         if (liftReadyImmediately)
             CharacterGrabLog($"[PlayerInteract] Character grab lift ready target={GetCharacterGrabDebugName(targetStatus, targetInteract)}");
+
+        return true;
     }
 
     public void ServerReleaseCharacterGrab(string reason)
@@ -1204,8 +1208,7 @@ public class PlayerInteractModule : NetworkBehaviour
             }
 
             float maxDuration = Mathf.Max(0f, maxCharacterGrabDuration);
-            if (!_isCarryingCharacter &&
-                maxDuration > 0f &&
+            if (maxDuration > 0f &&
                 Time.time - _characterGrabStartedAt >= maxDuration)
             {
                 ServerReleaseCharacterGrab("max-duration");
@@ -1673,8 +1676,13 @@ public class PlayerInteractModule : NetworkBehaviour
 
         PlayerInteractModule targetInteract =
             ResolveGrabbedCharacterInteract();
-        if (targetInteract == null)
+        if (targetInteract == null ||
+            !ResolveGrabbedCharacterRefs() ||
+            !IsCharacterGrabLinkValidAsGrabber())
+        {
+            ServerReleaseCharacterGrab("invalid-target");
             return false;
+        }
 
         if (characterGrabOnlyMode &&
             (!ServerIsCurrentPlayingParticipant() ||
