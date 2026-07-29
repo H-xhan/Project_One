@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using Unity.Netcode;
 using UnityEngine;
 using UnityEngine.EventSystems;
@@ -13,6 +14,9 @@ public sealed class HamsterMotorShellSpinDashAdapter : MonoBehaviour
     private const string CooldownReason = "SpinDash:Cooldown";
     private const string GameplayPhaseLockReason = "GameState:NotPlaying";
     private const float PlayerStatusResolveRetryInterval = 0.5f;
+    private const float MinimumHitQueryRadius = 0.05f;
+    private const int SpinDashCastBufferSize = 24;
+    private const int SpinDashOverlapBufferSize = 24;
 
     private enum SpinDashState
     {
@@ -96,12 +100,24 @@ public sealed class HamsterMotorShellSpinDashAdapter : MonoBehaviour
 
     private NetworkObject _ownerNetworkObject;
     private GameStateManager _gameStateManager;
+    private PostItRoundManager _postItRoundManager;
     private PlayerStatusModule _playerStatusModule;
     private NetworkObject _playerStatusOwnerNetworkObject;
     private float _nextPlayerStatusResolveTime = float.NegativeInfinity;
     private Transform _targetRoot;
+    private Collider _bodyCollider;
+    private int _spinDashHitLayerMask;
+    private bool _hasResolvedSpinDashHitLayerMask;
+    private readonly RaycastHit[] _spinDashCastHits =
+        new RaycastHit[SpinDashCastBufferSize];
+    private readonly Collider[] _spinDashOverlapHits =
+        new Collider[SpinDashOverlapBufferSize];
+    private readonly HashSet<ulong> _spinDashHitNetworkObjectIds =
+        new HashSet<ulong>();
     private SpinDashState _state;
     private Vector3 _dashDirection = Vector3.forward;
+    private Vector3 _previousDashBodyPosition;
+    private bool _hasPreviousDashBodyPosition;
     private float _dashEndTime;
     private float _dizzyEndTime;
     private float _cooldownUntil;
@@ -123,6 +139,7 @@ public sealed class HamsterMotorShellSpinDashAdapter : MonoBehaviour
     private void OnDisable()
     {
         CancelSpinDash("OnDisable");
+        ClearSpinDashHitState();
         ClearVisualSpin("OnDisable");
         RestoreMotorControlIfOwned();
     }
@@ -167,7 +184,7 @@ public sealed class HamsterMotorShellSpinDashAdapter : MonoBehaviour
             return;
 
         if (ReadSpinDashPressed())
-            TryStartSpinDash();
+            ServerTryStartSpinDash();
     }
 
     private void FixedUpdate()
@@ -204,6 +221,7 @@ public sealed class HamsterMotorShellSpinDashAdapter : MonoBehaviour
             return;
         }
 
+        ServerProcessSpinDashHits();
         ApplySustainForces();
     }
 
@@ -231,6 +249,10 @@ public sealed class HamsterMotorShellSpinDashAdapter : MonoBehaviour
 
         if (bodyTransform == null && bodyRigidbody != null)
             bodyTransform = bodyRigidbody.transform;
+        if (_bodyCollider == null && bodyRigidbody != null)
+            _bodyCollider = bodyRigidbody.GetComponent<Collider>();
+
+        ResolveSpinDashHitLayerMask();
 
         if (ownerCamera == null && _targetRoot != null)
         {
@@ -348,6 +370,19 @@ public sealed class HamsterMotorShellSpinDashAdapter : MonoBehaviour
         return networkManager != null && networkManager.IsServer;
     }
 
+    public bool ServerTryStartSpinDash()
+    {
+        CacheReferences();
+        if (!CanApplyServerPhysics() ||
+            IsGameplayPhaseLocked() ||
+            IsEliminationLocked())
+        {
+            return false;
+        }
+
+        return TryStartSpinDash();
+    }
+
     private bool ReadSpinDashPressed()
     {
         if (ignoreWhenUiSelected && IsUiInputBlocked())
@@ -405,6 +440,7 @@ public sealed class HamsterMotorShellSpinDashAdapter : MonoBehaviour
         _dashEndTime = Time.time + Mathf.Max(0.01f, dashDuration);
         _cooldownUntil = Time.time + Mathf.Max(0.01f, cooldown);
         _blendOutEndTime = 0f;
+        BeginSpinDashHitState();
 
         ApplyDashingMotorControl();
 
@@ -433,12 +469,267 @@ public sealed class HamsterMotorShellSpinDashAdapter : MonoBehaviour
             bodyRigidbody.AddTorque(Vector3.up * yawAcceleration, ForceMode.Acceleration);
     }
 
+    private void BeginSpinDashHitState()
+    {
+        _spinDashHitNetworkObjectIds.Clear();
+        if (bodyRigidbody == null ||
+            !IsFiniteVector(bodyRigidbody.position))
+        {
+            _previousDashBodyPosition = Vector3.zero;
+            _hasPreviousDashBodyPosition = false;
+            return;
+        }
+
+        _previousDashBodyPosition = bodyRigidbody.position;
+        _hasPreviousDashBodyPosition = true;
+    }
+
+    private void ClearSpinDashHitState()
+    {
+        _spinDashHitNetworkObjectIds.Clear();
+        _previousDashBodyPosition = Vector3.zero;
+        _hasPreviousDashBodyPosition = false;
+    }
+
+    private void ServerProcessSpinDashHits()
+    {
+        if (_state != SpinDashState.Dashing ||
+            !CanApplyServerPhysics() ||
+            bodyRigidbody == null ||
+            bodyRigidbody.isKinematic ||
+            _bodyCollider == null ||
+            !_bodyCollider.enabled)
+        {
+            return;
+        }
+
+        Vector3 currentBodyPosition = bodyRigidbody.position;
+        if (!IsFiniteVector(currentBodyPosition))
+        {
+            _hasPreviousDashBodyPosition = false;
+            return;
+        }
+
+        if (!TryGetBodyHitCapsule(
+                out Vector3 currentPoint1,
+                out Vector3 currentPoint2,
+                out float radius))
+        {
+            _previousDashBodyPosition = currentBodyPosition;
+            _hasPreviousDashBodyPosition = true;
+            return;
+        }
+
+        Vector3 displacement = _hasPreviousDashBodyPosition
+            ? currentBodyPosition - _previousDashBodyPosition
+            : Vector3.zero;
+        if (!IsFiniteVector(displacement))
+            displacement = Vector3.zero;
+
+        float distance = displacement.magnitude;
+        if (distance > 0.0001f)
+        {
+            Vector3 direction = displacement / distance;
+            Vector3 previousPoint1 = currentPoint1 - displacement;
+            Vector3 previousPoint2 = currentPoint2 - displacement;
+            int castCount = Physics.CapsuleCastNonAlloc(
+                previousPoint1,
+                previousPoint2,
+                radius,
+                direction,
+                _spinDashCastHits,
+                distance,
+                _spinDashHitLayerMask,
+                QueryTriggerInteraction.Collide);
+
+            for (int i = 0; i < castCount; i++)
+                ServerTryApplySpinDashHit(_spinDashCastHits[i].collider);
+        }
+
+        int overlapCount = Physics.OverlapCapsuleNonAlloc(
+            currentPoint1,
+            currentPoint2,
+            radius,
+            _spinDashOverlapHits,
+            _spinDashHitLayerMask,
+            QueryTriggerInteraction.Collide);
+        for (int i = 0; i < overlapCount; i++)
+            ServerTryApplySpinDashHit(_spinDashOverlapHits[i]);
+
+        _previousDashBodyPosition = currentBodyPosition;
+        _hasPreviousDashBodyPosition = true;
+    }
+
+    private bool TryGetBodyHitCapsule(
+        out Vector3 point1,
+        out Vector3 point2,
+        out float radius)
+    {
+        point1 = Vector3.zero;
+        point2 = Vector3.zero;
+        radius = 0f;
+        if (_bodyCollider == null)
+            return false;
+
+        Bounds bounds = _bodyCollider.bounds;
+        if (!IsFiniteVector(bounds.center) ||
+            !IsFiniteVector(bounds.extents))
+        {
+            return false;
+        }
+
+        radius = Mathf.Max(
+            MinimumHitQueryRadius,
+            Mathf.Min(bounds.extents.x, bounds.extents.z));
+        float verticalOffset =
+            Mathf.Max(0f, bounds.extents.y - radius);
+        point1 = bounds.center + Vector3.up * verticalOffset;
+        point2 = bounds.center - Vector3.up * verticalOffset;
+        return IsFinite(radius) && radius > 0f;
+    }
+
+    private void ServerTryApplySpinDashHit(Collider hitCollider)
+    {
+        if (hitCollider == null ||
+            !hitCollider.enabled ||
+            !hitCollider.gameObject.activeInHierarchy ||
+            !TryResolveSpinDashTarget(
+                hitCollider,
+                out NetworkObject targetNetworkObject,
+                out PlayerStatusModule targetStatus,
+                out HamsterMotorShellImpactTarget impactTarget))
+        {
+            return;
+        }
+
+        ulong targetNetworkObjectId = targetNetworkObject.NetworkObjectId;
+        if (_spinDashHitNetworkObjectIds.Contains(targetNetworkObjectId))
+            return;
+
+        _spinDashHitNetworkObjectIds.Add(targetNetworkObjectId);
+        Vector3 impulse =
+            _dashDirection * Mathf.Max(0f, dashVelocityChange) +
+            Vector3.up * Mathf.Max(0f, upwardVelocityChange);
+        if (!IsFiniteVector(impulse) ||
+            impulse.sqrMagnitude <= 0.0001f)
+        {
+            return;
+        }
+
+        Vector3 hitPoint = hitCollider.ClosestPoint(
+            bodyRigidbody.worldCenterOfMass);
+        if (!IsFiniteVector(hitPoint))
+            hitPoint = impactTarget.CenterPosition;
+
+        bool applied = impactTarget.ApplyCombatHitLikeSugar(
+            impulse,
+            hitPoint,
+            "SpinDash");
+        Log(
+            $"hit target={targetStatus.name} " +
+            $"networkObjectId={targetNetworkObjectId} " +
+            $"impulse={impulse} applied={applied}");
+    }
+
+    private bool TryResolveSpinDashTarget(
+        Collider hitCollider,
+        out NetworkObject targetNetworkObject,
+        out PlayerStatusModule targetStatus,
+        out HamsterMotorShellImpactTarget impactTarget)
+    {
+        targetNetworkObject = null;
+        targetStatus = null;
+        impactTarget = null;
+        if (hitCollider == null)
+            return false;
+
+        targetNetworkObject =
+            hitCollider.GetComponentInParent<NetworkObject>();
+        if (targetNetworkObject == null &&
+            hitCollider.attachedRigidbody != null)
+        {
+            targetNetworkObject =
+                hitCollider.attachedRigidbody
+                    .GetComponentInParent<NetworkObject>();
+        }
+
+        if (targetNetworkObject == null ||
+            !targetNetworkObject.IsSpawned ||
+            targetNetworkObject == _ownerNetworkObject)
+        {
+            return false;
+        }
+
+        targetStatus =
+            targetNetworkObject.GetComponent<PlayerStatusModule>();
+        if (targetStatus == null)
+        {
+            targetStatus =
+                targetNetworkObject
+                    .GetComponentInChildren<PlayerStatusModule>(true);
+        }
+
+        if (targetStatus == null ||
+            !targetStatus.IsSpawned ||
+            targetStatus.NetworkObject != targetNetworkObject ||
+            targetStatus.IsEliminated)
+        {
+            return false;
+        }
+
+        PlayerPostItInventory targetInventory =
+            targetNetworkObject
+                .GetComponentInChildren<PlayerPostItInventory>(true);
+        if (targetInventory == null ||
+            targetInventory.NetworkObject != targetNetworkObject)
+        {
+            return false;
+        }
+
+        if (_postItRoundManager == null)
+            _postItRoundManager =
+                FindFirstObjectByType<PostItRoundManager>();
+        if (_postItRoundManager == null ||
+            !_postItRoundManager.ServerIsCurrentPlayingParticipant(
+                targetInventory))
+        {
+            return false;
+        }
+
+        return HamsterMotorShellImpactTarget.TryFindOnCollider(
+                   hitCollider,
+                   out impactTarget) &&
+               impactTarget.TargetRoot == targetNetworkObject.transform;
+    }
+
+    private void ResolveSpinDashHitLayerMask()
+    {
+        if (_hasResolvedSpinDashHitLayerMask)
+            return;
+
+        _hasResolvedSpinDashHitLayerMask = true;
+        _spinDashHitLayerMask = 0;
+        AddLayerToMask("Player");
+        AddLayerToMask("Hurtbox");
+        AddLayerToMask("BodyBlocker");
+        if (_spinDashHitLayerMask == 0)
+            _spinDashHitLayerMask = Physics.DefaultRaycastLayers;
+    }
+
+    private void AddLayerToMask(string layerName)
+    {
+        int layer = LayerMask.NameToLayer(layerName);
+        if (layer >= 0)
+            _spinDashHitLayerMask |= 1 << layer;
+    }
+
     private void StopSpinDash(bool enterBlendOut, string reason)
     {
         if (_state != SpinDashState.Dashing)
             return;
 
         _dashEndTime = 0f;
+        ClearSpinDashHitState();
 
         if (enterBlendOut && enableDizzyAfterDash && dizzyDuration > 0f)
         {
