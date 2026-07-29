@@ -1,0 +1,98 @@
+[
+  {
+    "variant": "FINAL",
+    "type": "Reference",
+    "resolution": "1920x1080",
+    "background": "cream",
+    "path": "D:\\ProjectOne_FontLab\\ProjectOneDisplay_20260729_132742\\previews\\FINAL_Reference_1920x1080.png",
+    "sha256": "6F60C16B67B93752CF35F8D506BE97657EDFC71E31CD9B24EEC7E17899E4D90F"
+  },
+  {
+    "variant": "FINAL",
+    "type": "KoreanUI",
+    "resolution": "1920x1080",
+    "background": "dark",
+    "path": "D:\\ProjectOne_FontLab\\ProjectOneDisplay_20260729_132742\\previews\\FINAL_KoreanUI_1920x1080.png",
+    "sha256": "D7FB8B8BE2FBCAD6A105A1DF4FF971226ED72CE3BD814D1ABFABA10EEDCF94BF"
+  },
+  {
+    "variant": "FINAL",
+    "type": "Sizes",
+    "resolution": "1920x1080",
+    "background": "checker",
+    "path": "D:\\ProjectOne_FontLab\\ProjectOneDisplay_20260729_132742\\previews\\FINAL_Sizes_1920x1080.png",
+    "sha256": "DE4AA576E13DC2E47051E91EE333C1C35DFED24A9A6D68CECE2D88318FF21FD9"
+  },
+  {
+    "variant": "FINAL",
+    "type": "Contact",
+    "resolution": "1920x1080",
+    "background": "cream",
+    "path": "D:\\ProjectOne_FontLab\\ProjectOneDisplay_20260729_132742\\previews\\FINAL_Contact_1920x1080.png",
+    "sha256": "C231796A06F7A30485986C6B08093705732B233823F2F7F54E05C83D18B00486"
+  },
+  {
+    "variant": "FINAL",
+    "type": "HangulStress",
+    "resolution": "1920x1080",
+    "background": "dark",
+    "path": "D:\\ProjectOne_FontLab\\ProjectOneDisplay_20260729_132742\\previews\\FINAL_HangulStress_1920x1080.png",
+    "sha256": "BB7D1358591355C0091D0DAE3C50DE14C3F83A433FD8A23EB3DDF169199D56DA"
+  },
+  {
+    "variant": "FINAL",
+    "type": "RealUIMockup",
+    "resolution": "1920x1080",
+    "background": "checker",
+    "path": "D:\\ProjectOne_FontLab\\ProjectOneDisplay_20260729_132742\\previews\\FINAL_RealUIMockup_1920x1080.png",
+    "sha256": "33A96A28466F8611FC94E9DF5BF370D1ECFF676090BA0FFC93C097CB1711C556"
+  },
+  {
+    "variant": "FINAL",
+    "type": "Reference",
+    "resolution": "2560x1440",
+    "background": "cream",
+    "path": "D:\\ProjectOne_FontLab\\ProjectOneDisplay_20260729_132742\\previews\\FINAL_Reference_2560x1440.png",
+    "sha256": "87A743E5EAA11A8BCC83E8A723D5C422B4534204EDB9366988D16821BF81E8F7"
+  },
+  {
+    "variant": "FINAL",
+    "type": "KoreanUI",
+    "resolution": "2560x1440",
+    "background": "dark",
+    "path": "D:\\ProjectOne_FontLab\\ProjectOneDisplay_20260729_132742\\previews\\FINAL_KoreanUI_2560x1440.png",
+    "sha256": "02140C4CC85F649C3F2B1D1BBF820E70C68D7DBE3EBC43CAAE8E574916E2D7F4"
+  },
+  {
+    "variant": "FINAL",
+    "type": "Sizes",
+    "resolution": "2560x1440",
+    "background": "checker",
+    "path": "D:\\ProjectOne_FontLab\\ProjectOneDisplay_20260729_132742\\previews\\FINAL_Sizes_2560x1440.png",
+    "sha256": "18ED778B79395072380DBE283BEAD824A4E2E02516EA937B00EE200C92AD819B"
+  },
+  {
+    "variant": "FINAL",
+    "type": "Contact",
+    "resolution": "2560x1440",
+    "background": "cream",
+    "path": "D:\\ProjectOne_FontLab\\ProjectOneDisplay_20260729_132742\\previews\\FINAL_Contact_2560x1440.png",
+    "sha256": "DF46816942C60A0CC8CE02706AE1973E8B375B2A346B49569928CBD15BCED1B3"
+  },
+  {
+    "variant": "FINAL",
+    "type": "HangulStress",
+    "resolution": "2560x1440",
+    "background": "dark",
+    "path": "D:\\ProjectOne_FontLab\\ProjectOneDisplay_20260729_132742\\previews\\FINAL_HangulStress_2560x1440.png",
+    "sha256": "3351B296EC98174F0149AE6DDACED9EDE5BC7C981DF63EE515BF241FF8BCED52"
+  },
+  {
+    "variant": "FINAL",
+    "type": "RealUIMockup",
+    "resolution": "2560x1440",
+    "background": "checker",
+    "path": "D:\\ProjectOne_FontLab\\ProjectOneDisplay_20260729_132742\\previews\\FINAL_RealUIMockup_2560x1440.png",
+    "sha256": "E3EE1B984E53340918EEFA3D16D2C179B66CE8A21CCA011E8EEB00E1F24E6054"
+  }
+]

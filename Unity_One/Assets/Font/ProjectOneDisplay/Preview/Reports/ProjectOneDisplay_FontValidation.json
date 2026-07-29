@@ -1,0 +1,106 @@
+{
+  "FINAL": {
+    "fonts": [
+      {
+        "path": "D:\\ProjectOne_FontLab\\ProjectOneDisplay_20260729_132742\\build\\FINAL\\ProjectOneDisplay-Bold.ttf",
+        "sha256": "78D750427DFC9B37E6D143FD6D6B212A2205F98AAFDD8CDA841C463C3CA28E93",
+        "size_bytes": 181140,
+        "open": true,
+        "errors": [],
+        "warnings": [],
+        "names": {
+          "family": "Project One Display",
+          "style": "Bold",
+          "postscript": "ProjectOneDisplay-Bold",
+          "version": "Version 0.100"
+        },
+        "duplicate_unicode_conflicts": {},
+        "missing_required": [],
+        "glyph_count": 515,
+        "unicode_count": 514,
+        "empty_required": [],
+        "invalid_bounds": [],
+        "metric_clipping": [],
+        "zero_advance": [],
+        "extreme_bearings": [],
+        "contour_signed_area": {
+          "negative": 512
+        },
+        "metrics": {
+          "units_per_em": 1000,
+          "hhea_ascent": 850,
+          "hhea_descent": -270,
+          "line_gap": 100,
+          "os2_typo_ascender": 850,
+          "os2_typo_descender": -270,
+          "weight_class": 700,
+          "width_class": 5
+        },
+        "ots": {
+          "available": true,
+          "return_code": 0,
+          "log": "D:\\ProjectOne_FontLab\\ProjectOneDisplay_20260729_132742\\reports\\FINAL_ttf_ots.log",
+          "tail": "File sanitized successfully!\n\n"
+        }
+      },
+      {
+        "path": "D:\\ProjectOne_FontLab\\ProjectOneDisplay_20260729_132742\\build\\FINAL\\ProjectOneDisplay-Bold.otf",
+        "sha256": "563204AFD86EA035729BFAB5D7BA50D57A56C98418D7AAF72AF0F4ED0213283E",
+        "size_bytes": 97412,
+        "open": true,
+        "errors": [],
+        "warnings": [],
+        "names": {
+          "family": "Project One Display",
+          "style": "Bold",
+          "postscript": "ProjectOneDisplay-Bold",
+          "version": "Version 0.100"
+        },
+        "duplicate_unicode_conflicts": {},
+        "missing_required": [],
+        "glyph_count": 515,
+        "unicode_count": 514,
+        "empty_required": [],
+        "invalid_bounds": [],
+        "metric_clipping": [],
+        "zero_advance": [],
+        "extreme_bearings": [],
+        "contour_signed_area": {
+          "positive": 512
+        },
+        "metrics": {
+          "units_per_em": 1000,
+          "hhea_ascent": 850,
+          "hhea_descent": -270,
+          "line_gap": 100,
+          "os2_typo_ascender": 850,
+          "os2_typo_descender": -270,
+          "weight_class": 700,
+          "width_class": 5
+        },
+        "ots": {
+          "available": true,
+          "return_code": 0,
+          "log": "D:\\ProjectOne_FontLab\\ProjectOneDisplay_20260729_132742\\reports\\FINAL_otf_ots.log",
+          "tail": "File sanitized successfully!\n\n"
+        }
+      }
+    ],
+    "counter_24px": {
+      "holes": 9,
+      "ink_ratio": 0.3723,
+      "bbox": [
+        4,
+        5,
+        152,
+        27
+      ]
+    },
+    "fontbakery": {
+      "available": true,
+      "return_code": 1,
+      "log": "D:\\ProjectOne_FontLab\\ProjectOneDisplay_20260729_132742\\reports\\FINAL_fontbakery.log",
+      "tail": "  \n                                                                               \n    \"Smart dropout control\" means activating rules 1, 2 and 5: Rule 1: If a    \n    pixel's center falls within the glyph outline, that pixel is turned on.    \n    Rule 2: If a contour falls exactly on a pixel's center, that pixel is      \n    turned on. Rule 5: If a scan line between two adjacent pixel centers       \n    (either vertical or horizontal) is intersected by both an on-Transition    \n    contour and an off-Transition contour and neither of the pixels was        \n    already turned on by rules 1 and 2, turn on the pixel which is closer to   \n    the midpoint between the on-Transition contour and off-Transition          \n    contour. This is \"Smart\" dropout control.                                  \n                                                                               \n    For more detailed info (such as other rules not enabled in this snippet),  \n    please refer to the TrueType Instruction Set documentation.                \n                                                                               \n    Generally this occurs with unhinted fonts; if you are not using            \n    autohinting, use gftools-fix-nonhinting (or just gftools-fix-font) to fix  \n    this issue.                                                                \n                                                                               \n    More info: https://github.com/fonttools/fontbakery/issues/4829\n\n    FAIL The 'prep' table does not contain TrueType instructions enabling      \n         smart dropout control. To fix, export the font with autohinting       \n         enabled, or run ttfautohint on the font, or run the gftools           \n         fix-nonhinting script. [code: lacks-smart-dropout]                    \n\n    Result: FAIL\n\n\nTotal:\n    ERROR: 0\n    FATAL: 0\n    FAIL: 1\n    WARN: 4\n    INFO: 3\n    SKIP: 43\n    PASS: 76\n\n\n\n    Meaning of check results:\n\n    An ERROR is something wrong with FontBakery itself, possibly a bug.\n    A  FATAL is an extremely severe issue that must be addressed immediately.\n    A  FAIL is a problem with the font that must be fixed.\n    A  WARN is something that you should consider addressing.\n    An INFO result simply prints something useful. Typically stats.\n    A  PASS means the font looks good for the given checking routine.\nAnd a  SKIP happens when the check does not apply to the given font.\n\n    If you get ERRORs, please help us improve the tool by reporting them at\n    https://github.com/fonttools/fontbakery/issues (but other kinds of bug\n    reports and/or feature requests are also always welcome, of course!)\n\n\n\nDONE!\n  [] 0%\nD:\\ProjectOne_FontLab\\ProjectOneDisplay_20260729_132742\\venv\\Lib\\site-packages\\fontbakery\\fonts_profile.py:103: UserWarning: Failed to load fontbakery.checks.vendorspecific.googlefonts.glyphsets.shape_languages: No module named 'glyphsets'\n  warnings.warn(\"Failed to load %s: %s\" % (import_path, e))\n"
+    }
+  }
+}
