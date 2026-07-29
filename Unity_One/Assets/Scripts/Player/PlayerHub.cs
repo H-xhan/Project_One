@@ -1280,6 +1280,10 @@ public class PlayerHub : NetworkBehaviour
 
     public bool TryConsumePostItPeelInteractThisFrame()
     {
+        int currentFrame = Time.frameCount;
+        if (_characterGrabReservedInteractFrame == currentFrame)
+            return true;
+
         if (interactModule != null && interactModule.IsGrabbingCharacter)
         {
             if (IsServer)
@@ -1295,10 +1299,6 @@ public class PlayerHub : NetworkBehaviour
             return true;
 
         if (ShouldReserveSpinDashInteractThisFrame())
-            return true;
-
-        int currentFrame = Time.frameCount;
-        if (_characterGrabReservedInteractFrame == currentFrame)
             return true;
 
         if (_postItPeelEvaluatedFrame == currentFrame)
