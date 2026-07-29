@@ -1138,7 +1138,6 @@ public class PlayerHub : NetworkBehaviour
         if (interactPressed &&
             sprintHeld &&
             CanMoveNow() &&
-            HasHeldItemForSpinDash() &&
             HasAvailableSpinDashRoute())
         {
             if (IsServer)
@@ -1328,7 +1327,6 @@ public class PlayerHub : NetworkBehaviour
     private bool ShouldReserveSpinDashInteractThisFrame()
     {
         if (!CanMoveNow() ||
-            !HasHeldItemForSpinDash() ||
             !HasAvailableSpinDashRoute())
         {
             return false;
