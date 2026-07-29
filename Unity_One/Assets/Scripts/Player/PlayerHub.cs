@@ -2471,6 +2471,13 @@ public class PlayerHub : NetworkBehaviour
         if (!CanInteractNow())
             return;
 
+        if (interactModule.IsGrabbingCharacter)
+        {
+            interactModule.ServerReleaseCharacterGrab(
+                "InteractInput");
+            return;
+        }
+
         if (!targetReference.TryGet(out NetworkObject targetObject))
             return;
 
