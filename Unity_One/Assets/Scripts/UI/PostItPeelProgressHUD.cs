@@ -109,15 +109,43 @@ public sealed class PostItPeelProgressHUD : MonoBehaviour
             return;
         }
 
-        bool visible = _boundPlayerHub.IsPostItPeelTracking;
+        PlayerHub.CharacterGrabLocalInputState characterGrabState =
+            _boundPlayerHub.CurrentCharacterGrabLocalInputState;
+        bool peelVisible = _boundPlayerHub.IsPostItPeelTracking;
+        bool characterGrabVisible =
+            !peelVisible &&
+            _boundPlayerHub.ShouldShowLocalCharacterGrabCharge &&
+            IsCharacterGrabChargeState(characterGrabState);
+        bool visible = characterGrabVisible || peelVisible;
         if (progressFillImage != null)
         {
-            progressFillImage.fillAmount = visible
-                ? Mathf.Clamp01(_boundPlayerHub.PostItPeelHoldProgress01)
-                : 0f;
+            float progress = 0f;
+            if (characterGrabVisible)
+            {
+                progress =
+                    characterGrabState ==
+                    PlayerHub.CharacterGrabLocalInputState.RequestPending
+                        ? 0f
+                        : _boundPlayerHub.CharacterGrabChargeProgress01;
+            }
+            else if (peelVisible)
+            {
+                progress = _boundPlayerHub.PostItPeelHoldProgress01;
+            }
+
+            progressFillImage.fillAmount = Mathf.Clamp01(progress);
         }
 
         SetProgressVisible(visible);
+    }
+
+    private static bool IsCharacterGrabChargeState(
+        PlayerHub.CharacterGrabLocalInputState state)
+    {
+        return state == PlayerHub.CharacterGrabLocalInputState.RequestPending ||
+               state == PlayerHub.CharacterGrabLocalInputState.Charging ||
+               state == PlayerHub.CharacterGrabLocalInputState.LiftReady ||
+               state == PlayerHub.CharacterGrabLocalInputState.LiftRequested;
     }
 
     private void SetProgressVisible(bool visible)
