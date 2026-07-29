@@ -1274,8 +1274,10 @@ public class PlayerInteractModule : NetworkBehaviour
             return direction;
         }
 
-        HamsterFullRagdollMotor motor =
-            GetComponentInChildren<HamsterFullRagdollMotor>(true);
+        NetworkObject ownerRoot = ResolveRootNetworkObject(this);
+        HamsterFullRagdollMotor motor = ownerRoot != null
+            ? ownerRoot.GetComponentInChildren<HamsterFullRagdollMotor>(true)
+            : null;
         if (motor != null)
         {
             if (TryNormalizeCharacterGrabPlanarDirection(
