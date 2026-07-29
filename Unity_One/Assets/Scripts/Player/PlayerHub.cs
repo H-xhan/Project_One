@@ -360,6 +360,7 @@ public class PlayerHub : NetworkBehaviour
     private int _postItPeelEvaluatedFrame = -1;
     private bool _postItPeelConsumedInEvaluatedFrame;
     private bool _characterGrabRequestPending;
+    private bool _characterGrabRequestOutstanding;
     private float _characterGrabRequestPendingTimeoutAt;
     private float _nextCharacterGrabRequestTime;
     private bool _characterGrabCancelAfterLiftRequest;
@@ -1252,13 +1253,16 @@ public class PlayerHub : NetworkBehaviour
         if (dropPressed)
         {
             if (interactModule != null &&
-                (_characterGrabRequestPending ||
+                (_characterGrabRequestOutstanding ||
+                 _characterGrabRequestPending ||
                  interactModule.IsLocalCharacterGrabberActive))
             {
                 if (IsServer)
                     interactModule.ServerReleaseCharacterGrab("DropInput");
                 else
                     interactModule.RequestReleaseCharacterGrab();
+
+                ResetLocalCharacterGrabInputState();
             }
             else
             {
@@ -1365,7 +1369,8 @@ public class PlayerHub : NetworkBehaviour
 
     public bool TryConsumePostItPeelInteractThisFrame()
     {
-        if (_characterGrabRequestPending ||
+        if (_characterGrabRequestOutstanding ||
+            _characterGrabRequestPending ||
             (interactModule != null &&
              (interactModule.IsLocalCharacterGrabberActive ||
               interactModule.IsLocalCharacterGrabTargetActive)))
@@ -1423,6 +1428,7 @@ public class PlayerHub : NetworkBehaviour
             PlayerInteractModule.CharacterGrabPresentationPhase.None)
         {
             _characterGrabRequestPending = false;
+            _characterGrabRequestOutstanding = false;
             _characterGrabRequestPendingTimeoutAt = 0f;
         }
         else if (_characterGrabRequestPending &&
@@ -1469,7 +1475,8 @@ public class PlayerHub : NetworkBehaviour
             {
                 _characterGrabCancelAfterLiftRequest = true;
             }
-            else if (_characterGrabRequestPending ||
+            else if (_characterGrabRequestOutstanding ||
+                    _characterGrabRequestPending ||
                     phase ==
                         PlayerInteractModule.CharacterGrabPresentationPhase
                             .Charging ||
@@ -1481,6 +1488,7 @@ public class PlayerHub : NetworkBehaviour
             }
 
             _characterGrabRequestPending = false;
+            _characterGrabRequestOutstanding = false;
             _characterGrabRequestPendingTimeoutAt = 0f;
             return;
         }
@@ -1499,6 +1507,7 @@ public class PlayerHub : NetworkBehaviour
 
         if (!CanInteractNow() ||
             IsPostItPeelUiInputBlocked() ||
+            _postItPeelHoldState != PostItPeelHoldState.Idle ||
             interactModule.HasHeldItem() ||
             interactModule.IsCharacterGrabBusy ||
             !interactModule.TryFindCharacterGrabTarget(
@@ -1511,6 +1520,7 @@ public class PlayerHub : NetworkBehaviour
             return;
 
         _characterGrabRequestPending = true;
+        _characterGrabRequestOutstanding = true;
         _characterGrabRequestPendingTimeoutAt =
             Time.unscaledTime + CharacterGrabRequestPendingTimeout;
     }
@@ -1523,7 +1533,8 @@ public class PlayerHub : NetworkBehaviour
 
         PlayerInteractModule.CharacterGrabPresentationPhase phase =
             interactModule.CurrentCharacterGrabPresentationPhase;
-        if (_characterGrabRequestPending &&
+        if ((_characterGrabRequestPending ||
+             _characterGrabRequestOutstanding) &&
             phase ==
                 PlayerInteractModule.CharacterGrabPresentationPhase.None)
         {
@@ -1567,6 +1578,7 @@ public class PlayerHub : NetworkBehaviour
     private void ResetLocalCharacterGrabInputState()
     {
         _characterGrabRequestPending = false;
+        _characterGrabRequestOutstanding = false;
         _characterGrabRequestPendingTimeoutAt = 0f;
         _nextCharacterGrabRequestTime = 0f;
         _characterGrabCancelAfterLiftRequest = false;
@@ -2662,10 +2674,7 @@ public class PlayerHub : NetworkBehaviour
         }
 
         if (IsServer)
-        {
-            interactModule.ServerTryStartCharacterGrab(targetStatus);
-            return true;
-        }
+            return interactModule.ServerTryStartCharacterGrab(targetStatus);
 
         if (!TryCreateCharacterGrabTargetReference(targetStatus, out NetworkObjectReference targetReference))
             return false;
