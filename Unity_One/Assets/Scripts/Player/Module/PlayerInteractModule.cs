@@ -1252,11 +1252,7 @@ public class PlayerInteractModule : NetworkBehaviour
 
         float radius = Mathf.Max(0.01f, characterGrabRadius);
         Vector3 origin = GetCharacterGrabServerOrigin();
-        Vector3 direction = transform.forward;
-        if (direction.sqrMagnitude < 0.0001f)
-            direction = Vector3.forward;
-
-        direction.Normalize();
+        Vector3 direction = GetCharacterGrabServerDirection();
 
         Vector3 targetPoint = GetCharacterGrabTargetPoint(targetStatus);
         Vector3 toTarget = targetPoint - origin;
@@ -1266,6 +1262,63 @@ public class PlayerInteractModule : NetworkBehaviour
 
         Vector3 closestPoint = origin + direction * Mathf.Clamp(along, 0f, distance);
         return (targetPoint - closestPoint).sqrMagnitude <= radius * radius;
+    }
+
+    private Vector3 GetCharacterGrabServerDirection()
+    {
+        if (ownerCamera != null &&
+            TryNormalizeCharacterGrabPlanarDirection(
+                ownerCamera.transform.forward,
+                out Vector3 direction))
+        {
+            return direction;
+        }
+
+        HamsterFullRagdollMotor motor =
+            GetComponentInChildren<HamsterFullRagdollMotor>(true);
+        if (motor != null)
+        {
+            if (TryNormalizeCharacterGrabPlanarDirection(
+                    motor.DesiredFacingDirection,
+                    out direction))
+            {
+                return direction;
+            }
+
+            if (TryNormalizeCharacterGrabPlanarDirection(
+                    motor.SmoothedMoveWorldDirection,
+                    out direction))
+            {
+                return direction;
+            }
+        }
+
+        if (TryNormalizeCharacterGrabPlanarDirection(
+                transform.forward,
+                out direction))
+        {
+            return direction;
+        }
+
+        return Vector3.forward;
+    }
+
+    private bool TryNormalizeCharacterGrabPlanarDirection(
+        Vector3 source,
+        out Vector3 direction)
+    {
+        direction = Vector3.ProjectOnPlane(source, Vector3.up);
+        if (!IsFinite(direction.x) ||
+            !IsFinite(direction.y) ||
+            !IsFinite(direction.z) ||
+            direction.sqrMagnitude < 0.0001f)
+        {
+            direction = Vector3.zero;
+            return false;
+        }
+
+        direction.Normalize();
+        return true;
     }
 
     private void CleanupCharacterGrabOnLifecycle(string reason)
