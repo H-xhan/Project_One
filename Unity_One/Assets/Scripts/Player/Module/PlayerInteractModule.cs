@@ -1,8 +1,71 @@
+using System;
 using Unity.Netcode;
 using UnityEngine;
 
 public class PlayerInteractModule : NetworkBehaviour
 {
+    public enum CharacterGrabPresentationPhase : byte
+    {
+        None = 0,
+        Charging = 1,
+        LiftReady = 2,
+        Carrying = 3,
+        Grabbed = 4,
+        Carried = 5
+    }
+
+    public struct CharacterGrabPresentationState :
+        INetworkSerializable,
+        IEquatable<CharacterGrabPresentationState>
+    {
+        public CharacterGrabPresentationPhase Phase;
+        public double ServerStartedAt;
+        public double ServerReadyAt;
+
+        public CharacterGrabPresentationState(
+            CharacterGrabPresentationPhase phase,
+            double serverStartedAt,
+            double serverReadyAt)
+        {
+            Phase = phase;
+            ServerStartedAt = serverStartedAt;
+            ServerReadyAt = serverReadyAt;
+        }
+
+        public void NetworkSerialize<T>(BufferSerializer<T> serializer)
+            where T : IReaderWriter
+        {
+            serializer.SerializeValue(ref Phase);
+            serializer.SerializeValue(ref ServerStartedAt);
+            serializer.SerializeValue(ref ServerReadyAt);
+        }
+
+        public bool Equals(CharacterGrabPresentationState other)
+        {
+            return Phase == other.Phase &&
+                   ServerStartedAt.Equals(other.ServerStartedAt) &&
+                   ServerReadyAt.Equals(other.ServerReadyAt);
+        }
+
+        public override bool Equals(object obj)
+        {
+            return obj is CharacterGrabPresentationState other &&
+                   Equals(other);
+        }
+
+        public override int GetHashCode()
+        {
+            unchecked
+            {
+                int hash = 17;
+                hash = hash * 31 + Phase.GetHashCode();
+                hash = hash * 31 + ServerStartedAt.GetHashCode();
+                hash = hash * 31 + ServerReadyAt.GetHashCode();
+                return hash;
+            }
+        }
+    }
+
     private const float RequestedPosePositionEpsilon = 0.0005f;
     private const float RequestedPoseRotationEpsilon = 0.1f;
     private const float RequestedPoseScaleEpsilon = 0.0005f;
@@ -15,6 +78,7 @@ public class PlayerInteractModule : NetworkBehaviour
     private const string GrabbedMoveMultiplierKey = "CharacterGrabbed";
     private const string CharacterGrabEscapeReason = "escape";
     private const float GameplayGateResolveRetryInterval = 0.5f;
+    private const float CharacterLiftRequestTimeoutSeconds = 1f;
 
     [Header("Raycast")]
     [Tooltip("오너가 사용하는 카메라")]
@@ -183,6 +247,14 @@ public class PlayerInteractModule : NetworkBehaviour
             NetworkVariableWritePermission.Server
         );
 
+    private readonly NetworkVariable<CharacterGrabPresentationState>
+        _characterGrabPresentationState =
+            new NetworkVariable<CharacterGrabPresentationState>(
+                default,
+                NetworkVariableReadPermission.Everyone,
+                NetworkVariableWritePermission.Server
+            );
+
     private bool _ownerMode;
     private GameStateManager _gameplayGateStateManager;
     private PlayerStatusModule _gameplayGateOwnerStatus;
@@ -222,6 +294,8 @@ public class PlayerInteractModule : NetworkBehaviour
     private float _lastEscapeTapAt;
     private float _regrabImmuneUntil;
     private bool _isCarryingCharacter;
+    private bool _localCharacterLiftRequestPending;
+    private float _localCharacterLiftRequestTimeoutAt;
     private CharacterController _carriedCharacterController;
     private Rigidbody _carriedCharacterRigidbody;
     private bool _carriedCharacterControllerWasEnabled;
@@ -262,6 +336,8 @@ public class PlayerInteractModule : NetworkBehaviour
     {
         base.OnNetworkSpawn();
 
+        _localCharacterLiftRequestPending = false;
+        _localCharacterLiftRequestTimeoutAt = 0f;
         ResetGameplayGateCache();
         _cc = GetComponentInParent<CharacterController>();
         _anim = GetComponentInParent<Animator>();
@@ -279,6 +355,8 @@ public class PlayerInteractModule : NetworkBehaviour
 
     public override void OnNetworkDespawn()
     {
+        _localCharacterLiftRequestPending = false;
+        _localCharacterLiftRequestTimeoutAt = 0f;
         _heldItem.OnValueChanged -= OnHeldItemChanged;
         ClearExternalHeldItemPoseOverrideInternal("NetworkDespawn", false);
         DestroyLocalHeldVisual();
@@ -365,6 +443,8 @@ public class PlayerInteractModule : NetworkBehaviour
     {
         if (IsServer)
             ServerTickCharacterGrab();
+
+        TickLocalCharacterLiftRequest();
 
         if (characterGrabOnlyMode)
             return;
@@ -495,6 +575,19 @@ public class PlayerInteractModule : NetworkBehaviour
     public bool IsCharacterLiftReady => IsGrabbingCharacter && _isCharacterLiftReady;
     public bool IsCharacterGrabBusy => IsGrabbingCharacter || IsGrabbedByCharacter;
     public bool CanThrowCarriedCharacter => CanThrowCarriedCharacterInternal();
+    public CharacterGrabPresentationPhase CurrentCharacterGrabPresentationPhase =>
+        _characterGrabPresentationState.Value.Phase;
+    public bool IsLocalCharacterGrabberActive =>
+        IsGrabberPresentationPhase(CurrentCharacterGrabPresentationPhase);
+    public bool IsLocalCharacterGrabTargetActive =>
+        IsTargetPresentationPhase(CurrentCharacterGrabPresentationPhase);
+    public bool IsLocalCharacterCarrying =>
+        CurrentCharacterGrabPresentationPhase ==
+        CharacterGrabPresentationPhase.Carrying;
+    public bool IsLocalCharacterLiftRequestPending =>
+        _localCharacterLiftRequestPending;
+    public float CharacterGrabChargeProgress01 =>
+        GetCharacterGrabChargeProgress01();
 
     public bool CanPickupItemBecauseOfCharacterGrab()
     {
@@ -739,6 +832,8 @@ public class PlayerInteractModule : NetworkBehaviour
         float now = Time.time;
         float liftDuration = Mathf.Max(0f, liftChargeDuration);
         bool liftReadyImmediately = liftDuration <= 0f;
+        double serverStartedAt = GetCharacterGrabServerTime();
+        double serverReadyAt = serverStartedAt + liftDuration;
 
         _grabbedCharacter = targetNetObj;
         _grabbedCharacterInteract = targetInteract;
@@ -766,14 +861,21 @@ public class PlayerInteractModule : NetworkBehaviour
 
         ApplyCharacterGrabMoveSpeedMultiplier(this, GrabberMoveMultiplierKey, grabberMoveSpeedMultiplier);
         ApplyCharacterGrabMoveSpeedMultiplier(targetInteract, GrabbedMoveMultiplierKey, grabbedMoveSpeedMultiplier);
+        SetCharacterGrabPresentationStateServer(
+            liftReadyImmediately
+                ? CharacterGrabPresentationPhase.LiftReady
+                : CharacterGrabPresentationPhase.Charging,
+            serverStartedAt,
+            serverReadyAt);
+        targetInteract.SetCharacterGrabPresentationStateServer(
+            CharacterGrabPresentationPhase.Grabbed,
+            serverStartedAt,
+            serverReadyAt);
 
         CharacterGrabLog($"[PlayerInteract] Character grab started target={GetCharacterGrabDebugName(targetStatus, targetInteract)}");
 
         if (liftReadyImmediately)
-        {
             CharacterGrabLog($"[PlayerInteract] Character grab lift ready target={GetCharacterGrabDebugName(targetStatus, targetInteract)}");
-            ServerBeginCharacterCarryFollow("LiftReady");
-        }
     }
 
     public void ServerReleaseCharacterGrab(string reason)
@@ -781,6 +883,16 @@ public class PlayerInteractModule : NetworkBehaviour
         if (!IsServer) return;
 
         string releaseReason = string.IsNullOrWhiteSpace(reason) ? "release" : reason;
+        if (releaseReason == "request-release" &&
+            IsGrabbingCharacter &&
+            _isCarryingCharacter)
+        {
+            CharacterGrabLog(
+                "[PlayerInteract] Character grab release ignored " +
+                "reason=request-release state=Carrying");
+            return;
+        }
+
         if (IsInputDrivenCharacterGrabRelease(releaseReason) &&
             !CanProcessServerGameplayMutation())
         {
@@ -905,6 +1017,48 @@ public class PlayerInteractModule : NetworkBehaviour
             return;
 
         ServerReleaseCharacterGrab("request-release");
+    }
+
+    public bool RequestExplicitCharacterLift()
+    {
+        if (!CanProcessLocalOwnerGameplayRequest())
+            return false;
+
+        if (_localCharacterLiftRequestPending ||
+            CurrentCharacterGrabPresentationPhase !=
+            CharacterGrabPresentationPhase.LiftReady)
+        {
+            return false;
+        }
+
+        _localCharacterLiftRequestPending = true;
+        _localCharacterLiftRequestTimeoutAt =
+            Time.unscaledTime + CharacterLiftRequestTimeoutSeconds;
+
+        if (IsServer)
+        {
+            bool accepted =
+                ServerTryBeginExplicitCharacterLift("LocalExplicitLift");
+            _localCharacterLiftRequestPending = false;
+            _localCharacterLiftRequestTimeoutAt = 0f;
+            return accepted;
+        }
+
+        RequestExplicitCharacterLiftServerRpc();
+        return true;
+    }
+
+    [ServerRpc]
+    private void RequestExplicitCharacterLiftServerRpc(
+        ServerRpcParams rpcParams = default)
+    {
+        if (rpcParams.Receive.SenderClientId != OwnerClientId)
+            return;
+
+        if (!CanProcessServerGameplayMutation())
+            return;
+
+        ServerTryBeginExplicitCharacterLift("OwnerExplicitLift");
     }
 
     public void RequestThrowCarriedCharacter()
@@ -1050,7 +1204,9 @@ public class PlayerInteractModule : NetworkBehaviour
             }
 
             float maxDuration = Mathf.Max(0f, maxCharacterGrabDuration);
-            if (maxDuration > 0f && Time.time - _characterGrabStartedAt >= maxDuration)
+            if (!_isCarryingCharacter &&
+                maxDuration > 0f &&
+                Time.time - _characterGrabStartedAt >= maxDuration)
             {
                 ServerReleaseCharacterGrab("max-duration");
                 return;
@@ -1060,10 +1216,9 @@ public class PlayerInteractModule : NetworkBehaviour
             {
                 SetCharacterLiftReadyForPair(true);
                 CharacterGrabLog($"[PlayerInteract] Character grab lift ready target={GetCharacterGrabDebugName(_grabbedCharacterStatus, _grabbedCharacterInteract)}");
-                ServerBeginCharacterCarryFollow("LiftReady");
             }
 
-            if (_isCharacterLiftReady)
+            if (_isCarryingCharacter)
                 ServerUpdateCharacterCarryFollow();
         }
 
@@ -1359,6 +1514,10 @@ public class PlayerInteractModule : NetworkBehaviour
     {
         ServerEndCharacterCarryFollow(reason);
         ClearCharacterGrabMoveSpeedMultipliers(this);
+        SetCharacterGrabPresentationStateServer(
+            CharacterGrabPresentationPhase.None,
+            0d,
+            0d);
 
         _grabbedCharacter = default;
         _grabbedByCharacter = default;
@@ -1371,6 +1530,8 @@ public class PlayerInteractModule : NetworkBehaviour
         _isCharacterLiftReady = false;
         _escapeTapCount = 0;
         _lastEscapeTapAt = 0f;
+        _localCharacterLiftRequestPending = false;
+        _localCharacterLiftRequestTimeoutAt = 0f;
 
         if (applyEscapeRegrabImmunity)
             _regrabImmuneUntil = Time.time + Mathf.Max(0f, escapeRegrabImmunitySeconds);
@@ -1379,10 +1540,102 @@ public class PlayerInteractModule : NetworkBehaviour
     private void SetCharacterLiftReadyForPair(bool isReady)
     {
         _isCharacterLiftReady = isReady;
+        CharacterGrabPresentationState currentState =
+            _characterGrabPresentationState.Value;
+        SetCharacterGrabPresentationStateServer(
+            isReady
+                ? CharacterGrabPresentationPhase.LiftReady
+                : CharacterGrabPresentationPhase.Charging,
+            currentState.ServerStartedAt,
+            currentState.ServerReadyAt);
 
         PlayerInteractModule grabbedInteract = ResolveGrabbedCharacterInteract();
         if (grabbedInteract != null && grabbedInteract != this)
+        {
             grabbedInteract._isCharacterLiftReady = isReady;
+            grabbedInteract.SetCharacterGrabPresentationStateServer(
+                CharacterGrabPresentationPhase.Grabbed,
+                currentState.ServerStartedAt,
+                currentState.ServerReadyAt);
+        }
+    }
+
+    private void SetCharacterGrabPresentationStateServer(
+        CharacterGrabPresentationPhase phase,
+        double serverStartedAt,
+        double serverReadyAt)
+    {
+        if (!IsServer || !IsSpawned)
+            return;
+
+        _characterGrabPresentationState.Value =
+            new CharacterGrabPresentationState(
+                phase,
+                serverStartedAt,
+                serverReadyAt);
+    }
+
+    private void TickLocalCharacterLiftRequest()
+    {
+        if (!_localCharacterLiftRequestPending)
+            return;
+
+        CharacterGrabPresentationPhase phase =
+            CurrentCharacterGrabPresentationPhase;
+        if (phase == CharacterGrabPresentationPhase.Carrying ||
+            phase == CharacterGrabPresentationPhase.None ||
+            phase == CharacterGrabPresentationPhase.Grabbed ||
+            phase == CharacterGrabPresentationPhase.Carried ||
+            Time.unscaledTime >= _localCharacterLiftRequestTimeoutAt)
+        {
+            _localCharacterLiftRequestPending = false;
+            _localCharacterLiftRequestTimeoutAt = 0f;
+        }
+    }
+
+    private float GetCharacterGrabChargeProgress01()
+    {
+        CharacterGrabPresentationState state =
+            _characterGrabPresentationState.Value;
+        if (state.Phase == CharacterGrabPresentationPhase.LiftReady ||
+            state.Phase == CharacterGrabPresentationPhase.Carrying)
+        {
+            return 1f;
+        }
+
+        if (state.Phase != CharacterGrabPresentationPhase.Charging)
+            return 0f;
+
+        double duration = state.ServerReadyAt - state.ServerStartedAt;
+        if (duration <= double.Epsilon)
+            return 1f;
+
+        double now = GetCharacterGrabServerTime();
+        return Mathf.Clamp01(
+            (float)((now - state.ServerStartedAt) / duration));
+    }
+
+    private double GetCharacterGrabServerTime()
+    {
+        if (NetworkManager != null && NetworkManager.IsListening)
+            return NetworkManager.ServerTime.Time;
+
+        return Time.timeAsDouble;
+    }
+
+    private static bool IsGrabberPresentationPhase(
+        CharacterGrabPresentationPhase phase)
+    {
+        return phase == CharacterGrabPresentationPhase.Charging ||
+               phase == CharacterGrabPresentationPhase.LiftReady ||
+               phase == CharacterGrabPresentationPhase.Carrying;
+    }
+
+    private static bool IsTargetPresentationPhase(
+        CharacterGrabPresentationPhase phase)
+    {
+        return phase == CharacterGrabPresentationPhase.Grabbed ||
+               phase == CharacterGrabPresentationPhase.Carried;
     }
 
     private bool CanThrowCarriedCharacterInternal()
@@ -1403,33 +1656,67 @@ public class PlayerInteractModule : NetworkBehaviour
         return _carriedCharacterRoot != null;
     }
 
-    private void ServerBeginCharacterCarryFollow(string reason)
+    public bool ServerTryBeginExplicitCharacterLift(
+        string reason = "ExplicitLift")
+    {
+        if (!CanProcessServerGameplayMutation())
+            return false;
+
+        if (!IsGrabbingCharacter ||
+            !_isCharacterLiftReady ||
+            _isCarryingCharacter ||
+            CurrentCharacterGrabPresentationPhase !=
+            CharacterGrabPresentationPhase.LiftReady)
+        {
+            return false;
+        }
+
+        PlayerInteractModule targetInteract =
+            ResolveGrabbedCharacterInteract();
+        if (targetInteract == null)
+            return false;
+
+        if (characterGrabOnlyMode &&
+            (!ServerIsCurrentPlayingParticipant() ||
+             !targetInteract.ServerIsCurrentPlayingParticipant() ||
+             IsMotorShellRecoveryBlockingCharacterGrab() ||
+             targetInteract.IsMotorShellRecoveryBlockingCharacterGrab() ||
+             HasHeldItemBlockingCharacterGrab() ||
+             targetInteract.HasHeldItemBlockingCharacterGrab()))
+        {
+            return false;
+        }
+
+        return ServerBeginCharacterCarryFollow(reason);
+    }
+
+    private bool ServerBeginCharacterCarryFollow(string reason)
     {
         if (!IsServer)
-            return;
+            return false;
 
         if (_isCarryingCharacter || !enableCharacterCarryFollow)
-            return;
+            return false;
 
         if (!IsGrabbingCharacter)
-            return;
+            return false;
 
         if (!ResolveGrabbedCharacterRefs() || _grabbedCharacterStatus == null)
         {
             ServerReleaseCharacterGrab("invalid-target");
-            return;
+            return false;
         }
 
         if (_grabbedCharacterStatus.IsEliminated)
         {
             ServerReleaseCharacterGrab("target-eliminated");
-            return;
+            return false;
         }
 
         if (!TryResolveCharacterCarryTarget(out Transform targetRoot, out CharacterController targetController, out Rigidbody targetRigidbody))
         {
             ServerReleaseCharacterGrab("invalid-target");
-            return;
+            return false;
         }
 
         _carriedCharacterRoot = targetRoot;
@@ -1450,7 +1737,22 @@ public class PlayerInteractModule : NetworkBehaviour
         }
 
         ServerApplyCharacterCarryPose(true);
+        SetCharacterGrabPresentationStateServer(
+            CharacterGrabPresentationPhase.Carrying,
+            _characterGrabPresentationState.Value.ServerStartedAt,
+            _characterGrabPresentationState.Value.ServerReadyAt);
+        PlayerInteractModule grabbedInteract =
+            ResolveGrabbedCharacterInteract();
+        if (grabbedInteract != null && grabbedInteract != this)
+        {
+            grabbedInteract.SetCharacterGrabPresentationStateServer(
+                CharacterGrabPresentationPhase.Carried,
+                _characterGrabPresentationState.Value.ServerStartedAt,
+                _characterGrabPresentationState.Value.ServerReadyAt);
+        }
+
         CharacterGrabLog($"[PlayerInteract] Character carry started target={GetCharacterGrabDebugName(_grabbedCharacterStatus, _grabbedCharacterInteract)} reason={reason ?? "<null>"}");
+        return true;
     }
 
     private void ServerUpdateCharacterCarryFollow()
@@ -1459,10 +1761,7 @@ public class PlayerInteractModule : NetworkBehaviour
             return;
 
         if (!_isCarryingCharacter)
-        {
-            ServerBeginCharacterCarryFollow("LiftReady");
             return;
-        }
 
         if (!ResolveGrabbedCharacterRefs() || _grabbedCharacterStatus == null || _grabbedCharacterStatus.IsEliminated)
         {
