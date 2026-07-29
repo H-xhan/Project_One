@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using Unity.Netcode;
 using UnityEngine;
 using UnityEngine.EventSystems;
+using UnityEngine.InputSystem;
 using UnityEngine.SceneManagement;
 
 public class PlayerHub : NetworkBehaviour
@@ -18,6 +19,7 @@ public class PlayerHub : NetworkBehaviour
 
     private const string InputRouteTargetName = "Hamster_JointFreeMotorShell_MainScenes";
     private const float InputRouteLogInterval = 0.5f;
+    private const float ExactPostItPeelVisualRayTolerance = 0.1f;
     private const string GameplayPhaseJumpLockReason = "GameState:GuessingResults";
     private const string PostItHeavyJumpLockReason = "PostIt:Heavy";
     private const string RuntimeMainCameraTag = "MainCamera";
@@ -1168,11 +1170,6 @@ public class PlayerHub : NetworkBehaviour
                 {
                     TryPickupServerRpc(target);
                 }
-                else if (interactModule.TryFindCharacterGrabTarget(out PlayerStatusModule targetStatus))
-                {
-                    _characterGrabReservedInteractFrame = Time.frameCount;
-                    RequestCharacterGrab(targetStatus);
-                }
             }
         }
 
@@ -1284,7 +1281,21 @@ public class PlayerHub : NetworkBehaviour
 
     public bool TryConsumePostItPeelInteractThisFrame()
     {
-        if (interactModule != null && interactModule.IsCharacterGrabBusy)
+        if (interactModule != null && interactModule.IsGrabbingCharacter)
+        {
+            if (IsServer)
+                interactModule.ServerReleaseCharacterGrab(
+                    "InteractInput");
+            else
+                interactModule.RequestReleaseCharacterGrab();
+
+            return true;
+        }
+
+        if (interactModule != null && interactModule.IsGrabbedByCharacter)
+            return true;
+
+        if (ShouldReserveSpinDashInteractThisFrame())
             return true;
 
         int currentFrame = Time.frameCount;
@@ -1298,8 +1309,52 @@ public class PlayerHub : NetworkBehaviour
 
         _postItPeelEvaluatedFrame = currentFrame;
         _postItPeelConsumedInEvaluatedFrame =
-            TryBeginPostItPeelHold() || TryRequestDroppedPostItRecovery();
+            TryBeginPostItPeelHold();
+        if (!_postItPeelConsumedInEvaluatedFrame)
+        {
+            _postItPeelConsumedInEvaluatedFrame =
+                TryReserveCharacterGrabInteractThisFrame();
+        }
+
+        if (!_postItPeelConsumedInEvaluatedFrame)
+        {
+            _postItPeelConsumedInEvaluatedFrame =
+                TryRequestDroppedPostItRecovery();
+        }
+
         return _postItPeelConsumedInEvaluatedFrame;
+    }
+
+    private bool ShouldReserveSpinDashInteractThisFrame()
+    {
+        if (!CanMoveNow() ||
+            !HasHeldItemForSpinDash() ||
+            !HasAvailableSpinDashRoute())
+        {
+            return false;
+        }
+
+        Keyboard keyboard = Keyboard.current;
+        return keyboard != null &&
+               (keyboard.leftShiftKey.isPressed ||
+                keyboard.rightShiftKey.isPressed);
+    }
+
+    private bool TryReserveCharacterGrabInteractThisFrame()
+    {
+        if (!CanInteractNow() ||
+            interactModule == null ||
+            interactModule.HasHeldItem() ||
+            interactModule.IsCharacterGrabBusy ||
+            !interactModule.TryFindCharacterGrabTarget(
+                out PlayerStatusModule targetStatus))
+        {
+            return false;
+        }
+
+        _characterGrabReservedInteractFrame = Time.frameCount;
+        RequestCharacterGrab(targetStatus);
+        return true;
     }
 
     private bool TryBeginPostItPeelHold()
@@ -1773,7 +1828,11 @@ public class PlayerHub : NetworkBehaviour
                     !presenter.TryGetClosestVisiblePostIt(
                         ray,
                         selectionDistance,
-                        Mathf.Max(0f, postItPeelVisualRayTolerance),
+                        Mathf.Min(
+                            Mathf.Max(
+                                0f,
+                                postItPeelVisualRayTolerance),
+                            ExactPostItPeelVisualRayTolerance),
                         out selectedPostIt) ||
                     !presenter.TryGetVisiblePostItWorldPosition(
                         selectedPostIt.PostItId,
