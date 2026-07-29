@@ -699,16 +699,34 @@ public class PlayerInteractModule : NetworkBehaviour
         if (HasHeldItemBlockingCharacterGrab()) return false;
         if (IsCharacterGrabBusy) return false;
 
-        Ray cameraRay = ownerCamera.ViewportPointToRay(new Vector3(0.5f, 0.5f, 0f));
-        if (TryFindCharacterGrabTargetFromRay(cameraRay, out targetStatus))
-            return true;
+        float reachDistance = Mathf.Max(0f, characterGrabDistance);
+        if (reachDistance <= 0f)
+            return false;
 
+        Ray cameraRay = ownerCamera.ViewportPointToRay(new Vector3(0.5f, 0.5f, 0f));
         Vector3 fallbackOrigin = GetCharacterGrabFallbackOrigin();
-        Vector3 fallbackDirection = cameraRay.origin + cameraRay.direction * Mathf.Max(0f, characterGrabDistance) - fallbackOrigin;
+        float cameraSelectionDistance =
+            Vector3.Distance(cameraRay.origin, fallbackOrigin) +
+            reachDistance +
+            Mathf.Max(0f, characterGrabRadius);
+        if (TryFindCharacterGrabTargetFromRay(
+                cameraRay,
+                cameraSelectionDistance,
+                out targetStatus))
+        {
+            return true;
+        }
+
+        Vector3 fallbackDirection =
+            cameraRay.GetPoint(cameraSelectionDistance) -
+            fallbackOrigin;
         if (fallbackDirection.sqrMagnitude < 0.0001f)
             fallbackDirection = transform.forward;
 
-        return TryFindCharacterGrabTargetFromRay(new Ray(fallbackOrigin, fallbackDirection.normalized), out targetStatus);
+        return TryFindCharacterGrabTargetFromRay(
+            new Ray(fallbackOrigin, fallbackDirection.normalized),
+            reachDistance,
+            out targetStatus);
     }
 
     public void ServerTryStartCharacterGrab(PlayerStatusModule targetStatus)
@@ -1059,11 +1077,14 @@ public class PlayerInteractModule : NetworkBehaviour
         }
     }
 
-    private bool TryFindCharacterGrabTargetFromRay(Ray ray, out PlayerStatusModule targetStatus)
+    private bool TryFindCharacterGrabTargetFromRay(
+        Ray ray,
+        float castDistance,
+        out PlayerStatusModule targetStatus)
     {
         targetStatus = null;
 
-        float distance = Mathf.Max(0f, characterGrabDistance);
+        float distance = Mathf.Max(0f, castDistance);
         if (distance <= 0f)
             return false;
 
@@ -1084,6 +1105,9 @@ public class PlayerInteractModule : NetworkBehaviour
                 continue;
 
             if (!IsValidCharacterGrabCandidate(candidateStatus))
+                continue;
+
+            if (!IsCharacterGrabTargetInServerRange(candidateStatus))
                 continue;
 
             float hitDistance = Mathf.Max(0f, hits[i].distance);
