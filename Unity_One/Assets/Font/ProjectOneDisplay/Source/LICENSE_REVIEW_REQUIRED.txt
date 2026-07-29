@@ -1,0 +1,14 @@
+PROJECT ONE DISPLAY — INTERNAL LICENSE DRAFT
+
+Copyright 2026 Triad Canvas.
+
+Project One Display is an original font designed for Triad Canvas / Project One.
+Its visual system is reference-inspired, but no reference lettering outline and
+no third-party commercial font outline was traced or copied.
+
+This source, the compiled TTF/OTF files, and derived TMP assets are internal
+project prototypes. Redistribution, sublicensing, public release, embedding
+outside Project One, or assigning an open-source license requires explicit
+review and approval by the rights owner.
+
+STATUS: LICENSE_REVIEW_REQUIRED
