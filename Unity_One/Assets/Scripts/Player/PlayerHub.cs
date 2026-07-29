@@ -1136,13 +1136,12 @@ public class PlayerHub : NetworkBehaviour
         if (interactPressed &&
             sprintHeld &&
             CanMoveNow() &&
-            locomotionModule != null &&
-            interactModule != null &&
-            interactModule.HasHeldItem())
+            HasHeldItemForSpinDash() &&
+            HasAvailableSpinDashRoute())
         {
             if (IsServer)
             {
-                locomotionModule.ServerTryStartSpinDash();
+                ServerTryStartSpinDashOnAvailableRoute();
             }
             else
             {
@@ -1221,10 +1220,8 @@ public class PlayerHub : NetworkBehaviour
         if (IsGameplayPhaseLocked())
             return;
 
-        if (locomotionModule == null)
-            return;
-
-        if (interactModule == null || !interactModule.HasHeldItem())
+        if (!HasHeldItemForSpinDash() ||
+            !HasAvailableSpinDashRoute())
             return;
 
         if (!CanMoveNow())
@@ -1233,7 +1230,56 @@ public class PlayerHub : NetworkBehaviour
         if (TryGetPostItHeavyMovementScale(out _))
             return;
 
-        locomotionModule.ServerTryStartSpinDash();
+        ServerTryStartSpinDashOnAvailableRoute();
+    }
+
+    private bool HasHeldItemForSpinDash()
+    {
+        if (interactModule != null && interactModule.HasHeldItem())
+            return true;
+
+        if (_motorShellItemAdapter == null)
+        {
+            _motorShellItemAdapter =
+                GetComponentInChildren<HamsterMotorShellItemAdapter>(
+                    true);
+        }
+
+        return _motorShellItemAdapter != null &&
+               _motorShellItemAdapter.HasHeldItem;
+    }
+
+    private bool HasAvailableSpinDashRoute()
+    {
+        return locomotionModule != null ||
+               ResolveMotorShellSpinDashAdapter() != null;
+    }
+
+    private bool ServerTryStartSpinDashOnAvailableRoute()
+    {
+        if (!IsServer)
+            return false;
+
+        if (locomotionModule != null)
+            return locomotionModule.ServerTryStartSpinDash();
+
+        HamsterMotorShellSpinDashAdapter adapter =
+            ResolveMotorShellSpinDashAdapter();
+        return adapter != null &&
+               adapter.ServerTryStartSpinDash();
+    }
+
+    private HamsterMotorShellSpinDashAdapter
+        ResolveMotorShellSpinDashAdapter()
+    {
+        if (_motorShellSpinDashAdapter == null)
+        {
+            _motorShellSpinDashAdapter =
+                GetComponentInChildren<
+                    HamsterMotorShellSpinDashAdapter>(true);
+        }
+
+        return _motorShellSpinDashAdapter;
     }
 
     public bool TryConsumePostItPeelInteractThisFrame()
