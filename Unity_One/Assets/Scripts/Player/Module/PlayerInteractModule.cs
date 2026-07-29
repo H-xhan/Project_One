@@ -981,7 +981,8 @@ public class PlayerInteractModule : NetworkBehaviour
         RequestCharacterGrabEscapeTapServerRpc();
     }
 
-    public void RequestReleaseCharacterGrab()
+    public void RequestReleaseCharacterGrab(
+        bool allowCarryRelease = false)
     {
         if (!CanProcessLocalOwnerGameplayRequest())
             return;
@@ -989,11 +990,17 @@ public class PlayerInteractModule : NetworkBehaviour
         if (IsServer)
         {
             if (IsGrabbingCharacter)
-                ServerReleaseCharacterGrab("request-release");
+            {
+                ServerReleaseCharacterGrab(
+                    allowCarryRelease
+                        ? "DropInput"
+                        : "request-release");
+            }
+
             return;
         }
 
-        RequestReleaseCharacterGrabServerRpc();
+        RequestReleaseCharacterGrabServerRpc(allowCarryRelease);
     }
 
     [ServerRpc]
@@ -1009,7 +1016,9 @@ public class PlayerInteractModule : NetworkBehaviour
     }
 
     [ServerRpc]
-    private void RequestReleaseCharacterGrabServerRpc(ServerRpcParams rpcParams = default)
+    private void RequestReleaseCharacterGrabServerRpc(
+        bool allowCarryRelease,
+        ServerRpcParams rpcParams = default)
     {
         if (rpcParams.Receive.SenderClientId != OwnerClientId)
             return;
@@ -1020,7 +1029,10 @@ public class PlayerInteractModule : NetworkBehaviour
         if (!IsGrabbingCharacter)
             return;
 
-        ServerReleaseCharacterGrab("request-release");
+        ServerReleaseCharacterGrab(
+            allowCarryRelease
+                ? "DropInput"
+                : "request-release");
     }
 
     public bool RequestExplicitCharacterLift()
