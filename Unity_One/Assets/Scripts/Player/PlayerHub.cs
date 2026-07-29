@@ -1260,7 +1260,7 @@ public class PlayerHub : NetworkBehaviour
                 if (IsServer)
                     interactModule.ServerReleaseCharacterGrab("DropInput");
                 else
-                    interactModule.RequestReleaseCharacterGrab();
+                    interactModule.RequestReleaseCharacterGrab(true);
 
                 ResetLocalCharacterGrabInputState();
             }
