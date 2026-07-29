@@ -1286,6 +1286,7 @@ public class PlayerHub : NetworkBehaviour
 
         if (interactModule != null && interactModule.IsGrabbingCharacter)
         {
+            _characterGrabReservedInteractFrame = currentFrame;
             if (IsServer)
                 interactModule.ServerReleaseCharacterGrab(
                     "InteractInput");
