@@ -17,6 +17,18 @@ public class PlayerHub : NetworkBehaviour
         Cooldown
     }
 
+    public enum CharacterGrabLocalInputState
+    {
+        Idle = 0,
+        RequestPending = 1,
+        Charging = 2,
+        LiftReady = 3,
+        LiftRequested = 4,
+        Carrying = 5,
+        Grabbed = 6,
+        Carried = 7
+    }
+
     private const string InputRouteTargetName = "Hamster_JointFreeMotorShell_MainScenes";
     private const float InputRouteLogInterval = 0.5f;
     private const float ExactPostItPeelVisualRayTolerance = 0.1f;
@@ -28,6 +40,8 @@ public class PlayerHub : NetworkBehaviour
     private const int PostItPhysicsHitBufferSize = 64;
     private const int DefaultNetworkFaceExpressionId = 0;
     private const int MaximumNetworkFaceExpressionId = 4;
+    private const float CharacterGrabRequestRetryInterval = 0.2f;
+    private const float CharacterGrabRequestPendingTimeout = 1f;
 
     private readonly NetworkVariable<byte> _currentFaceExpressionId =
         new NetworkVariable<byte>(
@@ -288,6 +302,19 @@ public class PlayerHub : NetworkBehaviour
     public PlayerStaminaModule StaminaModule => staminaModule;
     public PostItPeelHoldState CurrentPostItPeelHoldState => _postItPeelHoldState;
     public bool IsPostItPeelTracking => _postItPeelHoldState == PostItPeelHoldState.Tracking;
+    public CharacterGrabLocalInputState CurrentCharacterGrabLocalInputState =>
+        ResolveCharacterGrabLocalInputState();
+    public float CharacterGrabChargeProgress01 =>
+        interactModule != null
+            ? interactModule.CharacterGrabChargeProgress01
+            : 0f;
+    public bool ShouldShowLocalCharacterGrabCharge =>
+        IsOwner &&
+        IsSpawned &&
+        IsPlayingState() &&
+        (statusModule == null || !statusModule.IsEliminated) &&
+        IsGrabberCharacterGrabInputState(
+            CurrentCharacterGrabLocalInputState);
     public float PostItPeelHoldProgress01
     {
         get
@@ -332,7 +359,10 @@ public class PlayerHub : NetworkBehaviour
     private readonly List<Collider> _postItBodyColliderBuffer = new List<Collider>(16);
     private int _postItPeelEvaluatedFrame = -1;
     private bool _postItPeelConsumedInEvaluatedFrame;
-    private int _characterGrabReservedInteractFrame = -1;
+    private bool _characterGrabRequestPending;
+    private float _characterGrabRequestPendingTimeoutAt;
+    private float _nextCharacterGrabRequestTime;
+    private bool _characterGrabCancelAfterLiftRequest;
     private float _nextPostItPeelServerTime;
     private PostItPeelHoldState _postItPeelHoldState;
     private ulong _postItPeelTrackedTargetNetworkObjectId = ulong.MaxValue;
@@ -355,6 +385,7 @@ public class PlayerHub : NetworkBehaviour
     {
         base.OnNetworkSpawn();
 
+        ResetLocalCharacterGrabInputState();
         ResolveRefs();
         InitializeFaceNetworkState();
         CacheCameraDefaults();
@@ -381,6 +412,7 @@ public class PlayerHub : NetworkBehaviour
 
     public override void OnNetworkDespawn()
     {
+        ResetLocalCharacterGrabInputState();
         UnsubscribeFaceNetworkState();
         ForceEndLocalCameraOverride(false);
         ResetPostItPeelHoldState();
@@ -395,6 +427,7 @@ public class PlayerHub : NetworkBehaviour
 
     private void OnDisable()
     {
+        ResetLocalCharacterGrabInputState();
         ForceEndLocalCameraOverride(false);
         ResetPostItPeelHoldState();
         ResetCameraPositionSmoothingState();
@@ -402,6 +435,7 @@ public class PlayerHub : NetworkBehaviour
 
     private void OnDestroy()
     {
+        ResetLocalCharacterGrabInputState();
         UnsubscribeFaceNetworkState();
         ForceEndLocalCameraOverride(false);
         ResetPostItPeelHoldState();
@@ -955,7 +989,7 @@ public class PlayerHub : NetworkBehaviour
         NeutralizeRoutedGameplayInput();
         _postItPeelEvaluatedFrame = -1;
         _postItPeelConsumedInEvaluatedFrame = false;
-        _characterGrabReservedInteractFrame = -1;
+        ResetLocalCharacterGrabInputState();
         CancelPostItPeelHold();
     }
 
@@ -1092,6 +1126,7 @@ public class PlayerHub : NetworkBehaviour
         }
 
         TickPostItPeelHold();
+        TickCharacterGrabInput(gameplayPhaseLocked);
 
         bool canMoveNow = CanMoveNow();
         if (!canMoveNow)
@@ -1120,22 +1155,61 @@ public class PlayerHub : NetworkBehaviour
 
         if (jumpPressed)
         {
-            if (interactModule != null && interactModule.IsGrabbedByCharacter)
+            if (interactModule != null &&
+                interactModule.IsLocalCharacterGrabTargetActive)
+            {
                 interactModule.RequestCharacterGrabEscapeTap();
+            }
             else if (postItAllowsJump)
                 QueueJumpServerRpc();
         }
 
+        CharacterGrabLocalInputState characterGrabInputState =
+            CurrentCharacterGrabLocalInputState;
+        bool characterGrabberInputActive =
+            IsGrabberCharacterGrabInputState(characterGrabInputState);
+        bool characterGrabTargetInputActive =
+            characterGrabInputState ==
+                CharacterGrabLocalInputState.Grabbed ||
+            characterGrabInputState ==
+                CharacterGrabLocalInputState.Carried;
+
         if (attackPressed)
         {
-            if (interactModule != null && interactModule.IsGrabbingCharacter)
+            if (interactModule != null &&
+                characterGrabInputState ==
+                CharacterGrabLocalInputState.Carrying)
+            {
                 interactModule.RequestThrowCarriedCharacter();
+            }
+            else if (characterGrabberInputActive ||
+                     characterGrabTargetInputActive)
+            {
+                // Grab/charge 중에는 Basic Attack을 소비만 합니다.
+            }
             else if (CanAttackNow())
                 AttackServerRpc();
         }
 
+        bool consumedInteractForCharacterGrab = false;
+        if (interactPressed && interactModule != null)
+        {
+            if (characterGrabInputState ==
+                CharacterGrabLocalInputState.LiftReady)
+            {
+                consumedInteractForCharacterGrab = true;
+                interactModule.RequestExplicitCharacterLift();
+            }
+            else if (characterGrabberInputActive ||
+                     characterGrabTargetInputActive)
+            {
+                consumedInteractForCharacterGrab = true;
+            }
+        }
+
         bool consumedInteractForSpinDash = false;
         if (interactPressed &&
+            !consumedInteractForCharacterGrab &&
             sprintHeld &&
             CanMoveNow() &&
             HasAvailableSpinDashRoute())
@@ -1154,16 +1228,19 @@ public class PlayerHub : NetworkBehaviour
 
         bool consumedInteractForPostItPeel =
             interactPressed &&
+            !consumedInteractForCharacterGrab &&
             !consumedInteractForSpinDash &&
             TryConsumePostItPeelInteractThisFrame();
 
         if (interactPressed &&
+            !consumedInteractForCharacterGrab &&
             !consumedInteractForSpinDash &&
             !consumedInteractForPostItPeel &&
             CanInteractNow() &&
             interactModule != null)
         {
-            if (!interactModule.HasHeldItem() && !interactModule.IsGrabbingCharacter)
+            if (!interactModule.HasHeldItem() &&
+                !interactModule.IsLocalCharacterGrabberActive)
             {
                 if (interactModule.TryFindPickupTarget(out NetworkObjectReference target))
                 {
@@ -1174,7 +1251,9 @@ public class PlayerHub : NetworkBehaviour
 
         if (dropPressed)
         {
-            if (interactModule != null && interactModule.IsGrabbingCharacter)
+            if (interactModule != null &&
+                (_characterGrabRequestPending ||
+                 interactModule.IsLocalCharacterGrabberActive))
             {
                 if (IsServer)
                     interactModule.ServerReleaseCharacterGrab("DropInput");
@@ -1215,6 +1294,12 @@ public class PlayerHub : NetworkBehaviour
 
         if (IsGameplayPhaseLocked())
             return;
+
+        if (interactModule != null &&
+            interactModule.IsCharacterGrabBusy)
+        {
+            return;
+        }
 
         if (!HasHeldItemForSpinDash() ||
             !HasAvailableSpinDashRoute())
@@ -1280,28 +1365,18 @@ public class PlayerHub : NetworkBehaviour
 
     public bool TryConsumePostItPeelInteractThisFrame()
     {
-        int currentFrame = Time.frameCount;
-        if (_characterGrabReservedInteractFrame == currentFrame)
-            return true;
-
-        if (interactModule != null && interactModule.IsGrabbingCharacter)
+        if (_characterGrabRequestPending ||
+            (interactModule != null &&
+             (interactModule.IsLocalCharacterGrabberActive ||
+              interactModule.IsLocalCharacterGrabTargetActive)))
         {
-            _characterGrabReservedInteractFrame = currentFrame;
-            if (IsServer)
-                interactModule.ServerReleaseCharacterGrab(
-                    "InteractInput");
-            else
-                interactModule.RequestReleaseCharacterGrab();
-
             return true;
         }
-
-        if (interactModule != null && interactModule.IsGrabbedByCharacter)
-            return true;
 
         if (ShouldReserveSpinDashInteractThisFrame())
             return true;
 
+        int currentFrame = Time.frameCount;
         if (_postItPeelEvaluatedFrame == currentFrame)
         {
             return _postItPeelConsumedInEvaluatedFrame;
@@ -1310,11 +1385,6 @@ public class PlayerHub : NetworkBehaviour
         _postItPeelEvaluatedFrame = currentFrame;
         _postItPeelConsumedInEvaluatedFrame =
             TryBeginPostItPeelHold();
-        if (!_postItPeelConsumedInEvaluatedFrame)
-        {
-            _postItPeelConsumedInEvaluatedFrame =
-                TryReserveCharacterGrabInteractThisFrame();
-        }
 
         if (!_postItPeelConsumedInEvaluatedFrame)
         {
@@ -1339,21 +1409,167 @@ public class PlayerHub : NetworkBehaviour
                 keyboard.rightShiftKey.isPressed);
     }
 
-    private bool TryReserveCharacterGrabInteractThisFrame()
+    private void TickCharacterGrabInput(bool gameplayPhaseLocked)
     {
+        if (!IsOwner || !IsSpawned || interactModule == null)
+        {
+            ResetLocalCharacterGrabInputState();
+            return;
+        }
+
+        PlayerInteractModule.CharacterGrabPresentationPhase phase =
+            interactModule.CurrentCharacterGrabPresentationPhase;
+        if (phase !=
+            PlayerInteractModule.CharacterGrabPresentationPhase.None)
+        {
+            _characterGrabRequestPending = false;
+            _characterGrabRequestPendingTimeoutAt = 0f;
+        }
+        else if (_characterGrabRequestPending &&
+                 Time.unscaledTime >=
+                 _characterGrabRequestPendingTimeoutAt)
+        {
+            _characterGrabRequestPending = false;
+            _characterGrabRequestPendingTimeoutAt = 0f;
+        }
+
+        if (_characterGrabCancelAfterLiftRequest)
+        {
+            if (phase ==
+                    PlayerInteractModule.CharacterGrabPresentationPhase
+                        .Carrying ||
+                phase ==
+                    PlayerInteractModule.CharacterGrabPresentationPhase.None)
+            {
+                _characterGrabCancelAfterLiftRequest = false;
+            }
+            else if (phase ==
+                         PlayerInteractModule.CharacterGrabPresentationPhase
+                             .LiftReady &&
+                     !interactModule.IsLocalCharacterLiftRequestPending)
+            {
+                interactModule.RequestReleaseCharacterGrab();
+                _characterGrabCancelAfterLiftRequest = false;
+            }
+        }
+
+        Keyboard keyboard = Keyboard.current;
+        if (gameplayPhaseLocked || keyboard == null)
+        {
+            ResetLocalCharacterGrabInputState();
+            return;
+        }
+
+        bool grabHeld = keyboard.rKey.isPressed;
+        bool grabReleased = keyboard.rKey.wasReleasedThisFrame;
+
+        if (grabReleased)
+        {
+            if (interactModule.IsLocalCharacterLiftRequestPending)
+            {
+                _characterGrabCancelAfterLiftRequest = true;
+            }
+            else if (_characterGrabRequestPending ||
+                    phase ==
+                        PlayerInteractModule.CharacterGrabPresentationPhase
+                            .Charging ||
+                    phase ==
+                        PlayerInteractModule.CharacterGrabPresentationPhase
+                            .LiftReady)
+            {
+                interactModule.RequestReleaseCharacterGrab();
+            }
+
+            _characterGrabRequestPending = false;
+            _characterGrabRequestPendingTimeoutAt = 0f;
+            return;
+        }
+
+        if (!grabHeld ||
+            phase !=
+                PlayerInteractModule.CharacterGrabPresentationPhase.None ||
+            _characterGrabRequestPending ||
+            Time.unscaledTime < _nextCharacterGrabRequestTime)
+        {
+            return;
+        }
+
+        _nextCharacterGrabRequestTime =
+            Time.unscaledTime + CharacterGrabRequestRetryInterval;
+
         if (!CanInteractNow() ||
-            interactModule == null ||
+            IsPostItPeelUiInputBlocked() ||
             interactModule.HasHeldItem() ||
             interactModule.IsCharacterGrabBusy ||
             !interactModule.TryFindCharacterGrabTarget(
                 out PlayerStatusModule targetStatus))
         {
-            return false;
+            return;
         }
 
-        _characterGrabReservedInteractFrame = Time.frameCount;
-        RequestCharacterGrab(targetStatus);
-        return true;
+        if (!RequestCharacterGrab(targetStatus))
+            return;
+
+        _characterGrabRequestPending = true;
+        _characterGrabRequestPendingTimeoutAt =
+            Time.unscaledTime + CharacterGrabRequestPendingTimeout;
+    }
+
+    private CharacterGrabLocalInputState
+        ResolveCharacterGrabLocalInputState()
+    {
+        if (interactModule == null)
+            return CharacterGrabLocalInputState.Idle;
+
+        PlayerInteractModule.CharacterGrabPresentationPhase phase =
+            interactModule.CurrentCharacterGrabPresentationPhase;
+        if (_characterGrabRequestPending &&
+            phase ==
+                PlayerInteractModule.CharacterGrabPresentationPhase.None)
+        {
+            return CharacterGrabLocalInputState.RequestPending;
+        }
+
+        switch (phase)
+        {
+            case PlayerInteractModule.CharacterGrabPresentationPhase
+                .Charging:
+                return CharacterGrabLocalInputState.Charging;
+            case PlayerInteractModule.CharacterGrabPresentationPhase
+                .LiftReady:
+                return interactModule.IsLocalCharacterLiftRequestPending
+                    ? CharacterGrabLocalInputState.LiftRequested
+                    : CharacterGrabLocalInputState.LiftReady;
+            case PlayerInteractModule.CharacterGrabPresentationPhase
+                .Carrying:
+                return CharacterGrabLocalInputState.Carrying;
+            case PlayerInteractModule.CharacterGrabPresentationPhase
+                .Grabbed:
+                return CharacterGrabLocalInputState.Grabbed;
+            case PlayerInteractModule.CharacterGrabPresentationPhase
+                .Carried:
+                return CharacterGrabLocalInputState.Carried;
+            default:
+                return CharacterGrabLocalInputState.Idle;
+        }
+    }
+
+    private static bool IsGrabberCharacterGrabInputState(
+        CharacterGrabLocalInputState state)
+    {
+        return state == CharacterGrabLocalInputState.RequestPending ||
+               state == CharacterGrabLocalInputState.Charging ||
+               state == CharacterGrabLocalInputState.LiftReady ||
+               state == CharacterGrabLocalInputState.LiftRequested ||
+               state == CharacterGrabLocalInputState.Carrying;
+    }
+
+    private void ResetLocalCharacterGrabInputState()
+    {
+        _characterGrabRequestPending = false;
+        _characterGrabRequestPendingTimeoutAt = 0f;
+        _nextCharacterGrabRequestTime = 0f;
+        _characterGrabCancelAfterLiftRequest = false;
     }
 
     private bool TryBeginPostItPeelHold()
@@ -1570,7 +1786,6 @@ public class PlayerHub : NetworkBehaviour
 
     private void ResetPostItPeelHoldState()
     {
-        _characterGrabReservedInteractFrame = -1;
         _postItPeelHoldState = PostItPeelHoldState.Idle;
         _postItPeelTrackedTargetNetworkObjectId = ulong.MaxValue;
         _postItPeelTrackedPostItId = -1;
@@ -2437,23 +2652,26 @@ public class PlayerHub : NetworkBehaviour
         return true;
     }
 
-    private void RequestCharacterGrab(PlayerStatusModule targetStatus)
+    private bool RequestCharacterGrab(PlayerStatusModule targetStatus)
     {
         if (IsGameplayPhaseLocked() ||
             interactModule == null ||
             targetStatus == null)
-            return;
+        {
+            return false;
+        }
 
         if (IsServer)
         {
             interactModule.ServerTryStartCharacterGrab(targetStatus);
-            return;
+            return true;
         }
 
         if (!TryCreateCharacterGrabTargetReference(targetStatus, out NetworkObjectReference targetReference))
-            return;
+            return false;
 
         RequestCharacterGrabServerRpc(targetReference);
+        return true;
     }
 
     [ServerRpc]
@@ -2471,12 +2689,8 @@ public class PlayerHub : NetworkBehaviour
         if (!CanInteractNow())
             return;
 
-        if (interactModule.IsGrabbingCharacter)
-        {
-            interactModule.ServerReleaseCharacterGrab(
-                "InteractInput");
+        if (interactModule.IsCharacterGrabBusy)
             return;
-        }
 
         if (!targetReference.TryGet(out NetworkObject targetObject))
             return;
