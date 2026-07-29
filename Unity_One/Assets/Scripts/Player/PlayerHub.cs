@@ -364,6 +364,8 @@ public class PlayerHub : NetworkBehaviour
     private float _characterGrabRequestPendingTimeoutAt;
     private float _nextCharacterGrabRequestTime;
     private bool _characterGrabCancelAfterLiftRequest;
+    private bool _characterGrabSawAuthoritativeActiveState;
+    private bool _characterGrabRequiresRRelease;
     private float _nextPostItPeelServerTime;
     private PostItPeelHoldState _postItPeelHoldState;
     private ulong _postItPeelTrackedTargetNetworkObjectId = ulong.MaxValue;
@@ -386,6 +388,8 @@ public class PlayerHub : NetworkBehaviour
     {
         base.OnNetworkSpawn();
 
+        _characterGrabSawAuthoritativeActiveState = false;
+        _characterGrabRequiresRRelease = false;
         ResetLocalCharacterGrabInputState();
         ResolveRefs();
         InitializeFaceNetworkState();
@@ -413,6 +417,8 @@ public class PlayerHub : NetworkBehaviour
 
     public override void OnNetworkDespawn()
     {
+        _characterGrabSawAuthoritativeActiveState = false;
+        _characterGrabRequiresRRelease = false;
         ResetLocalCharacterGrabInputState();
         UnsubscribeFaceNetworkState();
         ForceEndLocalCameraOverride(false);
@@ -428,6 +434,8 @@ public class PlayerHub : NetworkBehaviour
 
     private void OnDisable()
     {
+        _characterGrabSawAuthoritativeActiveState = false;
+        _characterGrabRequiresRRelease = false;
         ResetLocalCharacterGrabInputState();
         ForceEndLocalCameraOverride(false);
         ResetPostItPeelHoldState();
@@ -1263,6 +1271,7 @@ public class PlayerHub : NetworkBehaviour
                     interactModule.RequestReleaseCharacterGrab(true);
 
                 ResetLocalCharacterGrabInputState();
+                _characterGrabRequiresRRelease = true;
             }
             else
             {
@@ -1468,6 +1477,21 @@ public class PlayerHub : NetworkBehaviour
 
         bool grabHeld = keyboard.rKey.isPressed;
         bool grabReleased = keyboard.rKey.wasReleasedThisFrame;
+        bool authoritativeGrabActive =
+            phase !=
+            PlayerInteractModule.CharacterGrabPresentationPhase.None;
+        if (authoritativeGrabActive)
+        {
+            _characterGrabSawAuthoritativeActiveState = true;
+        }
+        else if (_characterGrabSawAuthoritativeActiveState)
+        {
+            _characterGrabSawAuthoritativeActiveState = false;
+            _characterGrabRequiresRRelease = grabHeld;
+        }
+
+        if (!grabHeld)
+            _characterGrabRequiresRRelease = false;
 
         if (grabReleased)
         {
@@ -1494,6 +1518,7 @@ public class PlayerHub : NetworkBehaviour
         }
 
         if (!grabHeld ||
+            _characterGrabRequiresRRelease ||
             phase !=
                 PlayerInteractModule.CharacterGrabPresentationPhase.None ||
             _characterGrabRequestPending ||
@@ -4288,7 +4313,8 @@ public class PlayerHub : NetworkBehaviour
             return true;
         }
 
-        return interactModule.IsGrabbingCharacter;
+        return interactModule.IsGrabbingCharacter ||
+               interactModule.IsGrabbedByCharacter;
     }
 
     [ClientRpc]
