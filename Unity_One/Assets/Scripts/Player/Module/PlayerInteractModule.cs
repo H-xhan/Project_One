@@ -589,6 +589,7 @@ public class PlayerInteractModule : NetworkBehaviour
         _localCharacterLiftRequestPending;
     public float CharacterGrabChargeProgress01 =>
         GetCharacterGrabChargeProgress01();
+    public event Action CharacterThrowCommitted;
 
     public bool CanPickupItemBecauseOfCharacterGrab()
     {
@@ -1161,6 +1162,14 @@ public class PlayerInteractModule : NetworkBehaviour
         SafeClearCharacterGrabState("Throw", false);
         targetInteract.SafeClearCharacterGrabState("Throw", false);
         targetInteract._regrabImmuneUntil = Time.time + Mathf.Max(0f, characterThrowRegrabImmunitySeconds);
+        try
+        {
+            CharacterThrowCommitted?.Invoke();
+        }
+        catch (Exception exception)
+        {
+            Debug.LogException(exception, this);
+        }
 
         CharacterGrabLog($"[PlayerInteract] Character throw knockback profile=Throw target={targetName}");
         bool appliedKnockback = targetStatus.ServerTryApplyThrowCombatKnockback(impulse, OwnerClientId);
