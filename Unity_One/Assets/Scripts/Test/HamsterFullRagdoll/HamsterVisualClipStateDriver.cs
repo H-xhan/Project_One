@@ -13,6 +13,8 @@ public sealed class HamsterVisualClipStateDriver : MonoBehaviour
     private const string PlayerBuildMotionFallbackWallDownStateName = "WallMove_Down";
     private const string PlayerBuildMotionFallbackWallLeftStateName = "WallMove_Left";
     private const string PlayerBuildMotionFallbackWallRightStateName = "WallMove_Right";
+    private const string CharacterGrabPresentationReason = "CharacterGrab";
+    private const string CharacterCarryPresentationReason = "CharacterCarry";
 
     [Header("References")]
     [SerializeField] private Animator visualAnimator;
@@ -181,6 +183,9 @@ public sealed class HamsterVisualClipStateDriver : MonoBehaviour
     private string _externalSustainedStateReason = string.Empty;
     private float _externalSustainedStateTimer;
     private float _externalSustainedCrossFadeDuration;
+    private PlayerInteractModule _characterGrabPresentationSource;
+    private bool _characterGrabPresentationSourceResolveAttempted;
+    private PlayerInteractModule _subscribedCharacterThrowSource;
     private bool _warnedMissingAnimator;
     private bool _warnedAnimatorDisabled;
     private bool _warnedMissingController;
@@ -321,6 +326,7 @@ public sealed class HamsterVisualClipStateDriver : MonoBehaviour
         ResetClientNetworkLocomotionState();
         ResetRuntimeState();
         ResetClientLocomotionDiagnosticsState();
+        RefreshCharacterGrabPresentationSubscription();
 
         if (requireAnimatorController && visualAnimator != null && visualAnimator.runtimeAnimatorController == null)
         {
@@ -335,6 +341,7 @@ public sealed class HamsterVisualClipStateDriver : MonoBehaviour
             ResolveReferences();
 
         CacheStateAvailability();
+        RefreshCharacterGrabPresentationSubscription();
     }
 
     private void Update()
@@ -357,8 +364,18 @@ public sealed class HamsterVisualClipStateDriver : MonoBehaviour
             return;
         }
 
-        if (autoFindReferences && (visualAnimator == null || motorStateSource == null || targetBody == null || (autoFindGrabStateSource && grabStateSource == null)))
+        if (autoFindReferences &&
+            (visualAnimator == null ||
+             motorStateSource == null ||
+             targetBody == null ||
+             (!_characterGrabPresentationSourceResolveAttempted &&
+              _characterGrabPresentationSource == null) ||
+             (autoFindGrabStateSource && grabStateSource == null)))
+        {
             ResolveReferences();
+        }
+
+        RefreshCharacterGrabPresentationSubscription();
 
         if (!CanDriveAnimator())
         {
@@ -366,6 +383,9 @@ public sealed class HamsterVisualClipStateDriver : MonoBehaviour
                 CompleteClientLocomotionDiagnosticsUpdate(default, false, false, "CanDriveAnimator=false");
             return;
         }
+
+        bool characterGrabPresentationActive =
+            TickCharacterGrabPresentation();
 
         if (TickExternalOneShot(deltaTime))
         {
@@ -383,7 +403,9 @@ public sealed class HamsterVisualClipStateDriver : MonoBehaviour
 
         bool canDriveUpdateLocomotionAnimator = ShouldAuthoritativelyDriveUpdateLocomotionAnimator();
         MotionSample sample = ReadMotionSample();
-        bool interactionHandled = TickInteractionDriver(sample, deltaTime);
+        bool interactionHandled =
+            characterGrabPresentationActive ||
+            TickInteractionDriver(sample, deltaTime);
         if (!interactionHandled && canDriveUpdateLocomotionAnimator)
             TickStateDriver(sample, deltaTime);
 
@@ -408,7 +430,14 @@ public sealed class HamsterVisualClipStateDriver : MonoBehaviour
 
     private void OnDisable()
     {
+        ClearCharacterGrabPresentationState(false);
+        ClearCharacterGrabPresentationSubscription();
         ResetClientNetworkLocomotionState();
+    }
+
+    private void OnDestroy()
+    {
+        ClearCharacterGrabPresentationSubscription();
     }
 
     private void LateUpdate()
@@ -503,6 +532,9 @@ public sealed class HamsterVisualClipStateDriver : MonoBehaviour
 
         if (autoFindGrabStateSource)
             ResolveGrabStateSource();
+
+        if (_characterGrabPresentationSource == null)
+            ResolveCharacterGrabPresentationSource();
     }
 
     private void ResolveGrabStateSource()
@@ -514,6 +546,198 @@ public sealed class HamsterVisualClipStateDriver : MonoBehaviour
 
         if (grabStateSource == null)
             grabStateSource = GetComponentInParent<HamsterRagdollGrabber>();
+    }
+
+    private void ResolveCharacterGrabPresentationSource()
+    {
+        if (_characterGrabPresentationSourceResolveAttempted)
+            return;
+
+        _characterGrabPresentationSourceResolveAttempted = true;
+        NetworkObject owner = GetComponentInParent<NetworkObject>();
+        if (owner == null)
+            return;
+
+        PlayerInteractModule[] candidates =
+            owner.GetComponentsInChildren<PlayerInteractModule>(true);
+        for (int i = 0; i < candidates.Length; i++)
+        {
+            PlayerInteractModule candidate = candidates[i];
+            if (candidate == null ||
+                candidate.GetComponentInParent<NetworkObject>() != owner)
+            {
+                continue;
+            }
+
+            _characterGrabPresentationSource = candidate;
+            return;
+        }
+    }
+
+    private void RefreshCharacterGrabPresentationSubscription()
+    {
+        if (_subscribedCharacterThrowSource == _characterGrabPresentationSource)
+            return;
+
+        ClearCharacterGrabPresentationSubscription();
+        _subscribedCharacterThrowSource = _characterGrabPresentationSource;
+        if (_subscribedCharacterThrowSource != null)
+        {
+            _subscribedCharacterThrowSource.CharacterThrowCommitted +=
+                HandleCharacterThrowCommitted;
+        }
+    }
+
+    private void ClearCharacterGrabPresentationSubscription()
+    {
+        if (_subscribedCharacterThrowSource != null)
+        {
+            _subscribedCharacterThrowSource.CharacterThrowCommitted -=
+                HandleCharacterThrowCommitted;
+        }
+
+        _subscribedCharacterThrowSource = null;
+    }
+
+    private bool TickCharacterGrabPresentation()
+    {
+        if (_characterGrabPresentationSource == null)
+        {
+            if (ShouldAuthoritativelyDriveUpdateLocomotionAnimator())
+                ClearCharacterGrabPresentationState(true);
+
+            return false;
+        }
+
+        PlayerInteractModule.CharacterGrabPresentationPhase phase =
+            _characterGrabPresentationSource
+                .CurrentCharacterGrabPresentationPhase;
+        bool isGrabberPresentationActive =
+            phase == PlayerInteractModule.CharacterGrabPresentationPhase
+                .Charging ||
+            phase == PlayerInteractModule.CharacterGrabPresentationPhase
+                .LiftReady ||
+            phase == PlayerInteractModule.CharacterGrabPresentationPhase
+                .Carrying;
+
+        if (!ShouldAuthoritativelyDriveUpdateLocomotionAnimator())
+            return isGrabberPresentationActive;
+
+        if (!isGrabberPresentationActive)
+        {
+            ClearCharacterGrabPresentationState(true);
+            return false;
+        }
+
+        if (phase !=
+            PlayerInteractModule.CharacterGrabPresentationPhase.Carrying)
+        {
+            TryBeginCharacterGrabPresentationState(
+                CharacterGrabPresentationReason,
+                grabStateName,
+                grabCrossFadeDuration,
+                true,
+                out _);
+            return true;
+        }
+
+        MotionSample sample = ReadMotionSample();
+        if (!TrySelectCarryState(
+                sample,
+                out PlayableState carryState,
+                out _))
+        {
+            return true;
+        }
+
+        TryBeginCharacterGrabPresentationState(
+            CharacterCarryPresentationReason,
+            carryState.Name,
+            carryCrossFadeDuration,
+            requireCarryStateMotion,
+            out _);
+        return true;
+    }
+
+    private bool TryBeginCharacterGrabPresentationState(
+        string reason,
+        string stateName,
+        float crossFadeDuration,
+        bool requireStateMotion,
+        out string failureReason)
+    {
+        if (_externalSustainedStateActive &&
+            _externalSustainedStateReason != reason &&
+            IsCharacterGrabPresentationReason(
+                _externalSustainedStateReason))
+        {
+            ClearExternalSustainedState();
+        }
+
+        bool started = TryBeginExternalSustainedState(
+            reason,
+            stateName,
+            crossFadeDuration,
+            requireStateMotion,
+            out failureReason);
+        if (!started && ShouldLogInteraction())
+        {
+            Debug.Log(
+                $"[HamsterVisualClipStateDriver] Character grab presentation skipped state={stateName} reason={reason} failure={failureReason}",
+                this);
+        }
+
+        return started;
+    }
+
+    private void ClearCharacterGrabPresentationState(
+        bool returnToLocomotion)
+    {
+        if (!_externalSustainedStateActive ||
+            !IsCharacterGrabPresentationReason(
+                _externalSustainedStateReason))
+        {
+            return;
+        }
+
+        string reason = _externalSustainedStateReason;
+        if (returnToLocomotion)
+            EndExternalSustainedState(reason);
+        else
+            ClearExternalSustainedState();
+    }
+
+    private static bool IsCharacterGrabPresentationReason(
+        string reason)
+    {
+        return reason == CharacterGrabPresentationReason ||
+               reason == CharacterCarryPresentationReason;
+    }
+
+    private void HandleCharacterThrowCommitted()
+    {
+        if (!ShouldAuthoritativelyDriveUpdateLocomotionAnimator())
+            return;
+
+        ClearCharacterGrabPresentationState(false);
+        if (TryPlayOneShotState(
+                throwStateName,
+                throwCrossFadeDuration,
+                minThrowStateTime,
+                maxThrowStateTime,
+                true,
+                out _,
+                out string failureReason))
+        {
+            return;
+        }
+
+        if (ShouldLogInteraction())
+        {
+            Debug.Log(
+                $"[HamsterVisualClipStateDriver] Character throw presentation skipped failure={failureReason}",
+                this);
+        }
     }
 
     private Animator FindVisualPreviewAnimator()
@@ -821,10 +1045,21 @@ public sealed class HamsterVisualClipStateDriver : MonoBehaviour
         return true;
     }
 
-    private static bool IsPlayerBuildMotionStateExistenceFallbackAllowed(
+    private bool IsPlayerBuildMotionStateExistenceFallbackAllowed(
         string reason,
         string stateName)
     {
+        if (reason == CharacterGrabPresentationReason)
+            return stateName == grabStateName;
+
+        if (reason == CharacterCarryPresentationReason)
+        {
+            return stateName == carryIdleStateName ||
+                   stateName == carryWalkStateName ||
+                   stateName == carryRunStateName ||
+                   stateName == carryJumpStateName;
+        }
+
         if (reason == PlayerBuildMotionFallbackGlideReason)
             return stateName == PlayerBuildMotionFallbackGlideStateName;
 
@@ -2047,6 +2282,22 @@ public sealed class HamsterVisualClipStateDriver : MonoBehaviour
             reason = "skip IsHolding=false";
             return false;
         }
+
+        return TrySelectCarryState(
+            sample,
+            out state,
+            out reason,
+            preferJumpState);
+    }
+
+    private bool TrySelectCarryState(
+        MotionSample sample,
+        out PlayableState state,
+        out string reason,
+        bool preferJumpState = false)
+    {
+        state = default;
+        reason = string.Empty;
 
         ClipState fallbackState = SelectLocomotionState(sample, out string fallbackReason);
         bool airborne = sample.HasGroundedState && !sample.IsGrounded;
