@@ -1,0 +1,304 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 6a7d3569d873b7c48bdd16db16461399, type: 3}
+  m_Name: PostItPromptDatabase
+  m_EditorClassIdentifier:
+  entries:
+  - AuthoringId: food_pizza
+    Enabled: 1
+    PublicCategory: "\uC74C\uC2DD"
+    SecretAnswer: "\uD53C\uC790"
+    Choices:
+    - "\uD53C\uC790"
+    - "\uD584\uBC84\uAC70"
+    - "\uC0CC\uB4DC\uC704\uCE58"
+    - "\uD0C0\uCF54"
+    ForbiddenStrings:
+    - pizza
+    Notes: "MVP \uAE30\uBCF8 \uBB38\uC81C"
+  - AuthoringId: food_gimbap
+    Enabled: 1
+    PublicCategory: "\uC74C\uC2DD"
+    SecretAnswer: "\uAE40\uBC25"
+    Choices:
+    - "\uAE40\uBC25"
+    - "\uCD08\uBC25"
+    - "\uC8FC\uBA39\uBC25"
+    - "\uC0CC\uB4DC\uC704\uCE58"
+    ForbiddenStrings:
+    - gimbap
+    Notes: "MVP \uAE30\uBCF8 \uBB38\uC81C"
+  - AuthoringId: food_ice_cream
+    Enabled: 1
+    PublicCategory: "\uC74C\uC2DD"
+    SecretAnswer: "\uC544\uC774\uC2A4\uD06C\uB9BC"
+    Choices:
+    - "\uC544\uC774\uC2A4\uD06C\uB9BC"
+    - "\uBE59\uC218"
+    - "\uD478\uB529"
+    - "\uC824\uB9AC"
+    ForbiddenStrings:
+    - icecream
+    Notes: "MVP \uAE30\uBCF8 \uBB38\uC81C"
+  - AuthoringId: food_chicken
+    Enabled: 1
+    PublicCategory: "\uC74C\uC2DD"
+    SecretAnswer: "\uCE58\uD0A8"
+    Choices:
+    - "\uCE58\uD0A8"
+    - "\uB3C8\uAC00\uC2A4"
+    - "\uD0D5\uC218\uC721"
+    - "\uB2ED\uAC08\uBE44"
+    ForbiddenStrings:
+    - "\uD6C4\uB77C\uC774\uB4DC"
+    Notes: "MVP \uAE30\uBCF8 \uBB38\uC81C"
+  - AuthoringId: food_watermelon
+    Enabled: 1
+    PublicCategory: "\uC74C\uC2DD"
+    SecretAnswer: "\uC218\uBC15"
+    Choices:
+    - "\uC218\uBC15"
+    - "\uCC38\uC678"
+    - "\uBA5C\uB860"
+    - "\uD30C\uC778\uC560\uD50C"
+    ForbiddenStrings:
+    - watermelon
+    Notes: "MVP \uAE30\uBCF8 \uBB38\uC81C"
+  - AuthoringId: food_cake
+    Enabled: 1
+    PublicCategory: "\uC74C\uC2DD"
+    SecretAnswer: "\uCF00\uC774\uD06C"
+    Choices:
+    - "\uCF00\uC774\uD06C"
+    - "\uB3C4\uB11B"
+    - "\uCFE0\uD0A4"
+    - "\uB9C8\uCE74\uB871"
+    ForbiddenStrings:
+    - cake
+    Notes: "MVP \uAE30\uBCF8 \uBB38\uC81C"
+  - AuthoringId: animal_cat
+    Enabled: 1
+    PublicCategory: "\uB3D9\uBB3C"
+    SecretAnswer: "\uACE0\uC591\uC774"
+    Choices:
+    - "\uACE0\uC591\uC774"
+    - "\uD638\uB791\uC774"
+    - "\uD1A0\uB07C"
+    - "\uC5EC\uC6B0"
+    ForbiddenStrings:
+    - "\uB0E5\uC774"
+    - "\uC57C\uC639\uC774"
+    Notes: "MVP \uAE30\uBCF8 \uBB38\uC81C"
+  - AuthoringId: animal_penguin
+    Enabled: 1
+    PublicCategory: "\uB3D9\uBB3C"
+    SecretAnswer: "\uD3AD\uADC4"
+    Choices:
+    - "\uD3AD\uADC4"
+    - "\uD0C0\uC870"
+    - "\uACF5\uC791"
+    - "\uD64D\uD559"
+    ForbiddenStrings:
+    - penguin
+    Notes: "MVP \uAE30\uBCF8 \uBB38\uC81C"
+  - AuthoringId: animal_giraffe
+    Enabled: 1
+    PublicCategory: "\uB3D9\uBB3C"
+    SecretAnswer: "\uAE30\uB9B0"
+    Choices:
+    - "\uAE30\uB9B0"
+    - "\uC5BC\uB8E9\uB9D0"
+    - "\uCF54\uBFD4\uC18C"
+    - "\uD558\uB9C8"
+    ForbiddenStrings:
+    - giraffe
+    Notes: "MVP \uAE30\uBCF8 \uBB38\uC81C"
+  - AuthoringId: animal_dolphin
+    Enabled: 1
+    PublicCategory: "\uB3D9\uBB3C"
+    SecretAnswer: "\uB3CC\uACE0\uB798"
+    Choices:
+    - "\uB3CC\uACE0\uB798"
+    - "\uC0C1\uC5B4"
+    - "\uACE0\uB798"
+    - "\uBB3C\uAC1C"
+    ForbiddenStrings:
+    - dolphin
+    Notes: "MVP \uAE30\uBCF8 \uBB38\uC81C"
+  - AuthoringId: animal_frog
+    Enabled: 1
+    PublicCategory: "\uB3D9\uBB3C"
+    SecretAnswer: "\uAC1C\uAD6C\uB9AC"
+    Choices:
+    - "\uAC1C\uAD6C\uB9AC"
+    - "\uAC70\uBD81\uC774"
+    - "\uB3C4\uB9C8\uBC40"
+    - "\uCE74\uBA5C\uB808\uC628"
+    ForbiddenStrings:
+    - frog
+    Notes: "MVP \uAE30\uBCF8 \uBB38\uC81C"
+  - AuthoringId: animal_squirrel
+    Enabled: 1
+    PublicCategory: "\uB3D9\uBB3C"
+    SecretAnswer: "\uB2E4\uB78C\uC950"
+    Choices:
+    - "\uB2E4\uB78C\uC950"
+    - "\uD584\uC2A4\uD130"
+    - "\uD1A0\uB07C"
+    - "\uACE0\uC2B4\uB3C4\uCE58"
+    ForbiddenStrings:
+    - squirrel
+    Notes: "MVP \uAE30\uBCF8 \uBB38\uC81C"
+  - AuthoringId: place_school
+    Enabled: 1
+    PublicCategory: "\uC7A5\uC18C"
+    SecretAnswer: "\uD559\uAD50"
+    Choices:
+    - "\uD559\uAD50"
+    - "\uB3C4\uC11C\uAD00"
+    - "\uBCD1\uC6D0"
+    - "\uC2DC\uCCAD"
+    ForbiddenStrings:
+    - school
+    Notes: "MVP \uAE30\uBCF8 \uBB38\uC81C"
+  - AuthoringId: place_amusement_park
+    Enabled: 1
+    PublicCategory: "\uC7A5\uC18C"
+    SecretAnswer: "\uB180\uC774\uACF5\uC6D0"
+    Choices:
+    - "\uB180\uC774\uACF5\uC6D0"
+    - "\uC218\uC871\uAD00"
+    - "\uB3D9\uBB3C\uC6D0"
+    - "\uC601\uD654\uAD00"
+    ForbiddenStrings:
+    - "\uD14C\uB9C8\uD30C\uD06C"
+    Notes: "MVP \uAE30\uBCF8 \uBB38\uC81C"
+  - AuthoringId: place_beach
+    Enabled: 1
+    PublicCategory: "\uC7A5\uC18C"
+    SecretAnswer: "\uD574\uBCC0"
+    Choices:
+    - "\uD574\uBCC0"
+    - "\uACC4\uACE1"
+    - "\uD638\uC218"
+    - "\uCEA0\uD551\uC7A5"
+    ForbiddenStrings:
+    - "\uBC14\uB2F7\uAC00"
+    Notes: "MVP \uAE30\uBCF8 \uBB38\uC81C"
+  - AuthoringId: place_airport
+    Enabled: 1
+    PublicCategory: "\uC7A5\uC18C"
+    SecretAnswer: "\uACF5\uD56D"
+    Choices:
+    - "\uACF5\uD56D"
+    - "\uAE30\uCC28\uC5ED"
+    - "\uBC84\uC2A4\uD130\uBBF8\uB110"
+    - "\uD56D\uAD6C"
+    ForbiddenStrings:
+    - airport
+    Notes: "MVP \uAE30\uBCF8 \uBB38\uC81C"
+  - AuthoringId: place_convenience_store
+    Enabled: 1
+    PublicCategory: "\uC7A5\uC18C"
+    SecretAnswer: "\uD3B8\uC758\uC810"
+    Choices:
+    - "\uD3B8\uC758\uC810"
+    - "\uB9C8\uD2B8"
+    - "\uBC31\uD654\uC810"
+    - "\uC804\uD1B5\uC2DC\uC7A5"
+    ForbiddenStrings:
+    - convenience store
+    Notes: "MVP \uAE30\uBCF8 \uBB38\uC81C"
+  - AuthoringId: place_playground
+    Enabled: 1
+    PublicCategory: "\uC7A5\uC18C"
+    SecretAnswer: "\uB180\uC774\uD130"
+    Choices:
+    - "\uB180\uC774\uD130"
+    - "\uACF5\uC6D0"
+    - "\uC6B4\uB3D9\uC7A5"
+    - "\uC218\uC601\uC7A5"
+    ForbiddenStrings:
+    - playground
+    Notes: "MVP \uAE30\uBCF8 \uBB38\uC81C"
+  - AuthoringId: object_umbrella
+    Enabled: 1
+    PublicCategory: "\uBB3C\uAC74"
+    SecretAnswer: "\uC6B0\uC0B0"
+    Choices:
+    - "\uC6B0\uC0B0"
+    - "\uC190\uC804\uB4F1"
+    - "\uAC00\uC704"
+    - "\uC790\uBB3C\uC1E0"
+    ForbiddenStrings:
+    - umbrella
+    Notes: "MVP \uAE30\uBCF8 \uBB38\uC81C"
+  - AuthoringId: object_refrigerator
+    Enabled: 1
+    PublicCategory: "\uBB3C\uAC74"
+    SecretAnswer: "\uB0C9\uC7A5\uACE0"
+    Choices:
+    - "\uB0C9\uC7A5\uACE0"
+    - "\uC138\uD0C1\uAE30"
+    - "\uC804\uC790\uB808\uC778\uC9C0"
+    - "\uC5D0\uC5B4\uCEE8"
+    ForbiddenStrings:
+    - fridge
+    Notes: "MVP \uAE30\uBCF8 \uBB38\uC81C"
+  - AuthoringId: object_toothbrush
+    Enabled: 1
+    PublicCategory: "\uBB3C\uAC74"
+    SecretAnswer: "\uCE6B\uC194"
+    Choices:
+    - "\uCE6B\uC194"
+    - "\uBE44\uB204"
+    - "\uC218\uAC74"
+    - "\uBE57"
+    ForbiddenStrings:
+    - toothbrush
+    Notes: "MVP \uAE30\uBCF8 \uBB38\uC81C"
+  - AuthoringId: object_camera
+    Enabled: 1
+    PublicCategory: "\uBB3C\uAC74"
+    SecretAnswer: "\uCE74\uBA54\uB77C"
+    Choices:
+    - "\uCE74\uBA54\uB77C"
+    - "\uC30D\uC548\uACBD"
+    - "\uB3CB\uBCF4\uAE30"
+    - "\uAC70\uC6B8"
+    ForbiddenStrings:
+    - camera
+    Notes: "MVP \uAE30\uBCF8 \uBB38\uC81C"
+  - AuthoringId: object_pencil
+    Enabled: 1
+    PublicCategory: "\uBB3C\uAC74"
+    SecretAnswer: "\uC5F0\uD544"
+    Choices:
+    - "\uC5F0\uD544"
+    - "\uC9C0\uC6B0\uAC1C"
+    - "\uC790"
+    - "\uAC00\uC704"
+    ForbiddenStrings:
+    - pencil
+    Notes: "MVP \uAE30\uBCF8 \uBB38\uC81C"
+  - AuthoringId: object_alarm_clock
+    Enabled: 1
+    PublicCategory: "\uBB3C\uAC74"
+    SecretAnswer: "\uC54C\uB78C\uC2DC\uACC4"
+    Choices:
+    - "\uC54C\uB78C\uC2DC\uACC4"
+    - "\uBCBD\uC2DC\uACC4"
+    - "\uBAA8\uB798\uC2DC\uACC4"
+    - "\uCD08\uC2DC\uACC4"
+    ForbiddenStrings:
+    - "\uC790\uBA85\uC885"
+    Notes: "MVP \uAE30\uBCF8 \uBB38\uC81C"
