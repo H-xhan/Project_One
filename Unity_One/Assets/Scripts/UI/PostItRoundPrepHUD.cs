@@ -15,6 +15,7 @@ public sealed class PostItRoundPrepHUD : MonoBehaviour
 
     [Header("Data")]
     [SerializeField] private GameStateManager gameStateManager;
+    [SerializeField] private PostItRoundManager postItRoundManager;
     [SerializeField] private PlayerPostItInventory targetInventory;
     [SerializeField] private PostItVisualCatalogSO visualCatalog;
     [SerializeField] private float rebindInterval = 0.25f;
@@ -36,8 +37,10 @@ public sealed class PostItRoundPrepHUD : MonoBehaviour
         new PostItVisualCatalogSO.Entry[PreviewCardCount];
 
     private PlayerPostItInventory _boundInventory;
+    private PostItRoundManager _boundRoundManager;
     private float _nextBindAttemptTime;
     private bool _isGameStateSubscribed;
+    private bool _isLiarStateSubscribed;
 
     private void Awake()
     {
@@ -59,6 +62,7 @@ public sealed class PostItRoundPrepHUD : MonoBehaviour
     private void OnDisable()
     {
         UnbindInventory();
+        UnbindRoundManager();
         UnbindGameState();
         SetPrepVisible(false);
     }
@@ -68,7 +72,12 @@ public sealed class PostItRoundPrepHUD : MonoBehaviour
         if (_isGameStateSubscribed && gameStateManager == null)
             _isGameStateSubscribed = false;
 
-        if ((!_isGameStateSubscribed || _boundInventory == null) &&
+        if (_isLiarStateSubscribed && _boundRoundManager == null)
+            _isLiarStateSubscribed = false;
+
+        if ((!_isGameStateSubscribed ||
+             !_isLiarStateSubscribed ||
+             _boundInventory == null) &&
             Time.unscaledTime >= _nextBindAttemptTime)
         {
             TryBindDependencies();
@@ -82,6 +91,7 @@ public sealed class PostItRoundPrepHUD : MonoBehaviour
             Time.unscaledTime + Mathf.Max(0.05f, rebindInterval);
 
         TryBindGameState();
+        TryBindRoundManager();
         TryBindInventory();
     }
 
@@ -108,6 +118,42 @@ public sealed class PostItRoundPrepHUD : MonoBehaviour
 
         _isGameStateSubscribed = false;
         gameStateManager = null;
+    }
+
+    private void TryBindRoundManager()
+    {
+        PostItRoundManager candidate = postItRoundManager;
+        if (candidate == null)
+            candidate = FindFirstObjectByType<PostItRoundManager>();
+
+        if (_boundRoundManager == candidate && _isLiarStateSubscribed)
+            return;
+
+        UnbindRoundManager();
+        _boundRoundManager = candidate;
+        if (_boundRoundManager == null)
+            return;
+
+        _boundRoundManager.PostItLiarPublicStateChanged +=
+            OnPostItLiarPublicStateChanged;
+        _isLiarStateSubscribed = true;
+    }
+
+    private void UnbindRoundManager()
+    {
+        if (_isLiarStateSubscribed && _boundRoundManager != null)
+        {
+            _boundRoundManager.PostItLiarPublicStateChanged -=
+                OnPostItLiarPublicStateChanged;
+        }
+
+        _isLiarStateSubscribed = false;
+        _boundRoundManager = null;
+    }
+
+    private void OnPostItLiarPublicStateChanged()
+    {
+        ApplyCurrentGameState();
     }
 
     private void OnGameStateChanged(int previousStateValue, int newStateValue)
@@ -182,10 +228,24 @@ public sealed class PostItRoundPrepHUD : MonoBehaviour
 
     private void ApplyCurrentGameState()
     {
-        bool showPrep = IsCountdownState();
+        bool showPrep = ShouldShowPrep();
         SetPrepVisible(showPrep);
         if (showPrep)
             RefreshPrep();
+    }
+
+    private bool ShouldShowPrep()
+    {
+        if (!IsCountdownState())
+            return false;
+
+        if (_boundRoundManager == null)
+            return true;
+
+        PostItLiarPhaseState liarState =
+            _boundRoundManager.LiarPublicState;
+        return !liarState.IsActive ||
+               liarState.Phase == PostItLiarPhase.BrawlCountdown;
     }
 
     private bool IsCountdownState()

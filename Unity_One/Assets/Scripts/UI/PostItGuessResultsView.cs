@@ -142,6 +142,8 @@ public sealed class PostItGuessResultsView : MonoBehaviour
         postItRoundManager = candidate;
         _boundRoundManager = candidate;
         _boundRoundManager.GuessScoresChanged += OnGuessScoresChanged;
+        _boundRoundManager.PostItLiarRevealChanged +=
+            OnPostItLiarRevealChanged;
         _isScoreSubscribed = true;
         RefreshPlayerScores();
     }
@@ -149,13 +151,23 @@ public sealed class PostItGuessResultsView : MonoBehaviour
     private void UnbindRoundManager()
     {
         if (_isScoreSubscribed && _boundRoundManager != null)
+        {
             _boundRoundManager.GuessScoresChanged -= OnGuessScoresChanged;
+            _boundRoundManager.PostItLiarRevealChanged -=
+                OnPostItLiarRevealChanged;
+        }
 
         _isScoreSubscribed = false;
         _boundRoundManager = null;
     }
 
     private void OnGuessScoresChanged()
+    {
+        if (IsResultsState())
+            _refreshPending = true;
+    }
+
+    private void OnPostItLiarRevealChanged()
     {
         if (IsResultsState())
             _refreshPending = true;
@@ -252,6 +264,9 @@ public sealed class PostItGuessResultsView : MonoBehaviour
         if (playerScoresText == null)
             return;
 
+        if (TryRefreshPostItLiarScores())
+            return;
+
         _orderedScores.Clear();
         if (_boundRoundManager != null)
         {
@@ -317,6 +332,78 @@ public sealed class PostItGuessResultsView : MonoBehaviour
         playerScoresText.text = _scoreBuilder.ToString();
     }
 
+    private bool TryRefreshPostItLiarScores()
+    {
+        if (_boundRoundManager == null ||
+            !_boundRoundManager.LiarPublicState.IsActive)
+        {
+            return false;
+        }
+
+        if (!_boundRoundManager.HasLocalLiarReveal)
+        {
+            playerScoresText.text = scoresPendingText ?? string.Empty;
+            return true;
+        }
+
+        PostItLiarRevealData reveal =
+            _boundRoundManager.LocalLiarReveal;
+        if (!reveal.IsValid ||
+            reveal.RoundRevision !=
+            _boundRoundManager.LiarPublicState.RoundRevision ||
+            reveal.PlayerResults.Count != PostItLiarFixedSet.Capacity)
+        {
+            playerScoresText.text = scoresPendingText ?? string.Empty;
+            return true;
+        }
+
+        byte localStableSlot = PostItLiarFixedSet.InvalidSlot;
+        if (_boundRoundManager.HasLocalLiarPrivateRole)
+        {
+            localStableSlot =
+                _boundRoundManager.LocalLiarPrivateRole.StableSlot;
+        }
+
+        _scoreBuilder.Clear();
+        for (int index = 0;
+             index < reveal.PlayerResults.Count;
+             index++)
+        {
+            PostItLiarPlayerResultData result =
+                reveal.PlayerResults.Get(index);
+            if (result.StableSlot != index)
+            {
+                playerScoresText.text =
+                    scoresPendingText ?? string.Empty;
+                return true;
+            }
+
+            if (index > 0)
+                _scoreBuilder.Append('\n');
+
+            _scoreBuilder
+                .Append('P')
+                .Append(index + 1);
+
+            if (result.StableSlot == localStableSlot)
+                _scoreBuilder.Append(" (나)");
+
+            _scoreBuilder
+                .Append(" · 난투 ")
+                .Append(result.BattleScore)
+                .Append(" · 추리 +")
+                .Append(result.DeductionScore)
+                .Append(" · 최종 ")
+                .Append(result.FinalRoundScore);
+
+            if (!result.IsConnected)
+                _scoreBuilder.Append(" · 연결 종료");
+        }
+
+        playerScoresText.text = _scoreBuilder.ToString();
+        return true;
+    }
+
     private static int CompareScoresByOwnerClientId(
         PostItGuessPlayerScoreData left,
         PostItGuessPlayerScoreData right)
@@ -326,6 +413,13 @@ public sealed class PostItGuessResultsView : MonoBehaviour
 
     private void RefreshLocalCardResults()
     {
+        if (_boundRoundManager != null &&
+            _boundRoundManager.LiarPublicState.IsActive)
+        {
+            HideLocalCardResults();
+            return;
+        }
+
         if (!TryGetLocalPublishedScore(out PostItGuessPlayerScoreData localScore) ||
             !AreLocalResultsReady(localScore))
         {

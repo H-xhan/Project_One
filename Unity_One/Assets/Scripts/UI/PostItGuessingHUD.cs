@@ -22,6 +22,7 @@ public sealed class PostItGuessingHUD : MonoBehaviour
 
     [Header("Data")]
     [SerializeField] private GameStateManager gameStateManager;
+    [SerializeField] private PostItRoundManager postItRoundManager;
     [SerializeField] private PlayerPostItInventory targetInventory;
     [SerializeField] private PostItVisualCatalogSO visualCatalog;
     [SerializeField] private float rebindInterval = 0.25f;
@@ -44,14 +45,17 @@ public sealed class PostItGuessingHUD : MonoBehaviour
     private readonly ColorBlock[] _topicButtonBaseColors = new ColorBlock[4];
 
     private PlayerPostItInventory _boundInventory;
+    private PostItRoundManager _boundRoundManager;
     private PostItGuessOwnerData _currentData = PostItGuessOwnerData.Invalid;
     private PostItTopicId _selectedTopicId = PostItTopicId.None;
     private float _nextInventoryBindAttemptTime;
     private float _nextGameStateBindAttemptTime;
+    private float _nextRoundManagerBindAttemptTime;
     private int _currentGuessIndex = -1;
     private int _currentPostItId = -1;
     private int _lastDeadlineSeconds = int.MinValue;
     private bool _isGameStateSubscribed;
+    private bool _isLiarStateSubscribed;
     private bool _topicButtonsCreated;
     private bool _buttonListenersRegistered;
     private bool _awaitingSubmitResponse;
@@ -67,6 +71,7 @@ public sealed class PostItGuessingHUD : MonoBehaviour
         EnsureTopicButtons();
         RegisterButtonListeners();
         TryBindGameState();
+        TryBindRoundManager();
         TryBindInventory();
         ApplyCurrentGameState();
     }
@@ -75,6 +80,7 @@ public sealed class PostItGuessingHUD : MonoBehaviour
     {
         UnregisterButtonListeners();
         UnbindInventory();
+        UnbindRoundManager();
         UnbindGameState();
         ResetCurrentSelection();
     }
@@ -84,10 +90,19 @@ public sealed class PostItGuessingHUD : MonoBehaviour
         if (_isGameStateSubscribed && gameStateManager == null)
             _isGameStateSubscribed = false;
 
+        if (_isLiarStateSubscribed && _boundRoundManager == null)
+            _isLiarStateSubscribed = false;
+
         if (!_isGameStateSubscribed &&
             Time.unscaledTime >= _nextGameStateBindAttemptTime)
         {
             TryBindGameState();
+        }
+
+        if (!_isLiarStateSubscribed &&
+            Time.unscaledTime >= _nextRoundManagerBindAttemptTime)
+        {
+            TryBindRoundManager();
         }
 
         if (_boundInventory == null &&
@@ -192,6 +207,46 @@ public sealed class PostItGuessingHUD : MonoBehaviour
 
         _isGameStateSubscribed = false;
         gameStateManager = null;
+    }
+
+    private void TryBindRoundManager()
+    {
+        _nextRoundManagerBindAttemptTime =
+            Time.unscaledTime + Mathf.Max(0.05f, rebindInterval);
+
+        PostItRoundManager candidate = postItRoundManager;
+        if (candidate == null)
+            candidate = FindFirstObjectByType<PostItRoundManager>();
+
+        if (_boundRoundManager == candidate && _isLiarStateSubscribed)
+            return;
+
+        UnbindRoundManager();
+        _boundRoundManager = candidate;
+        if (_boundRoundManager == null)
+            return;
+
+        _boundRoundManager.PostItLiarPublicStateChanged +=
+            OnPostItLiarPublicStateChanged;
+        _isLiarStateSubscribed = true;
+        ApplyCurrentGameState();
+    }
+
+    private void UnbindRoundManager()
+    {
+        if (_isLiarStateSubscribed && _boundRoundManager != null)
+        {
+            _boundRoundManager.PostItLiarPublicStateChanged -=
+                OnPostItLiarPublicStateChanged;
+        }
+
+        _isLiarStateSubscribed = false;
+        _boundRoundManager = null;
+    }
+
+    private void OnPostItLiarPublicStateChanged()
+    {
+        ApplyCurrentGameState();
     }
 
     private void OnGameStateChanged(int previousStateValue, int newStateValue)
@@ -300,7 +355,10 @@ public sealed class PostItGuessingHUD : MonoBehaviour
     private bool IsGuessingState()
     {
         return gameStateManager != null &&
-               gameStateManager.GetState() == GameStateManager.GameState.Guessing;
+               gameStateManager.GetState() ==
+               GameStateManager.GameState.Guessing &&
+               (_boundRoundManager == null ||
+                !_boundRoundManager.LiarPublicState.IsActive);
     }
 
     private void RefreshGuessItems()
