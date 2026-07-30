@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using Unity.Collections;
 using Unity.Netcode;
 using UnityEngine;
 
@@ -48,6 +49,37 @@ public class PostItRoundManager : NetworkBehaviour
     [SerializeField] private int maxGuessablePostItsPerPlayer = 2;
     [SerializeField] private float guessingDurationSeconds = 15f;
     [SerializeField] private bool debugGuessLogs = false;
+
+    [Header("Post-it Liar")]
+    [SerializeField, Tooltip("정확히 4명의 frozen participant가 있을 때 포스트잇 라이어 규칙을 활성화합니다.")]
+    private bool enablePostItLiarMode = false;
+
+    [SerializeField, Tooltip("서버가 라이어 라운드 문제를 선택할 Prompt Database입니다.")]
+    private PostItPromptDatabaseSO postItLiarPromptDatabase;
+
+    [SerializeField, Min(0.1f), Tooltip("역할과 비밀 정답을 확인하는 시간(초)입니다.")]
+    private float postItLiarSecretRevealSeconds = 5f;
+
+    [SerializeField, Min(0.1f), Tooltip("각 참가자가 단서 하나를 작성하는 시간(초)입니다.")]
+    private float postItLiarClueWriteSeconds = 30f;
+
+    [SerializeField, Min(0.1f), Tooltip("단서 제출을 잠그고 난투 준비로 전환하는 시간(초)입니다.")]
+    private float postItLiarClueLockSeconds = 2f;
+
+    [SerializeField, Min(0.1f), Tooltip("기존 포스트잇 난투가 시작되기 전 카운트다운 시간(초)입니다.")]
+    private float postItLiarBrawlCountdownSeconds = 3f;
+
+    [SerializeField, Min(0.1f), Tooltip("라이어가 익명 단서와 4지선다를 보고 정답을 고르는 시간(초)입니다.")]
+    private float postItLiarGuessSeconds = 15f;
+
+    [SerializeField, Min(0.1f), Tooltip("일반 플레이어가 실제 라이어를 선택하는 시간(초)입니다.")]
+    private float postItLiarVoteSeconds = 15f;
+
+    [SerializeField, Min(0.1f), Tooltip("정답, 라이어, 단서, 투표와 점수를 공개하는 시간(초)입니다.")]
+    private float postItLiarRevealSeconds = 8f;
+
+    [SerializeField, Tooltip("비밀 문자열을 제외한 라이어 phase 진단 로그를 출력합니다.")]
+    private bool debugPostItLiarLogs = false;
 
     [Header("World Drop")]
     [SerializeField] private LayerMask worldDropGroundMask;
@@ -104,8 +136,61 @@ public class PostItRoundManager : NetworkBehaviour
     private int _finalizedGuessRevision = -1;
     private bool _guessMutationInProgress;
 
+    private readonly NetworkVariable<PostItLiarPhaseState> _postItLiarPhaseState =
+        new NetworkVariable<PostItLiarPhaseState>(
+            PostItLiarPhaseState.Inactive,
+            NetworkVariableReadPermission.Everyone,
+            NetworkVariableWritePermission.Server);
+    private readonly PostItPromptModule _postItPromptModule =
+        new PostItPromptModule();
+    private readonly PostItClueModule _postItClueModule =
+        new PostItClueModule();
+    private readonly PostItDeductionModule _postItDeductionModule =
+        new PostItDeductionModule();
+    private readonly List<PostItLiarRosterEntry> _serverPostItLiarRoster =
+        new List<PostItLiarRosterEntry>(PostItLiarFixedSet.Capacity);
+    private readonly Dictionary<ulong, int> _serverPostItLiarBattleScores =
+        new Dictionary<ulong, int>();
+    private System.Random _serverPostItLiarRandom;
+    private PostItPromptSelection _serverPostItLiarPrompt;
+    private PostItLiarClueSet _serverPostItLiarAuthoredClues;
+    private PostItLiarClueSet _serverPostItLiarAnonymousClues;
+    private PostItLiarChoiceSet _serverPostItLiarChoices;
+    private PostItLiarPlayerResultSet _serverPostItLiarBattleResultSet;
+    private PostItLiarRevealData _serverPostItLiarReveal;
+    private int _serverPostItLiarDecisionRoundRevision = -1;
+    private byte _serverPostItLiarSlot = PostItLiarFixedSet.InvalidSlot;
+    private bool _serverPostItLiarPreparedActive;
+    private bool _serverPostItLiarStarted;
+    private bool _serverPostItLiarBrawlCommitted;
+    private bool _serverPostItLiarDeductionStarted;
+    private bool _serverPostItLiarDeductionCancelled;
+    private bool _serverPostItLiarResultFinalized;
+    private bool _hasSubscribedToPostItLiarPhaseState;
+
+    private PostItLiarPrivateRoleData _localPostItLiarPrivateRole;
+    private PostItLiarGuessViewData _localPostItLiarGuessView;
+    private PostItLiarVoteViewData _localPostItLiarVoteView;
+    private PostItLiarPlayerResultSet _localPostItLiarBattleScores;
+    private PostItLiarRevealData _localPostItLiarReveal;
+    private int _localPostItLiarLastClearedRevision = -1;
+    private int _localPostItLiarSubmissionRoundRevision = -1;
+    private bool _hasLocalPostItLiarPrivateRole;
+    private bool _hasLocalPostItLiarGuessView;
+    private bool _hasLocalPostItLiarVoteView;
+    private bool _hasLocalPostItLiarBattleScores;
+    private bool _hasLocalPostItLiarReveal;
+    private bool _hasSubmittedPostItLiarClue;
+    private bool _hasSubmittedPostItLiarAnswer;
+    private bool _hasSubmittedPostItLiarVote;
+
     public event Action WorldDropsChanged;
     public event Action GuessScoresChanged;
+    public event Action PostItLiarPublicStateChanged;
+    public event Action PostItLiarLocalStateChanged;
+    public event Action PostItLiarRevealChanged;
+    public event Action<PostItLiarSubmissionKind, PostItLiarSubmitResult>
+        PostItLiarSubmissionResultReceived;
 
     public int WorldDropCount => _worldDrops.Count;
     public IReadOnlyList<PostItWorldDropData> WorldDrops => _worldDrops;
@@ -120,6 +205,34 @@ public class PostItRoundManager : NetworkBehaviour
         _roundRevision >= 0 &&
         _guessRevision >= 0 &&
         !HasPendingGuessEntries();
+    public PostItLiarPhaseState LiarPublicState =>
+        _postItLiarPhaseState.Value;
+    public bool HasLocalLiarPrivateRole =>
+        _hasLocalPostItLiarPrivateRole;
+    public PostItLiarPrivateRoleData LocalLiarPrivateRole =>
+        _localPostItLiarPrivateRole;
+    public bool HasLocalLiarGuessView =>
+        _hasLocalPostItLiarGuessView;
+    public PostItLiarGuessViewData LocalLiarGuessView =>
+        _localPostItLiarGuessView;
+    public bool HasLocalLiarVoteView =>
+        _hasLocalPostItLiarVoteView;
+    public PostItLiarVoteViewData LocalLiarVoteView =>
+        _localPostItLiarVoteView;
+    public bool HasLocalLiarBattleScores =>
+        _hasLocalPostItLiarBattleScores;
+    public PostItLiarPlayerResultSet LocalLiarBattleScores =>
+        _localPostItLiarBattleScores;
+    public bool HasLocalLiarReveal =>
+        _hasLocalPostItLiarReveal;
+    public PostItLiarRevealData LocalLiarReveal =>
+        _localPostItLiarReveal;
+    public bool HasSubmittedLiarClue =>
+        HasCurrentLocalLiarSubmission(_hasSubmittedPostItLiarClue);
+    public bool HasSubmittedLiarAnswer =>
+        HasCurrentLocalLiarSubmission(_hasSubmittedPostItLiarAnswer);
+    public bool HasSubmittedLiarVote =>
+        HasCurrentLocalLiarSubmission(_hasSubmittedPostItLiarVote);
 
     private struct ServerPostItGuessEntry
     {
@@ -219,16 +332,28 @@ public class PostItRoundManager : NetworkBehaviour
 
         SubscribeToWorldDrops();
         SubscribeToGuessScores();
+        SubscribeToPostItLiarPhaseState();
         RebuildWorldDropMirror();
         RebuildGuessScoreMirror();
         NotifyWorldDropsChanged();
         NotifyGuessScoresChanged();
+        HandlePostItLiarPhaseStateChanged(
+            PostItLiarPhaseState.Inactive,
+            _postItLiarPhaseState.Value);
+
+        if (IsServer)
+        {
+            ResetServerPostItLiarRoundData();
+            _postItLiarPhaseState.Value = PostItLiarPhaseState.Inactive;
+        }
     }
 
     private void Update()
     {
         if (!IsServer || !IsSpawned)
             return;
+
+        ServerTickPostItLiarRound();
 
         float now = Time.unscaledTime;
         if (now < _nextZeroPostItPollTime)
@@ -269,6 +394,7 @@ public class PostItRoundManager : NetworkBehaviour
 
             UnsubscribeFromWorldDrops();
             UnsubscribeFromGuessScores();
+            UnsubscribeFromPostItLiarPhaseState();
             _worldDrops.Clear();
             _guessScores.Clear();
             _claimedWorldDropIds.Clear();
@@ -286,8 +412,10 @@ public class PostItRoundManager : NetworkBehaviour
                 _initialAssignmentInProgress = false;
                 _zeroPostItEliminationArmedRoundRevision = -1;
                 ClearServerGuessSnapshotState();
+                ResetServerPostItLiarRoundData();
             }
 
+            ClearLocalPostItLiarState(true);
             NotifyWorldDropsChanged();
             NotifyGuessScoresChanged();
         }
@@ -1452,6 +1580,832 @@ public class PostItRoundManager : NetworkBehaviour
                status.IsSpawned &&
                status.IsEliminated &&
                status.GetComponentInParent<NetworkObject>() == playerObject;
+    }
+
+    public bool ServerEnsurePostItLiarRoundPrepared(
+        IEnumerable<PlayerPostItInventory> inventories,
+        int roundRevision)
+    {
+        if (!CanMutateServerState() ||
+            inventories == null ||
+            roundRevision < 0 ||
+            !IsInitialAssignmentState())
+        {
+            return false;
+        }
+
+        if (_serverPostItLiarDecisionRoundRevision == roundRevision)
+        {
+            return !_serverPostItLiarPreparedActive ||
+                   DoesPostItLiarRosterMatchInventories(inventories);
+        }
+
+        if (_serverPostItLiarDecisionRoundRevision >= 0)
+        {
+            LiarLog("이전 라이어 round state가 clear되지 않아 새 준비를 거부했습니다.");
+            return false;
+        }
+
+        if (!TryBuildPostItLiarRoster(
+                inventories,
+                out List<PostItLiarRosterEntry> roster))
+        {
+            return false;
+        }
+
+        if (!enablePostItLiarMode ||
+            roster.Count != PostItLiarFixedSet.Capacity)
+        {
+            LatchPostItLiarFallback(roundRevision);
+            return true;
+        }
+
+        double serverTime = GetAuthoritativeServerTime();
+        if (double.IsNaN(serverTime) ||
+            double.IsInfinity(serverTime) ||
+            serverTime < 0d)
+        {
+            return false;
+        }
+
+        int randomSeed = unchecked(
+            roundRevision * 486187739 ^
+            Environment.TickCount ^
+            (int)(serverTime * 1000d));
+        System.Random random = new System.Random(randomSeed);
+        if (!_postItPromptModule.TrySelect(
+                postItLiarPromptDatabase,
+                random,
+                out PostItPromptSelection prompt,
+                out _))
+        {
+            LatchPostItLiarFallback(roundRevision);
+            return true;
+        }
+
+        byte liarSlot = (byte)random.Next(PostItLiarFixedSet.Capacity);
+        if (!_postItClueModule.BeginRound(PostItLiarFixedSet.Capacity) ||
+            !_postItDeductionModule.BeginRound(
+                liarSlot,
+                prompt.CorrectChoiceSlot,
+                prompt.ChoiceCount) ||
+            !TryBuildPostItLiarChoiceSet(
+                prompt,
+                out PostItLiarChoiceSet choices))
+        {
+            LatchPostItLiarFallback(roundRevision);
+            return true;
+        }
+
+        _serverPostItLiarRoster.Clear();
+        _serverPostItLiarRoster.AddRange(roster);
+        _serverPostItLiarBattleScores.Clear();
+        _serverPostItLiarRandom = random;
+        _serverPostItLiarPrompt = prompt;
+        _serverPostItLiarChoices = choices;
+        _serverPostItLiarSlot = liarSlot;
+        _serverPostItLiarDecisionRoundRevision = roundRevision;
+        _serverPostItLiarPreparedActive = true;
+        _serverPostItLiarStarted = false;
+        _serverPostItLiarBrawlCommitted = false;
+        _serverPostItLiarDeductionStarted = false;
+        _serverPostItLiarDeductionCancelled = false;
+        _serverPostItLiarResultFinalized = false;
+        _serverPostItLiarAuthoredClues = default;
+        _serverPostItLiarAnonymousClues = default;
+        _serverPostItLiarBattleResultSet = default;
+        _serverPostItLiarReveal = default;
+        LiarLog($"round={roundRevision} 준비 완료 participants=4");
+        return true;
+    }
+
+    public bool ServerStartPreparedPostItLiarRound(int roundRevision)
+    {
+        if (!CanMutateServerState() ||
+            roundRevision < 0 ||
+            _serverPostItLiarDecisionRoundRevision != roundRevision)
+        {
+            return false;
+        }
+
+        if (!_serverPostItLiarPreparedActive)
+            return true;
+
+        if (_serverPostItLiarStarted)
+        {
+            return _postItLiarPhaseState.Value.IsActive &&
+                   _postItLiarPhaseState.Value.RoundRevision == roundRevision;
+        }
+
+        if (!IsCountdownState() ||
+            !TryValidateFrozenPostItLiarRoster(true) ||
+            _serverPostItLiarPrompt == null)
+        {
+            return false;
+        }
+
+        if (!SetPostItLiarPhase(
+                PostItLiarPhase.SecretReveal,
+                postItLiarSecretRevealSeconds))
+        {
+            return false;
+        }
+
+        _serverPostItLiarStarted = true;
+        int phaseRevision = _postItLiarPhaseState.Value.PhaseRevision;
+        FixedString128Bytes secretAnswer;
+        try
+        {
+            secretAnswer =
+                new FixedString128Bytes(_serverPostItLiarPrompt.SecretAnswer);
+        }
+        catch (ArgumentException)
+        {
+            return false;
+        }
+
+        for (int index = 0;
+             index < _serverPostItLiarRoster.Count;
+             index++)
+        {
+            PostItLiarRosterEntry entry = _serverPostItLiarRoster[index];
+            PostItLiarRole role =
+                entry.StableSlot == _serverPostItLiarSlot
+                    ? PostItLiarRole.Liar
+                    : PostItLiarRole.Citizen;
+            PostItLiarPrivateRoleData privateData =
+                new PostItLiarPrivateRoleData(
+                    roundRevision,
+                    phaseRevision,
+                    entry.StableSlot,
+                    role,
+                    role == PostItLiarRole.Citizen
+                        ? secretAnswer
+                        : default);
+            ReceivePostItLiarPrivateRoleRpc(
+                privateData,
+                RpcTarget.Single(entry.ClientId, RpcTargetUse.Temp));
+        }
+
+        return true;
+    }
+
+    public bool ServerTryGetPostItLiarPlayingGate(
+        int roundRevision,
+        out bool canEnterPlaying,
+        out bool shouldAbortToLobby)
+    {
+        canEnterPlaying = false;
+        shouldAbortToLobby = false;
+        if (!CanMutateServerState() ||
+            roundRevision < 0 ||
+            _serverPostItLiarDecisionRoundRevision != roundRevision)
+        {
+            return false;
+        }
+
+        if (!_serverPostItLiarPreparedActive)
+        {
+            canEnterPlaying = true;
+            return true;
+        }
+
+        if (!_serverPostItLiarStarted ||
+            !_postItLiarPhaseState.Value.IsActive ||
+            _postItLiarPhaseState.Value.RoundRevision != roundRevision ||
+            !TryValidateFrozenPostItLiarRoster(true))
+        {
+            shouldAbortToLobby = true;
+            return true;
+        }
+
+        PostItLiarPhase phase = _postItLiarPhaseState.Value.Phase;
+        if (phase == PostItLiarPhase.Brawl)
+        {
+            canEnterPlaying = true;
+            return true;
+        }
+
+        if (phase != PostItLiarPhase.BrawlCountdown)
+            return true;
+
+        double serverTime = GetAuthoritativeServerTime();
+        canEnterPlaying =
+            IsFinitePostItLiarTime(serverTime) &&
+            serverTime >= _postItLiarPhaseState.Value.DeadlineServerTime;
+        return true;
+    }
+
+    public bool ServerTryCommitPostItLiarBrawlStart(int roundRevision)
+    {
+        if (!ServerTryGetPostItLiarPlayingGate(
+                roundRevision,
+                out bool canEnterPlaying,
+                out bool shouldAbortToLobby) ||
+            shouldAbortToLobby ||
+            !canEnterPlaying)
+        {
+            return false;
+        }
+
+        if (!_serverPostItLiarPreparedActive)
+            return true;
+
+        if (_postItLiarPhaseState.Value.Phase == PostItLiarPhase.Brawl)
+            return _serverPostItLiarBrawlCommitted;
+
+        if (!SetPostItLiarPhase(PostItLiarPhase.Brawl, 0f))
+            return false;
+
+        _serverPostItLiarBrawlCommitted = true;
+        return true;
+    }
+
+    public bool ServerIsPostItLiarRoundActive(int roundRevision)
+    {
+        return CanMutateServerState() &&
+               _serverPostItLiarPreparedActive &&
+               _serverPostItLiarStarted &&
+               _serverPostItLiarDecisionRoundRevision == roundRevision &&
+               _postItLiarPhaseState.Value.IsActive &&
+               _postItLiarPhaseState.Value.RoundRevision == roundRevision;
+    }
+
+    public bool ServerBeginPostItLiarDeduction(
+        IEnumerable<PlayerPostItInventory> inventories,
+        IEnumerable<ulong> zeroScoreOwnerClientIds,
+        int roundRevision,
+        out double absoluteDeadlineServerTime)
+    {
+        absoluteDeadlineServerTime = 0d;
+        if (!ServerIsPostItLiarRoundActive(roundRevision) ||
+            inventories == null ||
+            zeroScoreOwnerClientIds == null ||
+            !IsPlayingState() ||
+            !_serverPostItLiarBrawlCommitted ||
+            _postItLiarPhaseState.Value.Phase != PostItLiarPhase.Brawl)
+        {
+            return false;
+        }
+
+        if (_serverPostItLiarDeductionStarted)
+        {
+            absoluteDeadlineServerTime =
+                _postItLiarPhaseState.Value.DeadlineServerTime;
+            return true;
+        }
+
+        if (!TryCapturePostItLiarBattleScores(
+                inventories,
+                zeroScoreOwnerClientIds) ||
+            !TryRefreshPostItLiarRosterConnections() ||
+            !TryBuildPostItLiarBattleResultSet(
+                out _serverPostItLiarBattleResultSet))
+        {
+            return false;
+        }
+
+        _postItClueModule.FinalizeMissing();
+        _serverPostItLiarAuthoredClues =
+            _postItClueModule.BuildAuthoredSet();
+        _serverPostItLiarAnonymousClues =
+            _postItClueModule.BuildAnonymousSet(_serverPostItLiarRandom);
+        if (!IsPostItLiarSlotConnected(_serverPostItLiarSlot))
+            _serverPostItLiarDeductionCancelled = true;
+
+        if (_serverPostItLiarDeductionCancelled)
+        {
+            _serverPostItLiarDeductionStarted = true;
+            if (!FinalizePostItLiarDeductionAndEnterReveal())
+            {
+                _serverPostItLiarDeductionStarted = false;
+                return false;
+            }
+        }
+        else
+        {
+            if (!SetPostItLiarPhase(
+                    PostItLiarPhase.LiarGuess,
+                    postItLiarGuessSeconds))
+            {
+                return false;
+            }
+
+            _serverPostItLiarDeductionStarted = true;
+            SendPostItLiarGuessView();
+        }
+
+        SendPostItLiarBattleSettlement();
+        absoluteDeadlineServerTime =
+            _postItLiarPhaseState.Value.DeadlineServerTime;
+        return true;
+    }
+
+    public bool ServerTryBuildFinalPostItLiarResults(
+        int roundRevision,
+        out PostItLiarPlayerResultData[] results)
+    {
+        results = null;
+        if (!ServerIsPostItLiarRoundActive(roundRevision) ||
+            !_serverPostItLiarResultFinalized ||
+            !_serverPostItLiarReveal.IsValid ||
+            _serverPostItLiarReveal.RoundRevision != roundRevision ||
+            _postItLiarPhaseState.Value.Phase != PostItLiarPhase.Complete ||
+            _serverPostItLiarReveal.PlayerResults.Count !=
+            PostItLiarFixedSet.Capacity)
+        {
+            return false;
+        }
+
+        results = new PostItLiarPlayerResultData[
+            PostItLiarFixedSet.Capacity];
+        for (int slot = 0; slot < results.Length; slot++)
+        {
+            PostItLiarPlayerResultData result =
+                _serverPostItLiarReveal.PlayerResults.Get(slot);
+            if (result.StableSlot != slot ||
+                result.BattleScore < 0 ||
+                result.DeductionScore < 0 ||
+                result.FinalRoundScore !=
+                result.BattleScore + result.DeductionScore)
+            {
+                results = null;
+                return false;
+            }
+
+            results[slot] = result;
+        }
+
+        return true;
+    }
+
+    public bool ServerTryGetPostItLiarClientId(
+        int roundRevision,
+        byte stableSlot,
+        out ulong clientId)
+    {
+        clientId = ulong.MaxValue;
+        if (!ServerIsPostItLiarRoundActive(roundRevision) ||
+            stableSlot >= PostItLiarFixedSet.Capacity)
+        {
+            return false;
+        }
+
+        for (int index = 0;
+             index < _serverPostItLiarRoster.Count;
+             index++)
+        {
+            PostItLiarRosterEntry entry = _serverPostItLiarRoster[index];
+            if (entry.StableSlot != stableSlot)
+                continue;
+
+            clientId = entry.ClientId;
+            return true;
+        }
+
+        return false;
+    }
+
+    public bool ServerHandlePostItLiarDisconnect(
+        ulong clientId,
+        int roundRevision,
+        out bool shouldAbortToLobby,
+        out bool deductionStateChanged)
+    {
+        shouldAbortToLobby = false;
+        deductionStateChanged = false;
+        if (!ServerIsPostItLiarRoundActive(roundRevision))
+            return false;
+
+        int rosterIndex = FindPostItLiarRosterIndex(clientId);
+        if (rosterIndex < 0)
+            return false;
+
+        PostItLiarRosterEntry entry =
+            _serverPostItLiarRoster[rosterIndex];
+        if (!entry.IsConnected)
+            return true;
+
+        entry.IsConnected = false;
+        _serverPostItLiarRoster[rosterIndex] = entry;
+
+        PostItLiarPhase phase = _postItLiarPhaseState.Value.Phase;
+        if (phase == PostItLiarPhase.SecretReveal ||
+            phase == PostItLiarPhase.ClueWrite ||
+            phase == PostItLiarPhase.ClueLock ||
+            phase == PostItLiarPhase.BrawlCountdown)
+        {
+            shouldAbortToLobby = true;
+            return true;
+        }
+
+        if (entry.StableSlot == _serverPostItLiarSlot &&
+            (phase == PostItLiarPhase.Brawl ||
+             phase == PostItLiarPhase.LiarGuess ||
+             phase == PostItLiarPhase.LiarVote))
+        {
+            _serverPostItLiarDeductionCancelled = true;
+            deductionStateChanged = true;
+            if (_serverPostItLiarDeductionStarted &&
+                phase != PostItLiarPhase.Brawl &&
+                !FinalizePostItLiarDeductionAndEnterReveal())
+            {
+                return false;
+            }
+        }
+        else if (_serverPostItLiarDeductionStarted &&
+                 phase == PostItLiarPhase.LiarVote &&
+                 _postItDeductionModule.AreAllConnectedCitizensResolved(
+                     _serverPostItLiarRoster))
+        {
+            deductionStateChanged =
+                FinalizePostItLiarDeductionAndEnterReveal();
+        }
+
+        return true;
+    }
+
+    public bool ServerClearPostItLiarRoundState()
+    {
+        if (!CanMutateServerState())
+            return false;
+
+        int clearedRoundRevision =
+            _serverPostItLiarDecisionRoundRevision;
+        if (IsSpawnedNetworkSession() && IsSpawned)
+        {
+            ClearPostItLiarClientStateRpc(clearedRoundRevision);
+            _postItLiarPhaseState.Value = PostItLiarPhaseState.Inactive;
+        }
+
+        ResetServerPostItLiarRoundData();
+        if (!IsSpawnedNetworkSession())
+            ClearLocalPostItLiarState(true);
+
+        return true;
+    }
+
+    public void RequestSubmitLiarClue(string clue)
+    {
+        if (!TryGetLocalPostItLiarRequestContext(
+                PostItLiarPhase.ClueWrite,
+                out int roundRevision,
+                out int phaseRevision,
+                out ulong playerNetworkObjectId,
+                out PostItLiarSubmitResult preflightResult))
+        {
+            NotifyPostItLiarSubmissionResult(
+                PostItLiarSubmissionKind.Clue,
+                preflightResult);
+            return;
+        }
+
+        FixedString512Bytes cluePayload;
+        try
+        {
+            cluePayload = new FixedString512Bytes(clue ?? string.Empty);
+        }
+        catch (ArgumentException)
+        {
+            NotifyPostItLiarSubmissionResult(
+                PostItLiarSubmissionKind.Clue,
+                PostItLiarSubmitResult.TooLong);
+            return;
+        }
+
+        SubmitPostItLiarClueRpc(
+            roundRevision,
+            phaseRevision,
+            playerNetworkObjectId,
+            cluePayload);
+    }
+
+    public void RequestSubmitLiarAnswerChoice(byte shuffledChoiceSlot)
+    {
+        if (!TryGetLocalPostItLiarRequestContext(
+                PostItLiarPhase.LiarGuess,
+                out int roundRevision,
+                out int phaseRevision,
+                out ulong playerNetworkObjectId,
+                out PostItLiarSubmitResult preflightResult))
+        {
+            NotifyPostItLiarSubmissionResult(
+                PostItLiarSubmissionKind.LiarAnswer,
+                preflightResult);
+            return;
+        }
+
+        SubmitPostItLiarAnswerRpc(
+            roundRevision,
+            phaseRevision,
+            playerNetworkObjectId,
+            shuffledChoiceSlot);
+    }
+
+    public void RequestSubmitLiarVote(byte targetStableSlot)
+    {
+        if (!TryGetLocalPostItLiarRequestContext(
+                PostItLiarPhase.LiarVote,
+                out int roundRevision,
+                out int phaseRevision,
+                out ulong playerNetworkObjectId,
+                out PostItLiarSubmitResult preflightResult))
+        {
+            NotifyPostItLiarSubmissionResult(
+                PostItLiarSubmissionKind.CitizenVote,
+                preflightResult);
+            return;
+        }
+
+        SubmitPostItLiarVoteRpc(
+            roundRevision,
+            phaseRevision,
+            playerNetworkObjectId,
+            targetStableSlot);
+    }
+
+    [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Everyone)]
+    private void SubmitPostItLiarClueRpc(
+        int roundRevision,
+        int phaseRevision,
+        ulong playerNetworkObjectId,
+        FixedString512Bytes clue,
+        RpcParams rpcParams = default)
+    {
+        ulong senderClientId = rpcParams.Receive.SenderClientId;
+        PostItLiarSubmitResult result;
+        if (TryValidatePostItLiarSubmissionSender(
+                senderClientId,
+                playerNetworkObjectId,
+                roundRevision,
+                phaseRevision,
+                PostItLiarPhase.ClueWrite,
+                out byte stableSlot,
+                out result))
+        {
+            result = _postItClueModule.TrySubmit(
+                stableSlot,
+                clue.ToString(),
+                _serverPostItLiarPrompt.SecretAnswer,
+                _serverPostItLiarPrompt.ForbiddenStrings,
+                out _);
+        }
+
+        SendPostItLiarSubmissionResult(
+            senderClientId,
+            PostItLiarSubmissionKind.Clue,
+            result,
+            roundRevision,
+            phaseRevision);
+    }
+
+    [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Everyone)]
+    private void SubmitPostItLiarAnswerRpc(
+        int roundRevision,
+        int phaseRevision,
+        ulong playerNetworkObjectId,
+        byte shuffledChoiceSlot,
+        RpcParams rpcParams = default)
+    {
+        ulong senderClientId = rpcParams.Receive.SenderClientId;
+        PostItLiarSubmitResult result;
+        if (TryValidatePostItLiarSubmissionSender(
+                senderClientId,
+                playerNetworkObjectId,
+                roundRevision,
+                phaseRevision,
+                PostItLiarPhase.LiarGuess,
+                out byte stableSlot,
+                out result))
+        {
+            result = _postItDeductionModule.SubmitLiarChoice(
+                stableSlot,
+                shuffledChoiceSlot);
+        }
+
+        SendPostItLiarSubmissionResult(
+            senderClientId,
+            PostItLiarSubmissionKind.LiarAnswer,
+            result,
+            roundRevision,
+            phaseRevision);
+    }
+
+    [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Everyone)]
+    private void SubmitPostItLiarVoteRpc(
+        int roundRevision,
+        int phaseRevision,
+        ulong playerNetworkObjectId,
+        byte targetStableSlot,
+        RpcParams rpcParams = default)
+    {
+        ulong senderClientId = rpcParams.Receive.SenderClientId;
+        PostItLiarSubmitResult result;
+        if (TryValidatePostItLiarSubmissionSender(
+                senderClientId,
+                playerNetworkObjectId,
+                roundRevision,
+                phaseRevision,
+                PostItLiarPhase.LiarVote,
+                out byte stableSlot,
+                out result))
+        {
+            result = _postItDeductionModule.SubmitCitizenVote(
+                stableSlot,
+                targetStableSlot);
+        }
+
+        SendPostItLiarSubmissionResult(
+            senderClientId,
+            PostItLiarSubmissionKind.CitizenVote,
+            result,
+            roundRevision,
+            phaseRevision);
+    }
+
+    [Rpc(
+        SendTo.SpecifiedInParams,
+        InvokePermission = RpcInvokePermission.Server)]
+    private void ReceivePostItLiarPrivateRoleRpc(
+        PostItLiarPrivateRoleData privateData,
+        RpcParams rpcParams = default)
+    {
+        bool roleInvariantValid =
+            (privateData.Role == PostItLiarRole.Liar &&
+             privateData.SecretAnswer.IsEmpty) ||
+            (privateData.Role == PostItLiarRole.Citizen &&
+             !privateData.SecretAnswer.IsEmpty);
+        if (!privateData.IsValid ||
+            !roleInvariantValid ||
+            !CanAcceptLocalPostItLiarPayload(privateData.RoundRevision))
+        {
+            return;
+        }
+
+        PrepareLocalPostItLiarRoundCache(privateData.RoundRevision);
+        _localPostItLiarPrivateRole = privateData;
+        _hasLocalPostItLiarPrivateRole = true;
+        NotifyPostItLiarLocalStateChanged();
+    }
+
+    [Rpc(
+        SendTo.SpecifiedInParams,
+        InvokePermission = RpcInvokePermission.Server)]
+    private void ReceivePostItLiarBattleSettlementRpc(
+        int roundRevision,
+        int phaseRevision,
+        PostItLiarPlayerResultSet battleScores,
+        RpcParams rpcParams = default)
+    {
+        if (roundRevision < 0 ||
+            phaseRevision < 0 ||
+            battleScores.Count != PostItLiarFixedSet.Capacity ||
+            !CanAcceptLocalPostItLiarPayload(roundRevision))
+        {
+            return;
+        }
+
+        PrepareLocalPostItLiarRoundCache(roundRevision);
+        _localPostItLiarBattleScores = battleScores;
+        _hasLocalPostItLiarBattleScores = true;
+        NotifyPostItLiarLocalStateChanged();
+    }
+
+    [Rpc(
+        SendTo.SpecifiedInParams,
+        InvokePermission = RpcInvokePermission.Server)]
+    private void ReceivePostItLiarGuessViewRpc(
+        PostItLiarGuessViewData view,
+        RpcParams rpcParams = default)
+    {
+        if (view.RoundRevision < 0 ||
+            view.PhaseRevision < 0 ||
+            view.AnonymousClues.Count != PostItLiarFixedSet.Capacity ||
+            view.Choices.Count !=
+            PostItPromptDatabaseSO.RequiredChoiceCount ||
+            view.BattleScores.Count != PostItLiarFixedSet.Capacity ||
+            !CanAcceptLocalPostItLiarPayload(view.RoundRevision))
+        {
+            return;
+        }
+
+        for (int index = 0; index < view.AnonymousClues.Count; index++)
+        {
+            if (view.AnonymousClues.Get(index).AuthorSlot !=
+                PostItLiarFixedSet.InvalidSlot)
+            {
+                return;
+            }
+        }
+
+        PrepareLocalPostItLiarRoundCache(view.RoundRevision);
+        _localPostItLiarGuessView = view;
+        _hasLocalPostItLiarGuessView = true;
+        _localPostItLiarBattleScores = view.BattleScores;
+        _hasLocalPostItLiarBattleScores = true;
+        NotifyPostItLiarLocalStateChanged();
+    }
+
+    [Rpc(
+        SendTo.SpecifiedInParams,
+        InvokePermission = RpcInvokePermission.Server)]
+    private void ReceivePostItLiarVoteViewRpc(
+        PostItLiarVoteViewData view,
+        RpcParams rpcParams = default)
+    {
+        if (view.RoundRevision < 0 ||
+            view.PhaseRevision < 0 ||
+            view.AuthoredClues.Count != PostItLiarFixedSet.Capacity ||
+            view.BattleScores.Count != PostItLiarFixedSet.Capacity ||
+            !CanAcceptLocalPostItLiarPayload(view.RoundRevision))
+        {
+            return;
+        }
+
+        PrepareLocalPostItLiarRoundCache(view.RoundRevision);
+        _localPostItLiarVoteView = view;
+        _hasLocalPostItLiarVoteView = true;
+        _localPostItLiarBattleScores = view.BattleScores;
+        _hasLocalPostItLiarBattleScores = true;
+        NotifyPostItLiarLocalStateChanged();
+    }
+
+    [Rpc(
+        SendTo.SpecifiedInParams,
+        InvokePermission = RpcInvokePermission.Server)]
+    private void ReceivePostItLiarSubmissionResultRpc(
+        PostItLiarSubmissionKind kind,
+        PostItLiarSubmitResult result,
+        int roundRevision,
+        int phaseRevision,
+        RpcParams rpcParams = default)
+    {
+        if (kind == PostItLiarSubmissionKind.None ||
+            result == PostItLiarSubmitResult.None ||
+            roundRevision <= _localPostItLiarLastClearedRevision)
+        {
+            return;
+        }
+
+        if (result == PostItLiarSubmitResult.Accepted)
+        {
+            PrepareLocalPostItLiarRoundCache(roundRevision);
+            _localPostItLiarSubmissionRoundRevision = roundRevision;
+            switch (kind)
+            {
+                case PostItLiarSubmissionKind.Clue:
+                    _hasSubmittedPostItLiarClue = true;
+                    break;
+                case PostItLiarSubmissionKind.LiarAnswer:
+                    _hasSubmittedPostItLiarAnswer = true;
+                    break;
+                case PostItLiarSubmissionKind.CitizenVote:
+                    _hasSubmittedPostItLiarVote = true;
+                    break;
+            }
+
+            NotifyPostItLiarLocalStateChanged();
+        }
+
+        NotifyPostItLiarSubmissionResult(kind, result);
+    }
+
+    [Rpc(
+        SendTo.ClientsAndHost,
+        InvokePermission = RpcInvokePermission.Server)]
+    private void ReceivePostItLiarRevealRpc(
+        PostItLiarRevealData reveal,
+        RpcParams rpcParams = default)
+    {
+        if (!reveal.IsValid ||
+            reveal.RoundRevision < 0 ||
+            reveal.LiarSlot >= PostItLiarFixedSet.Capacity ||
+            reveal.AuthoredClues.Count != PostItLiarFixedSet.Capacity ||
+            reveal.Votes.Count != PostItLiarFixedSet.Capacity ||
+            reveal.PlayerResults.Count != PostItLiarFixedSet.Capacity ||
+            !CanAcceptLocalPostItLiarPayload(reveal.RoundRevision))
+        {
+            return;
+        }
+
+        PrepareLocalPostItLiarRoundCache(reveal.RoundRevision);
+        _localPostItLiarReveal = reveal;
+        _hasLocalPostItLiarReveal = true;
+        NotifyPostItLiarRevealChanged();
+        NotifyPostItLiarLocalStateChanged();
+    }
+
+    [Rpc(
+        SendTo.ClientsAndHost,
+        InvokePermission = RpcInvokePermission.Server)]
+    private void ClearPostItLiarClientStateRpc(
+        int clearedRoundRevision,
+        RpcParams rpcParams = default)
+    {
+        _localPostItLiarLastClearedRevision = Math.Max(
+            _localPostItLiarLastClearedRevision,
+            clearedRoundRevision);
+        ClearLocalPostItLiarState(true);
     }
 
     public bool ServerBeginGuessing(
@@ -6055,6 +7009,991 @@ public class PostItRoundManager : NetworkBehaviour
         return count;
     }
 
+    private void ServerTickPostItLiarRound()
+    {
+        if (!CanMutateServerState() ||
+            !_serverPostItLiarPreparedActive ||
+            !_serverPostItLiarStarted ||
+            !_postItLiarPhaseState.Value.IsActive ||
+            _postItLiarPhaseState.Value.RoundRevision !=
+            _serverPostItLiarDecisionRoundRevision)
+        {
+            return;
+        }
+
+        double serverTime = GetAuthoritativeServerTime();
+        if (!IsFinitePostItLiarTime(serverTime))
+            return;
+
+        PostItLiarPhaseState state = _postItLiarPhaseState.Value;
+        bool deadlineReached =
+            state.DeadlineServerTime > 0d &&
+            serverTime >= state.DeadlineServerTime;
+        switch (state.Phase)
+        {
+            case PostItLiarPhase.SecretReveal:
+                if (IsCountdownState() && deadlineReached)
+                {
+                    SetPostItLiarPhase(
+                        PostItLiarPhase.ClueWrite,
+                        postItLiarClueWriteSeconds);
+                }
+                break;
+
+            case PostItLiarPhase.ClueWrite:
+                if (IsCountdownState() &&
+                    (deadlineReached ||
+                     _postItClueModule.AreAllConnectedSubmitted(
+                         _serverPostItLiarRoster)))
+                {
+                    _postItClueModule.FinalizeMissing();
+                    SetPostItLiarPhase(
+                        PostItLiarPhase.ClueLock,
+                        postItLiarClueLockSeconds);
+                }
+                break;
+
+            case PostItLiarPhase.ClueLock:
+                if (IsCountdownState() && deadlineReached)
+                {
+                    SetPostItLiarPhase(
+                        PostItLiarPhase.BrawlCountdown,
+                        postItLiarBrawlCountdownSeconds);
+                }
+                break;
+
+            case PostItLiarPhase.LiarGuess:
+                if (!IsGuessingState())
+                    break;
+
+                if (_serverPostItLiarDeductionCancelled)
+                {
+                    FinalizePostItLiarDeductionAndEnterReveal();
+                }
+                else if (_postItDeductionModule.HasLiarAnswerSubmission ||
+                         deadlineReached)
+                {
+                    EnterPostItLiarVotePhase();
+                }
+                break;
+
+            case PostItLiarPhase.LiarVote:
+                if (IsGuessingState() &&
+                    (deadlineReached ||
+                     _postItDeductionModule.AreAllConnectedCitizensResolved(
+                         _serverPostItLiarRoster)))
+                {
+                    FinalizePostItLiarDeductionAndEnterReveal();
+                }
+                break;
+
+            case PostItLiarPhase.Reveal:
+                if (IsGuessingState() && deadlineReached)
+                    SetPostItLiarPhase(PostItLiarPhase.Complete, 0f);
+                break;
+        }
+    }
+
+    private bool EnterPostItLiarVotePhase()
+    {
+        if (_postItLiarPhaseState.Value.Phase !=
+            PostItLiarPhase.LiarGuess)
+        {
+            return false;
+        }
+
+        if (!SetPostItLiarPhase(
+                PostItLiarPhase.LiarVote,
+                postItLiarVoteSeconds))
+        {
+            return false;
+        }
+
+        PostItLiarVoteViewData view = new PostItLiarVoteViewData
+        {
+            RoundRevision = _serverPostItLiarDecisionRoundRevision,
+            PhaseRevision = _postItLiarPhaseState.Value.PhaseRevision,
+            AuthoredClues = _serverPostItLiarAuthoredClues,
+            BattleScores = _serverPostItLiarBattleResultSet
+        };
+
+        for (int index = 0;
+             index < _serverPostItLiarRoster.Count;
+             index++)
+        {
+            PostItLiarRosterEntry entry = _serverPostItLiarRoster[index];
+            if (!entry.IsConnected ||
+                entry.StableSlot == _serverPostItLiarSlot)
+            {
+                continue;
+            }
+
+            ReceivePostItLiarVoteViewRpc(
+                view,
+                RpcTarget.Single(entry.ClientId, RpcTargetUse.Temp));
+        }
+
+        return true;
+    }
+
+    private bool FinalizePostItLiarDeductionAndEnterReveal()
+    {
+        if (_serverPostItLiarResultFinalized)
+            return true;
+
+        if (!_serverPostItLiarDeductionStarted ||
+            _serverPostItLiarPrompt == null)
+        {
+            return false;
+        }
+
+        _postItDeductionModule.FinalizeMissing();
+        FixedString128Bytes secretAnswer;
+        try
+        {
+            secretAnswer =
+                new FixedString128Bytes(_serverPostItLiarPrompt.SecretAnswer);
+        }
+        catch (ArgumentException)
+        {
+            return false;
+        }
+
+        if (!_postItDeductionModule.TryFinalize(
+                _serverPostItLiarDecisionRoundRevision,
+                _serverPostItLiarRoster,
+                _serverPostItLiarBattleScores,
+                _serverPostItLiarAuthoredClues,
+                secretAnswer,
+                _serverPostItLiarChoices,
+                _serverPostItLiarDeductionCancelled,
+                out PostItLiarRevealData reveal,
+                out _))
+        {
+            return false;
+        }
+
+        if (!SetPostItLiarPhase(
+                PostItLiarPhase.Reveal,
+                postItLiarRevealSeconds))
+        {
+            return false;
+        }
+
+        _serverPostItLiarReveal = reveal;
+        _serverPostItLiarResultFinalized = true;
+        ReceivePostItLiarRevealRpc(reveal);
+        return true;
+    }
+
+    private void SendPostItLiarBattleSettlement()
+    {
+        int roundRevision = _serverPostItLiarDecisionRoundRevision;
+        int phaseRevision = _postItLiarPhaseState.Value.PhaseRevision;
+        for (int index = 0;
+             index < _serverPostItLiarRoster.Count;
+             index++)
+        {
+            PostItLiarRosterEntry entry = _serverPostItLiarRoster[index];
+            if (!entry.IsConnected)
+                continue;
+
+            ReceivePostItLiarBattleSettlementRpc(
+                roundRevision,
+                phaseRevision,
+                _serverPostItLiarBattleResultSet,
+                RpcTarget.Single(entry.ClientId, RpcTargetUse.Temp));
+        }
+    }
+
+    private void SendPostItLiarGuessView()
+    {
+        int liarIndex = FindPostItLiarRosterIndexBySlot(
+            _serverPostItLiarSlot);
+        if (liarIndex < 0)
+            return;
+
+        PostItLiarRosterEntry liar = _serverPostItLiarRoster[liarIndex];
+        if (!liar.IsConnected)
+            return;
+
+        PostItLiarGuessViewData view = new PostItLiarGuessViewData
+        {
+            RoundRevision = _serverPostItLiarDecisionRoundRevision,
+            PhaseRevision = _postItLiarPhaseState.Value.PhaseRevision,
+            AnonymousClues = _serverPostItLiarAnonymousClues,
+            Choices = _serverPostItLiarChoices,
+            BattleScores = _serverPostItLiarBattleResultSet
+        };
+        ReceivePostItLiarGuessViewRpc(
+            view,
+            RpcTarget.Single(liar.ClientId, RpcTargetUse.Temp));
+    }
+
+    private bool SetPostItLiarPhase(
+        PostItLiarPhase phase,
+        float durationSeconds)
+    {
+        if (!CanMutateServerState() ||
+            !_serverPostItLiarPreparedActive ||
+            _serverPostItLiarDecisionRoundRevision < 0 ||
+            _serverPostItLiarPrompt == null)
+        {
+            return false;
+        }
+
+        PostItLiarPhaseState previous = _postItLiarPhaseState.Value;
+        if (previous.IsActive &&
+            previous.RoundRevision !=
+            _serverPostItLiarDecisionRoundRevision)
+        {
+            return false;
+        }
+
+        if (previous.PhaseRevision == int.MaxValue)
+            return false;
+
+        double serverTime = GetAuthoritativeServerTime();
+        if (!IsFinitePostItLiarTime(serverTime))
+            return false;
+
+        FixedString128Bytes publicCategory;
+        try
+        {
+            publicCategory = new FixedString128Bytes(
+                _serverPostItLiarPrompt.PublicCategory);
+        }
+        catch (ArgumentException)
+        {
+            return false;
+        }
+
+        int phaseRevision = previous.IsActive
+            ? previous.PhaseRevision + 1
+            : 0;
+        double deadline = durationSeconds > 0f
+            ? serverTime + Math.Max(0.1d, durationSeconds)
+            : 0d;
+        _postItLiarPhaseState.Value = new PostItLiarPhaseState(
+            true,
+            _serverPostItLiarDecisionRoundRevision,
+            phaseRevision,
+            phase,
+            deadline,
+            publicCategory);
+        LiarLog(
+            $"round={_serverPostItLiarDecisionRoundRevision} phase={phase} revision={phaseRevision}");
+        return true;
+    }
+
+    private bool TryBuildPostItLiarRoster(
+        IEnumerable<PlayerPostItInventory> inventories,
+        out List<PostItLiarRosterEntry> roster)
+    {
+        roster = new List<PostItLiarRosterEntry>();
+        List<PreparedGuessParticipant> participants =
+            new List<PreparedGuessParticipant>();
+        HashSet<ulong> ownerClientIds = new HashSet<ulong>();
+        HashSet<ulong> playerObjectIds = new HashSet<ulong>();
+
+        foreach (PlayerPostItInventory inventory in inventories)
+        {
+            if (!IsValidServerInventory(inventory))
+                return false;
+
+            ulong ownerClientId =
+                ResolveInventoryOwnerClientId(inventory);
+            ulong playerNetworkObjectId =
+                ResolveInventoryNetworkObjectId(inventory);
+            if (ownerClientId == ulong.MaxValue ||
+                playerNetworkObjectId == ulong.MaxValue ||
+                !ownerClientIds.Add(ownerClientId) ||
+                !playerObjectIds.Add(playerNetworkObjectId))
+            {
+                return false;
+            }
+
+            if (IsSpawnedNetworkSession())
+            {
+                if (!NetworkManager.ConnectedClients.TryGetValue(
+                        ownerClientId,
+                        out NetworkClient client) ||
+                    client == null ||
+                    client.PlayerObject == null ||
+                    !client.PlayerObject.IsSpawned ||
+                    client.PlayerObject.OwnerClientId != ownerClientId ||
+                    client.PlayerObject.NetworkObjectId !=
+                    playerNetworkObjectId ||
+                    inventory.NetworkObject != client.PlayerObject)
+                {
+                    return false;
+                }
+            }
+
+            participants.Add(new PreparedGuessParticipant
+            {
+                Inventory = inventory,
+                OwnerClientId = ownerClientId,
+                PlayerNetworkObjectId = playerNetworkObjectId
+            });
+        }
+
+        if (IsSpawnedNetworkSession() &&
+            participants.Count != NetworkManager.ConnectedClientsIds.Count)
+        {
+            return false;
+        }
+
+        participants.Sort(CompareGuessParticipantsByOwnerClientId);
+        for (int index = 0; index < participants.Count; index++)
+        {
+            PreparedGuessParticipant participant = participants[index];
+            roster.Add(new PostItLiarRosterEntry(
+                participant.OwnerClientId,
+                participant.PlayerNetworkObjectId,
+                (byte)index,
+                true));
+        }
+
+        return true;
+    }
+
+    private bool DoesPostItLiarRosterMatchInventories(
+        IEnumerable<PlayerPostItInventory> inventories)
+    {
+        if (!TryBuildPostItLiarRoster(
+                inventories,
+                out List<PostItLiarRosterEntry> candidate) ||
+            candidate.Count != _serverPostItLiarRoster.Count)
+        {
+            return false;
+        }
+
+        for (int index = 0; index < candidate.Count; index++)
+        {
+            PostItLiarRosterEntry left = candidate[index];
+            PostItLiarRosterEntry right =
+                _serverPostItLiarRoster[index];
+            if (left.ClientId != right.ClientId ||
+                left.PlayerNetworkObjectId !=
+                right.PlayerNetworkObjectId ||
+                left.StableSlot != right.StableSlot)
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private void LatchPostItLiarFallback(int roundRevision)
+    {
+        ResetServerPostItLiarRoundData();
+        _serverPostItLiarDecisionRoundRevision = roundRevision;
+        _serverPostItLiarPreparedActive = false;
+        LiarLog($"round={roundRevision} legacy fallback");
+    }
+
+    private void ResetServerPostItLiarRoundData()
+    {
+        _postItPromptModule.Reset();
+        _postItClueModule.Reset();
+        _postItDeductionModule.Reset();
+        _serverPostItLiarRoster.Clear();
+        _serverPostItLiarBattleScores.Clear();
+        _serverPostItLiarRandom = null;
+        _serverPostItLiarPrompt = null;
+        _serverPostItLiarAuthoredClues = default;
+        _serverPostItLiarAnonymousClues = default;
+        _serverPostItLiarChoices = default;
+        _serverPostItLiarBattleResultSet = default;
+        _serverPostItLiarReveal = default;
+        _serverPostItLiarDecisionRoundRevision = -1;
+        _serverPostItLiarSlot = PostItLiarFixedSet.InvalidSlot;
+        _serverPostItLiarPreparedActive = false;
+        _serverPostItLiarStarted = false;
+        _serverPostItLiarBrawlCommitted = false;
+        _serverPostItLiarDeductionStarted = false;
+        _serverPostItLiarDeductionCancelled = false;
+        _serverPostItLiarResultFinalized = false;
+    }
+
+    private static bool TryBuildPostItLiarChoiceSet(
+        PostItPromptSelection prompt,
+        out PostItLiarChoiceSet choices)
+    {
+        choices = default;
+        if (prompt == null ||
+            prompt.ChoiceCount !=
+            PostItPromptDatabaseSO.RequiredChoiceCount)
+        {
+            return false;
+        }
+
+        try
+        {
+            for (int index = 0;
+                 index < prompt.ChoiceCount;
+                 index++)
+            {
+                if (!choices.TrySet(
+                        index,
+                        new FixedString128Bytes(
+                            prompt.GetChoice(index))))
+                {
+                    choices = default;
+                    return false;
+                }
+            }
+        }
+        catch (ArgumentException)
+        {
+            choices = default;
+            return false;
+        }
+
+        return choices.Count ==
+               PostItPromptDatabaseSO.RequiredChoiceCount;
+    }
+
+    private bool TryValidateFrozenPostItLiarRoster(
+        bool requireAllConnected)
+    {
+        if (_serverPostItLiarRoster.Count !=
+            PostItLiarFixedSet.Capacity)
+        {
+            return false;
+        }
+
+        if (requireAllConnected &&
+            IsSpawnedNetworkSession() &&
+            NetworkManager.ConnectedClientsIds.Count !=
+            _serverPostItLiarRoster.Count)
+        {
+            return false;
+        }
+
+        for (int index = 0;
+             index < _serverPostItLiarRoster.Count;
+             index++)
+        {
+            PostItLiarRosterEntry entry =
+                _serverPostItLiarRoster[index];
+            if (entry.StableSlot != index)
+                return false;
+
+            if (!entry.IsConnected)
+            {
+                if (requireAllConnected)
+                    return false;
+
+                continue;
+            }
+
+            if (!IsSpawnedNetworkSession())
+                continue;
+
+            if (!NetworkManager.ConnectedClients.TryGetValue(
+                    entry.ClientId,
+                    out NetworkClient client) ||
+                client == null ||
+                client.PlayerObject == null ||
+                !client.PlayerObject.IsSpawned ||
+                client.PlayerObject.OwnerClientId != entry.ClientId ||
+                client.PlayerObject.NetworkObjectId !=
+                entry.PlayerNetworkObjectId)
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private bool TryRefreshPostItLiarRosterConnections()
+    {
+        if (_serverPostItLiarRoster.Count !=
+            PostItLiarFixedSet.Capacity)
+        {
+            return false;
+        }
+
+        for (int index = 0;
+             index < _serverPostItLiarRoster.Count;
+             index++)
+        {
+            PostItLiarRosterEntry entry =
+                _serverPostItLiarRoster[index];
+            bool isConnected = false;
+            if (!IsSpawnedNetworkSession())
+            {
+                isConnected = entry.IsConnected;
+            }
+            else if (NetworkManager.ConnectedClients.TryGetValue(
+                         entry.ClientId,
+                         out NetworkClient client))
+            {
+                if (client == null ||
+                    client.PlayerObject == null ||
+                    !client.PlayerObject.IsSpawned)
+                {
+                    return false;
+                }
+
+                if (client.PlayerObject.OwnerClientId != entry.ClientId ||
+                    client.PlayerObject.NetworkObjectId !=
+                    entry.PlayerNetworkObjectId)
+                {
+                    return false;
+                }
+
+                isConnected = true;
+            }
+
+            entry.IsConnected = isConnected;
+            _serverPostItLiarRoster[index] = entry;
+        }
+
+        return true;
+    }
+
+    private bool TryCapturePostItLiarBattleScores(
+        IEnumerable<PlayerPostItInventory> inventories,
+        IEnumerable<ulong> zeroScoreOwnerClientIds)
+    {
+        Dictionary<ulong, PlayerPostItInventory> inventoryByOwner =
+            new Dictionary<ulong, PlayerPostItInventory>();
+        foreach (PlayerPostItInventory inventory in inventories)
+        {
+            if (!IsValidServerInventory(inventory))
+                return false;
+
+            ulong ownerClientId =
+                ResolveInventoryOwnerClientId(inventory);
+            if (FindPostItLiarRosterIndex(ownerClientId) < 0 ||
+                !inventoryByOwner.TryAdd(ownerClientId, inventory))
+            {
+                return false;
+            }
+        }
+
+        HashSet<ulong> zeroScoreOwners = new HashSet<ulong>();
+        foreach (ulong ownerClientId in zeroScoreOwnerClientIds)
+        {
+            if (FindPostItLiarRosterIndex(ownerClientId) < 0 ||
+                inventoryByOwner.ContainsKey(ownerClientId) ||
+                !zeroScoreOwners.Add(ownerClientId))
+            {
+                return false;
+            }
+        }
+
+        if (inventoryByOwner.Count + zeroScoreOwners.Count !=
+            PostItLiarFixedSet.Capacity)
+        {
+            return false;
+        }
+
+        _serverPostItLiarBattleScores.Clear();
+        for (int index = 0;
+             index < _serverPostItLiarRoster.Count;
+             index++)
+        {
+            PostItLiarRosterEntry entry =
+                _serverPostItLiarRoster[index];
+            int battleScore;
+            if (inventoryByOwner.TryGetValue(
+                    entry.ClientId,
+                    out PlayerPostItInventory inventory))
+            {
+                battleScore = inventory.Count;
+            }
+            else if (zeroScoreOwners.Contains(entry.ClientId))
+            {
+                battleScore = 0;
+            }
+            else
+            {
+                return false;
+            }
+
+            if (battleScore < 0)
+                return false;
+
+            _serverPostItLiarBattleScores.Add(
+                entry.ClientId,
+                battleScore);
+        }
+
+        return _serverPostItLiarBattleScores.Count ==
+               PostItLiarFixedSet.Capacity;
+    }
+
+    private bool TryBuildPostItLiarBattleResultSet(
+        out PostItLiarPlayerResultSet resultSet)
+    {
+        resultSet = default;
+        for (int index = 0;
+             index < _serverPostItLiarRoster.Count;
+             index++)
+        {
+            PostItLiarRosterEntry entry =
+                _serverPostItLiarRoster[index];
+            if (!_serverPostItLiarBattleScores.TryGetValue(
+                    entry.ClientId,
+                    out int battleScore) ||
+                !resultSet.TrySet(
+                    entry.StableSlot,
+                    new PostItLiarPlayerResultData(
+                        entry.StableSlot,
+                        battleScore,
+                        0,
+                        entry.IsConnected)))
+            {
+                resultSet = default;
+                return false;
+            }
+        }
+
+        return resultSet.Count == PostItLiarFixedSet.Capacity;
+    }
+
+    private bool IsPostItLiarSlotConnected(byte stableSlot)
+    {
+        int rosterIndex = FindPostItLiarRosterIndexBySlot(stableSlot);
+        return rosterIndex >= 0 &&
+               _serverPostItLiarRoster[rosterIndex].IsConnected;
+    }
+
+    private int FindPostItLiarRosterIndex(ulong clientId)
+    {
+        for (int index = 0;
+             index < _serverPostItLiarRoster.Count;
+             index++)
+        {
+            if (_serverPostItLiarRoster[index].ClientId == clientId)
+                return index;
+        }
+
+        return -1;
+    }
+
+    private int FindPostItLiarRosterIndexBySlot(byte stableSlot)
+    {
+        for (int index = 0;
+             index < _serverPostItLiarRoster.Count;
+             index++)
+        {
+            if (_serverPostItLiarRoster[index].StableSlot == stableSlot)
+                return index;
+        }
+
+        return -1;
+    }
+
+    private bool TryValidatePostItLiarSubmissionSender(
+        ulong senderClientId,
+        ulong playerNetworkObjectId,
+        int roundRevision,
+        int phaseRevision,
+        PostItLiarPhase expectedPhase,
+        out byte stableSlot,
+        out PostItLiarSubmitResult result)
+    {
+        stableSlot = PostItLiarFixedSet.InvalidSlot;
+        result = PostItLiarSubmitResult.NotActive;
+        if (!ServerIsPostItLiarRoundActive(roundRevision) ||
+            _serverPostItLiarPrompt == null)
+        {
+            return false;
+        }
+
+        PostItLiarPhaseState state = _postItLiarPhaseState.Value;
+        if (state.RoundRevision != roundRevision ||
+            state.PhaseRevision != phaseRevision)
+        {
+            result = PostItLiarSubmitResult.Stale;
+            return false;
+        }
+
+        if (state.Phase != expectedPhase ||
+            (expectedPhase == PostItLiarPhase.ClueWrite
+                ? !IsCountdownState()
+                : !IsGuessingState()))
+        {
+            result = PostItLiarSubmitResult.InvalidPhase;
+            return false;
+        }
+
+        double serverTime = GetAuthoritativeServerTime();
+        if (!IsFinitePostItLiarTime(serverTime) ||
+            state.DeadlineServerTime <= 0d ||
+            serverTime >= state.DeadlineServerTime)
+        {
+            result = PostItLiarSubmitResult.Late;
+            return false;
+        }
+
+        int rosterIndex = FindPostItLiarRosterIndex(senderClientId);
+        if (rosterIndex < 0)
+        {
+            result = PostItLiarSubmitResult.NotParticipant;
+            return false;
+        }
+
+        PostItLiarRosterEntry entry =
+            _serverPostItLiarRoster[rosterIndex];
+        if (!entry.IsConnected)
+        {
+            result = PostItLiarSubmitResult.NotParticipant;
+            return false;
+        }
+
+        if (playerNetworkObjectId != entry.PlayerNetworkObjectId ||
+            NetworkManager == null ||
+            !NetworkManager.IsListening ||
+            !NetworkManager.ConnectedClients.TryGetValue(
+                senderClientId,
+                out NetworkClient client) ||
+            client == null ||
+            client.PlayerObject == null ||
+            !client.PlayerObject.IsSpawned ||
+            client.PlayerObject.OwnerClientId != senderClientId ||
+            client.PlayerObject.NetworkObjectId !=
+            entry.PlayerNetworkObjectId)
+        {
+            result = PostItLiarSubmitResult.PlayerObjectMismatch;
+            return false;
+        }
+
+        stableSlot = entry.StableSlot;
+        result = PostItLiarSubmitResult.Accepted;
+        return true;
+    }
+
+    private void SendPostItLiarSubmissionResult(
+        ulong clientId,
+        PostItLiarSubmissionKind kind,
+        PostItLiarSubmitResult result,
+        int roundRevision,
+        int phaseRevision)
+    {
+        if (NetworkManager == null ||
+            !NetworkManager.IsListening ||
+            !NetworkManager.ConnectedClients.ContainsKey(clientId))
+        {
+            return;
+        }
+
+        ReceivePostItLiarSubmissionResultRpc(
+            kind,
+            result,
+            roundRevision,
+            phaseRevision,
+            RpcTarget.Single(clientId, RpcTargetUse.Temp));
+    }
+
+    private bool TryGetLocalPostItLiarRequestContext(
+        PostItLiarPhase expectedPhase,
+        out int roundRevision,
+        out int phaseRevision,
+        out ulong playerNetworkObjectId,
+        out PostItLiarSubmitResult result)
+    {
+        PostItLiarPhaseState state = _postItLiarPhaseState.Value;
+        roundRevision = state.RoundRevision;
+        phaseRevision = state.PhaseRevision;
+        playerNetworkObjectId = ulong.MaxValue;
+        result = PostItLiarSubmitResult.NotActive;
+        if (!state.IsActive ||
+            !IsSpawned ||
+            NetworkManager == null ||
+            !NetworkManager.IsListening ||
+            !NetworkManager.IsClient)
+        {
+            return false;
+        }
+
+        if (state.Phase != expectedPhase)
+        {
+            result = PostItLiarSubmitResult.InvalidPhase;
+            return false;
+        }
+
+        double serverTime = NetworkManager.ServerTime.Time;
+        if (!IsFinitePostItLiarTime(serverTime) ||
+            state.DeadlineServerTime <= 0d ||
+            serverTime >= state.DeadlineServerTime)
+        {
+            result = PostItLiarSubmitResult.Late;
+            return false;
+        }
+
+        NetworkClient localClient = NetworkManager.LocalClient;
+        NetworkObject playerObject =
+            localClient != null ? localClient.PlayerObject : null;
+        if (playerObject == null ||
+            !playerObject.IsSpawned ||
+            playerObject.OwnerClientId != NetworkManager.LocalClientId)
+        {
+            result = PostItLiarSubmitResult.PlayerObjectMismatch;
+            return false;
+        }
+
+        playerNetworkObjectId = playerObject.NetworkObjectId;
+        result = PostItLiarSubmitResult.Accepted;
+        return true;
+    }
+
+    private bool CanAcceptLocalPostItLiarPayload(int roundRevision)
+    {
+        if (roundRevision < 0 ||
+            roundRevision <= _localPostItLiarLastClearedRevision)
+        {
+            return false;
+        }
+
+        PostItLiarPhaseState state = _postItLiarPhaseState.Value;
+        return !state.IsActive || state.RoundRevision == roundRevision;
+    }
+
+    private void PrepareLocalPostItLiarRoundCache(int roundRevision)
+    {
+        if (_localPostItLiarSubmissionRoundRevision == roundRevision)
+            return;
+
+        ClearLocalPostItLiarState(false);
+        _localPostItLiarSubmissionRoundRevision = roundRevision;
+    }
+
+    private void ClearLocalPostItLiarState(bool notify)
+    {
+        _localPostItLiarPrivateRole = default;
+        _localPostItLiarGuessView = default;
+        _localPostItLiarVoteView = default;
+        _localPostItLiarBattleScores = default;
+        _localPostItLiarReveal = default;
+        _localPostItLiarSubmissionRoundRevision = -1;
+        _hasLocalPostItLiarPrivateRole = false;
+        _hasLocalPostItLiarGuessView = false;
+        _hasLocalPostItLiarVoteView = false;
+        _hasLocalPostItLiarBattleScores = false;
+        _hasLocalPostItLiarReveal = false;
+        _hasSubmittedPostItLiarClue = false;
+        _hasSubmittedPostItLiarAnswer = false;
+        _hasSubmittedPostItLiarVote = false;
+
+        if (!notify)
+            return;
+
+        NotifyPostItLiarLocalStateChanged();
+        NotifyPostItLiarRevealChanged();
+    }
+
+    private bool HasCurrentLocalLiarSubmission(bool submitted)
+    {
+        return submitted &&
+               _postItLiarPhaseState.Value.IsActive &&
+               _localPostItLiarSubmissionRoundRevision ==
+               _postItLiarPhaseState.Value.RoundRevision;
+    }
+
+    private void SubscribeToPostItLiarPhaseState()
+    {
+        if (_hasSubscribedToPostItLiarPhaseState)
+            return;
+
+        _postItLiarPhaseState.OnValueChanged +=
+            HandlePostItLiarPhaseStateChanged;
+        _hasSubscribedToPostItLiarPhaseState = true;
+    }
+
+    private void UnsubscribeFromPostItLiarPhaseState()
+    {
+        if (!_hasSubscribedToPostItLiarPhaseState)
+            return;
+
+        _postItLiarPhaseState.OnValueChanged -=
+            HandlePostItLiarPhaseStateChanged;
+        _hasSubscribedToPostItLiarPhaseState = false;
+    }
+
+    private void HandlePostItLiarPhaseStateChanged(
+        PostItLiarPhaseState previous,
+        PostItLiarPhaseState current)
+    {
+        if (current.IsActive &&
+            (!previous.IsActive ||
+             previous.RoundRevision != current.RoundRevision))
+        {
+            PrepareLocalPostItLiarRoundCache(current.RoundRevision);
+        }
+
+        NotifyPostItLiarPublicStateChanged();
+    }
+
+    private void NotifyPostItLiarPublicStateChanged()
+    {
+        InvokePostItLiarAction(PostItLiarPublicStateChanged);
+    }
+
+    private void NotifyPostItLiarLocalStateChanged()
+    {
+        InvokePostItLiarAction(PostItLiarLocalStateChanged);
+    }
+
+    private void NotifyPostItLiarRevealChanged()
+    {
+        InvokePostItLiarAction(PostItLiarRevealChanged);
+    }
+
+    private void NotifyPostItLiarSubmissionResult(
+        PostItLiarSubmissionKind kind,
+        PostItLiarSubmitResult result)
+    {
+        Action<PostItLiarSubmissionKind, PostItLiarSubmitResult> handlers =
+            PostItLiarSubmissionResultReceived;
+        if (handlers == null)
+            return;
+
+        Delegate[] invocationList = handlers.GetInvocationList();
+        for (int index = 0;
+             index < invocationList.Length;
+             index++)
+        {
+            try
+            {
+                ((Action<PostItLiarSubmissionKind, PostItLiarSubmitResult>)
+                    invocationList[index]).Invoke(kind, result);
+            }
+            catch (Exception exception)
+            {
+                Debug.LogException(exception, this);
+            }
+        }
+    }
+
+    private void InvokePostItLiarAction(Action handlers)
+    {
+        if (handlers == null)
+            return;
+
+        Delegate[] invocationList = handlers.GetInvocationList();
+        for (int index = 0;
+             index < invocationList.Length;
+             index++)
+        {
+            try
+            {
+                ((Action)invocationList[index]).Invoke();
+            }
+            catch (Exception exception)
+            {
+                Debug.LogException(exception, this);
+            }
+        }
+    }
+
     private bool IsNetworkWorldStorageActive()
     {
         return _networkWorldDrops != null &&
@@ -6111,6 +8050,14 @@ public class PostItRoundManager : NetworkBehaviour
         return manager != null && manager.GetState() == GameStateManager.GameState.Playing;
     }
 
+    private bool IsCountdownState()
+    {
+        GameStateManager manager = ResolveGameStateManager();
+        return manager != null &&
+               manager.GetState() ==
+               GameStateManager.GameState.Countdown;
+    }
+
     private bool IsInitialAssignmentState()
     {
         GameStateManager manager = ResolveGameStateManager();
@@ -6126,6 +8073,13 @@ public class PostItRoundManager : NetworkBehaviour
     {
         GameStateManager manager = ResolveGameStateManager();
         return manager != null && manager.GetState() == GameStateManager.GameState.Guessing;
+    }
+
+    private static bool IsFinitePostItLiarTime(double value)
+    {
+        return !double.IsNaN(value) &&
+               !double.IsInfinity(value) &&
+               value >= 0d;
     }
 
     private int FindWorldDropIndex(int postItId)
@@ -6334,6 +8288,20 @@ public class PostItRoundManager : NetworkBehaviour
         initialPostItCountPerPlayer = Mathf.Max(0, initialPostItCountPerPlayer);
         defaultVisualId = Mathf.Max(0, defaultVisualId);
         guessingDurationSeconds = Mathf.Max(0.1f, guessingDurationSeconds);
+        postItLiarSecretRevealSeconds =
+            Mathf.Max(0.1f, postItLiarSecretRevealSeconds);
+        postItLiarClueWriteSeconds =
+            Mathf.Max(0.1f, postItLiarClueWriteSeconds);
+        postItLiarClueLockSeconds =
+            Mathf.Max(0.1f, postItLiarClueLockSeconds);
+        postItLiarBrawlCountdownSeconds =
+            Mathf.Max(0.1f, postItLiarBrawlCountdownSeconds);
+        postItLiarGuessSeconds =
+            Mathf.Max(0.1f, postItLiarGuessSeconds);
+        postItLiarVoteSeconds =
+            Mathf.Max(0.1f, postItLiarVoteSeconds);
+        postItLiarRevealSeconds =
+            Mathf.Max(0.1f, postItLiarRevealSeconds);
         worldDropGroundProbeHeight = Mathf.Max(0.1f, worldDropGroundProbeHeight);
         worldDropGroundProbeDistance = Mathf.Max(0.2f, worldDropGroundProbeDistance);
         worldDropMaxGroundBelowFallback = Mathf.Max(0f, worldDropMaxGroundBelowFallback);
@@ -6361,6 +8329,16 @@ public class PostItRoundManager : NetworkBehaviour
         if (debugGuessLogs)
         {
             Debug.Log($"[{nameof(PostItRoundManager)}][Guess] {message}", this);
+        }
+    }
+
+    private void LiarLog(string message)
+    {
+        if (debugPostItLiarLogs)
+        {
+            Debug.Log(
+                $"[{nameof(PostItRoundManager)}][Liar] {message}",
+                this);
         }
     }
 

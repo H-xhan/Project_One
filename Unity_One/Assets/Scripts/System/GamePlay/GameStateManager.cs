@@ -269,6 +269,8 @@ public class GameStateManager : NetworkBehaviour
         }
 
         bool countdownAssignmentReady = true;
+        bool postItLiarCountdownActive = false;
+        bool postItLiarCanEnterPlaying = true;
         if (state == GameState.Countdown &&
             Time.unscaledTime >= _nextCountdownPostItAssignmentRetryTime)
         {
@@ -280,12 +282,47 @@ public class GameStateManager : NetworkBehaviour
 
         if (state == GameState.Countdown)
         {
+            PostItRoundManager postItRoundManager =
+                ResolvePostItRoundManager();
+            postItLiarCountdownActive =
+                IsValidServerPostItRoundManager(postItRoundManager) &&
+                postItRoundManager.ServerIsPostItLiarRoundActive(
+                    _roundRevision);
+            if (postItLiarCountdownActive)
+            {
+                if (!postItRoundManager.ServerTryGetPostItLiarPlayingGate(
+                        _roundRevision,
+                        out postItLiarCanEnterPlaying,
+                        out bool shouldAbortToLobby))
+                {
+                    AbortPostItLiarCountdownServer(
+                        "Post-it liar playing gate validation failed.");
+                    return;
+                }
+
+                StateTimer.Value = GetGuessDeadlineRemainingSeconds(
+                    postItRoundManager.LiarPublicState
+                        .DeadlineServerTime);
+                if (shouldAbortToLobby)
+                {
+                    AbortPostItLiarCountdownServer(
+                        "Post-it liar frozen roster changed before Playing.");
+                    return;
+                }
+            }
+
             TickGameSpawnWarmupServer();
             if (GetState() != GameState.Countdown)
                 return;
 
             if (!countdownAssignmentReady)
                 return;
+
+            if (postItLiarCountdownActive &&
+                !postItLiarCanEnterPlaying)
+            {
+                return;
+            }
         }
 
         if (state == GameState.Playing)
@@ -302,7 +339,7 @@ public class GameStateManager : NetworkBehaviour
         }
 
         float timer = StateTimer.Value;
-        if (timer > 0f)
+        if (!postItLiarCountdownActive && timer > 0f)
         {
             timer -= Time.deltaTime;
             if (timer < 0f) timer = 0f;
@@ -344,6 +381,12 @@ public class GameStateManager : NetworkBehaviour
         if (!isInitialSpawn && !TryClearGuessStateBeforeLobbyServer())
         {
             Log("[GameStateManager] Guess state clear failed. Lobby transition deferred.");
+            return;
+        }
+
+        if (!isInitialSpawn && !TryClearPostItLiarStateBeforeLobbyServer())
+        {
+            Log("[GameStateManager] Post-it liar state clear failed. Lobby transition deferred.");
             return;
         }
 
@@ -428,7 +471,24 @@ public class GameStateManager : NetworkBehaviour
 
         StateValue.Value = (int)GameState.Countdown;
         ApplyCursorStateForCurrentGameState("enter-countdown");
-        StateTimer.Value = countdownSeconds;
+        PostItRoundManager postItRoundManager =
+            ResolvePostItRoundManager();
+        if (!IsValidServerPostItRoundManager(postItRoundManager) ||
+            !postItRoundManager.ServerStartPreparedPostItLiarRound(
+                _roundRevision))
+        {
+            AbortPostItLiarCountdownServer(
+                "Post-it liar round start failed.");
+            return false;
+        }
+
+        StateTimer.Value =
+            postItRoundManager.ServerIsPostItLiarRoundActive(
+                _roundRevision)
+                ? GetGuessDeadlineRemainingSeconds(
+                    postItRoundManager.LiarPublicState
+                        .DeadlineServerTime)
+                : countdownSeconds;
         _nextCountdownPostItAssignmentRetryTime =
             Time.unscaledTime + CountdownPostItAssignmentRetryInterval;
 
@@ -452,6 +512,17 @@ public class GameStateManager : NetworkBehaviour
         if (!AssignInitialPostItsForRoundServer(_roundRevision))
         {
             Log("[GameStateManager] Playing transition deferred until initial post-it assignment completes.");
+            return;
+        }
+
+        PostItRoundManager postItRoundManager =
+            ResolvePostItRoundManager();
+        if (!IsValidServerPostItRoundManager(postItRoundManager) ||
+            !postItRoundManager.ServerTryCommitPostItLiarBrawlStart(
+                _roundRevision))
+        {
+            AbortPostItLiarCountdownServer(
+                "Post-it liar Brawl commit failed.");
             return;
         }
 
@@ -969,6 +1040,19 @@ public class GameStateManager : NetworkBehaviour
         EnterLobby(false);
     }
 
+    private void AbortPostItLiarCountdownServer(string reason)
+    {
+        if (_gameSpawnWarmupBypass ||
+            _gameSpawnWarmupState == GameSpawnWarmupState.Settling ||
+            _gameSpawnWarmupState == GameSpawnWarmupState.Ready)
+        {
+            AbortGameSpawnWarmupToLobbyServer(reason);
+            return;
+        }
+
+        RequestGameSpawnWarmupCancellationServer(reason);
+    }
+
     private void FailGameSpawnWarmupStartServer(string reason)
     {
         _gameSpawnWarmupAbortPending = true;
@@ -1039,8 +1123,11 @@ public class GameStateManager : NetworkBehaviour
         }
 
         return postItRoundManager.ServerAssignInitialPostIts(
-            inventories,
-            roundRevision);
+                   inventories,
+                   roundRevision) &&
+               postItRoundManager.ServerEnsurePostItLiarRoundPrepared(
+                   inventories,
+                   roundRevision);
     }
 
     private void EnterResults()
@@ -1267,6 +1354,38 @@ public class GameStateManager : NetworkBehaviour
                 return;
             }
 
+            if (postItRoundManager.ServerIsPostItLiarRoundActive(
+                    _roundRevision))
+            {
+                if (!postItRoundManager.ServerBeginPostItLiarDeduction(
+                        inventories,
+                        zeroScoreOwnerClientIds,
+                        _roundRevision,
+                        out double liarDeadlineServerTime))
+                {
+                    Log("[GameStateManager] Post-it liar deduction begin failed.");
+                    return;
+                }
+
+                _guessRevision = -1;
+                _frozenZeroScoreParticipantClientIds.Clear();
+                for (int ownerIndex = 0;
+                     ownerIndex < zeroScoreOwnerClientIds.Count;
+                     ownerIndex++)
+                {
+                    _frozenZeroScoreParticipantClientIds.Add(
+                        zeroScoreOwnerClientIds[ownerIndex]);
+                }
+
+                _activePlayingEndReason = reason;
+                _pendingSurvivorWinnerClientId =
+                    reason == PlayingEndReason.LastSurvivor
+                        ? survivorWinnerClientId
+                        : invalidWinnerClientId;
+                EnterGuessingServer(liarDeadlineServerTime);
+                return;
+            }
+
             int guessRevision = _roundRevision;
             if (!postItRoundManager.ServerBeginGuessing(
                     inventories,
@@ -1334,8 +1453,26 @@ public class GameStateManager : NetworkBehaviour
             return;
 
         PostItRoundManager postItRoundManager = ResolvePostItRoundManager();
-        if (!IsValidServerPostItRoundManager(postItRoundManager) ||
-            postItRoundManager.ActiveGuessRoundRevision != _roundRevision ||
+        if (!IsValidServerPostItRoundManager(postItRoundManager))
+            return;
+
+        if (postItRoundManager.ServerIsPostItLiarRoundActive(
+                _roundRevision))
+        {
+            PostItLiarPhaseState liarState =
+                postItRoundManager.LiarPublicState;
+            StateTimer.Value = GetGuessDeadlineRemainingSeconds(
+                liarState.DeadlineServerTime);
+            if (liarState.Phase == PostItLiarPhase.Complete)
+            {
+                TryPublishFinalPostItLiarResultServer(
+                    postItRoundManager);
+            }
+
+            return;
+        }
+
+        if (postItRoundManager.ActiveGuessRoundRevision != _roundRevision ||
             postItRoundManager.ActiveGuessRevision != _guessRevision)
         {
             Log("[GameStateManager] Active Guess state does not match GameState revisions.");
@@ -1440,6 +1577,115 @@ public class GameStateManager : NetworkBehaviour
         }
 
         return TryResolveRoundResultFromScoresServer(scores);
+    }
+
+    private bool TryPublishFinalPostItLiarResultServer(
+        PostItRoundManager postItRoundManager)
+    {
+        if (_roundResultResolved)
+            return true;
+
+        if (!postItRoundManager.ServerTryBuildFinalPostItLiarResults(
+                _roundRevision,
+                out PostItLiarPlayerResultData[] results) ||
+            !ValidateFinalPostItLiarResultSetForRound(
+                postItRoundManager,
+                results,
+                out ulong[] ownerClientIds))
+        {
+            return false;
+        }
+
+        int highestScore = int.MinValue;
+        ulong highestScoreOwnerClientId = invalidWinnerClientId;
+        bool highestScoreIsTied = false;
+        for (int index = 0; index < results.Length; index++)
+        {
+            int finalScore = results[index].FinalRoundScore;
+            if (finalScore > highestScore)
+            {
+                highestScore = finalScore;
+                highestScoreOwnerClientId = ownerClientIds[index];
+                highestScoreIsTied = false;
+            }
+            else if (finalScore == highestScore)
+            {
+                highestScoreIsTied = true;
+            }
+        }
+
+        if (highestScoreIsTied)
+            ResolveRoundDrawServer();
+        else
+            ResolveRoundWinnerServer(highestScoreOwnerClientId);
+
+        return _roundResultResolved;
+    }
+
+    private bool ValidateFinalPostItLiarResultSetForRound(
+        PostItRoundManager postItRoundManager,
+        PostItLiarPlayerResultData[] results,
+        out ulong[] ownerClientIds)
+    {
+        ownerClientIds = null;
+        if (postItRoundManager == null ||
+            results == null ||
+            results.Length != PostItLiarFixedSet.Capacity ||
+            _roundParticipantClientIds.Count !=
+            PostItLiarFixedSet.Capacity)
+        {
+            return false;
+        }
+
+        HashSet<ulong> expectedOwners =
+            new HashSet<ulong>(_roundParticipantClientIds);
+        if (expectedOwners.Count != PostItLiarFixedSet.Capacity)
+            return false;
+
+        ownerClientIds = new ulong[PostItLiarFixedSet.Capacity];
+        int twoPointDeductionCount = 0;
+        for (byte slot = 0;
+             slot < PostItLiarFixedSet.Capacity;
+             slot++)
+        {
+            PostItLiarPlayerResultData result = results[slot];
+            long expectedFinalScore =
+                (long)result.BattleScore + result.DeductionScore;
+            if (result.StableSlot != slot ||
+                result.BattleScore < 0 ||
+                result.DeductionScore < 0 ||
+                result.DeductionScore >
+                PostItDeductionModule.LiarCorrectAnswerScore ||
+                expectedFinalScore > int.MaxValue ||
+                result.FinalRoundScore != expectedFinalScore ||
+                !postItRoundManager.ServerTryGetPostItLiarClientId(
+                    _roundRevision,
+                    slot,
+                    out ulong ownerClientId) ||
+                !expectedOwners.Remove(ownerClientId) ||
+                (_frozenZeroScoreParticipantClientIds.Contains(
+                     ownerClientId) &&
+                 result.BattleScore != 0))
+            {
+                ownerClientIds = null;
+                return false;
+            }
+
+            if (result.DeductionScore ==
+                PostItDeductionModule.LiarCorrectAnswerScore)
+            {
+                twoPointDeductionCount++;
+                if (twoPointDeductionCount > 1)
+                {
+                    ownerClientIds = null;
+                    return false;
+                }
+            }
+
+            ownerClientIds[slot] = ownerClientId;
+        }
+
+        return expectedOwners.Count == 0;
     }
 
     private bool TryResolveRoundResultFromScoresServer(
@@ -1754,6 +2000,13 @@ public class GameStateManager : NetworkBehaviour
                postItRoundManager.ServerClearGuessState(inventories);
     }
 
+    private bool TryClearPostItLiarStateBeforeLobbyServer()
+    {
+        PostItRoundManager postItRoundManager = ResolvePostItRoundManager();
+        return IsValidServerPostItRoundManager(postItRoundManager) &&
+               postItRoundManager.ServerClearPostItLiarRoundState();
+    }
+
     private bool TryResetPostItEliminationsBeforeLobbyServer()
     {
         if (!IsServer || NetworkManager == null || !NetworkManager.IsListening)
@@ -1868,11 +2121,44 @@ public class GameStateManager : NetworkBehaviour
 
     private void HandleClientDisconnectedServer(ulong clientId)
     {
-        if (!IsServer || _roundRevision < 0 || _guessRevision < 0)
+        if (!IsServer || _roundRevision < 0)
             return;
 
         PostItRoundManager postItRoundManager = ResolvePostItRoundManager();
-        if (!IsValidServerPostItRoundManager(postItRoundManager) ||
+        if (!IsValidServerPostItRoundManager(postItRoundManager))
+            return;
+
+        if (postItRoundManager.ServerIsPostItLiarRoundActive(
+                _roundRevision))
+        {
+            if (!postItRoundManager.ServerHandlePostItLiarDisconnect(
+                    clientId,
+                    _roundRevision,
+                    out bool shouldAbortToLobby,
+                    out bool deductionStateChanged))
+            {
+                return;
+            }
+
+            if (shouldAbortToLobby &&
+                GetState() == GameState.Countdown)
+            {
+                AbortPostItLiarCountdownServer(
+                    $"Post-it liar participant {clientId} disconnected before Playing.");
+            }
+            else if (deductionStateChanged &&
+                     GetState() == GameState.Guessing &&
+                     postItRoundManager.LiarPublicState.Phase ==
+                     PostItLiarPhase.Complete)
+            {
+                TryPublishFinalPostItLiarResultServer(
+                    postItRoundManager);
+            }
+
+            return;
+        }
+
+        if (_guessRevision < 0 ||
             postItRoundManager.ActiveGuessRoundRevision != _roundRevision ||
             postItRoundManager.ActiveGuessRevision != _guessRevision ||
             !postItRoundManager.ServerHandleGuessDisconnect(
