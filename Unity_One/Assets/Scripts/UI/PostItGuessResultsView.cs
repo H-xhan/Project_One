@@ -351,7 +351,8 @@ public sealed class PostItGuessResultsView : MonoBehaviour
         if (!reveal.IsValid ||
             reveal.RoundRevision !=
             _boundRoundManager.LiarPublicState.RoundRevision ||
-            reveal.PlayerResults.Count != PostItLiarFixedSet.Capacity)
+            (reveal.PlayerResults.Count != 2 &&
+             reveal.PlayerResults.Count != PostItLiarFixedSet.Capacity))
         {
             playerScoresText.text = scoresPendingText ?? string.Empty;
             return true;

@@ -1628,24 +1628,25 @@ public class GameStateManager : NetworkBehaviour
         out ulong[] ownerClientIds)
     {
         ownerClientIds = null;
+        int participantCount = results != null ? results.Length : 0;
         if (postItRoundManager == null ||
-            results == null ||
-            results.Length != PostItLiarFixedSet.Capacity ||
+            (participantCount != 2 &&
+             participantCount != PostItLiarFixedSet.Capacity) ||
             _roundParticipantClientIds.Count !=
-            PostItLiarFixedSet.Capacity)
+            participantCount)
         {
             return false;
         }
 
         HashSet<ulong> expectedOwners =
             new HashSet<ulong>(_roundParticipantClientIds);
-        if (expectedOwners.Count != PostItLiarFixedSet.Capacity)
+        if (expectedOwners.Count != participantCount)
             return false;
 
-        ownerClientIds = new ulong[PostItLiarFixedSet.Capacity];
+        ownerClientIds = new ulong[participantCount];
         int twoPointDeductionCount = 0;
         for (byte slot = 0;
-             slot < PostItLiarFixedSet.Capacity;
+             slot < participantCount;
              slot++)
         {
             PostItLiarPlayerResultData result = results[slot];

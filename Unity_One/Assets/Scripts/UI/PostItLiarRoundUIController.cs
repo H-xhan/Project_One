@@ -388,12 +388,35 @@ public sealed class PostItLiarRoundUIController : MonoBehaviour
              index < PostItLiarFixedSet.Capacity;
              index++)
         {
-            PostItLiarClueData clue = view.AnonymousClues.Get(index);
-            SetText(
-                GetArrayItem(anonymousClueTexts, index),
-                clue.WasSubmitted
-                    ? clue.Clue.ToString()
-                    : "미작성");
+            TMP_Text clueText = GetArrayItem(
+                anonymousClueTexts,
+                index);
+            bool hasParticipantClue =
+                index < view.AnonymousClues.Count;
+            GameObject clueCard =
+                clueText != null && clueText.transform.parent != null
+                    ? clueText.transform.parent.gameObject
+                    : clueText != null
+                        ? clueText.gameObject
+                        : null;
+            SetActive(
+                clueCard,
+                hasParticipantClue);
+            if (hasParticipantClue)
+            {
+                PostItLiarClueData clue =
+                    view.AnonymousClues.Get(index);
+                SetText(
+                    clueText,
+                    clue.WasSubmitted
+                        ? clue.Clue.ToString()
+                        : "미작성");
+            }
+            else
+            {
+                SetText(clueText, string.Empty);
+            }
+
             SetText(
                 GetArrayItem(liarChoiceLabels, index),
                 view.Choices.Get(index).ToString());
@@ -422,7 +445,7 @@ public sealed class PostItLiarRoundUIController : MonoBehaviour
                 : default;
         SetText(
             citizenBattleScoreText,
-            scores.Count == PostItLiarFixedSet.Capacity
+            IsRenderableParticipantCount(scores.Count)
                 ? BuildBattleScoreText(scores)
                 : "난투 점수 동기화 중...");
         SetText(
@@ -455,30 +478,64 @@ public sealed class PostItLiarRoundUIController : MonoBehaviour
         PostItLiarVoteViewData view =
             _boundRoundManager.LocalLiarVoteView;
         byte localSlot = privateRole.StableSlot;
+        int participantCount = view.AuthoredClues.Count;
+        bool hideLocalSlot =
+            participantCount < PostItLiarFixedSet.Capacity;
         for (int index = 0;
              index < PostItLiarFixedSet.Capacity;
              index++)
         {
+            bool isParticipantSlot = index < participantCount;
+            bool isVisibleCandidate =
+                isParticipantSlot &&
+                (!hideLocalSlot || index != localSlot);
+            Button button = GetArrayItem(
+                voteCandidateButtons,
+                index);
+            TMP_Text slotText = GetArrayItem(
+                voteCandidateSlotTexts,
+                index);
+            TMP_Text clueText = GetArrayItem(
+                voteCandidateClueTexts,
+                index);
+            SetActive(
+                button != null ? button.gameObject : null,
+                isVisibleCandidate);
+            SetActive(
+                slotText != null ? slotText.gameObject : null,
+                isVisibleCandidate);
+            SetActive(
+                clueText != null ? clueText.gameObject : null,
+                isVisibleCandidate);
+            if (!isParticipantSlot)
+            {
+                SetText(slotText, string.Empty);
+                SetText(clueText, string.Empty);
+                if (button != null)
+                    button.interactable = false;
+                continue;
+            }
+
             PostItLiarClueData clue = view.AuthoredClues.Get(index);
             PostItLiarPlayerResultData score =
                 view.BattleScores.Get(index);
             bool connected =
                 score.StableSlot == index && score.IsConnected;
             SetText(
-                GetArrayItem(voteCandidateSlotTexts, index),
+                slotText,
                 connected
                     ? $"P{index + 1}"
                     : $"P{index + 1} · 연결 종료");
             SetText(
-                GetArrayItem(voteCandidateClueTexts, index),
+                clueText,
                 clue.WasSubmitted
                     ? clue.Clue.ToString()
                     : "미작성");
 
-            Button button = GetArrayItem(voteCandidateButtons, index);
             if (button != null)
             {
                 button.interactable =
+                    isVisibleCandidate &&
                     connected &&
                     index != localSlot;
             }
@@ -1061,13 +1118,13 @@ public sealed class PostItLiarRoundUIController : MonoBehaviour
     private string BuildBattleScoreText(
         PostItLiarPlayerResultSet scores)
     {
-        if (scores.Count != PostItLiarFixedSet.Capacity)
+        if (!IsRenderableParticipantCount(scores.Count))
             return "난투 점수 동기화 중...";
 
         _builder.Clear();
         _builder.Append("난투 점수");
         for (int index = 0;
-             index < PostItLiarFixedSet.Capacity;
+             index < scores.Count;
              index++)
         {
             PostItLiarPlayerResultData score = scores.Get(index);
@@ -1086,7 +1143,7 @@ public sealed class PostItLiarRoundUIController : MonoBehaviour
         int stableSlot)
     {
         if (stableSlot < 0 ||
-            stableSlot >= PostItLiarFixedSet.Capacity)
+            stableSlot >= view.BattleScores.Count)
         {
             return false;
         }
@@ -1094,6 +1151,12 @@ public sealed class PostItLiarRoundUIController : MonoBehaviour
         PostItLiarPlayerResultData score =
             view.BattleScores.Get(stableSlot);
         return score.StableSlot == stableSlot && score.IsConnected;
+    }
+
+    private static bool IsRenderableParticipantCount(int count)
+    {
+        return count == 2 ||
+               count == PostItLiarFixedSet.Capacity;
     }
 
     private static bool TryGetTextMetrics(

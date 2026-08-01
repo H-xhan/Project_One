@@ -36,6 +36,7 @@ public class PostItRoundManager : NetworkBehaviour
     private const uint FallAreaDropUSalt = 0x41524555u;
     private const uint FallAreaDropVSalt = 0x41524556u;
     private const float ZeroPostItPollIntervalSeconds = 0.25f;
+    private const int TwoPlayerLiarDevelopmentTestParticipantCount = 2;
 
     [SerializeField] private int initialDrawingPostItCountPerPlayer = 2;
     [SerializeField] private int initialEffectPostItCountPerPlayer = 1;
@@ -53,6 +54,9 @@ public class PostItRoundManager : NetworkBehaviour
     [Header("Post-it Liar")]
     [SerializeField, Tooltip("정확히 4명의 frozen participant가 있을 때 포스트잇 라이어 규칙을 활성화합니다.")]
     private bool enablePostItLiarMode = false;
+
+    [SerializeField, Tooltip("Editor 또는 Development Build에서만 2인 라이어 흐름을 테스트합니다. Release Build에서는 이 값과 관계없이 정확히 4명만 지원합니다.")]
+    private bool allowTwoPlayerLiarTestMode = false;
 
     [SerializeField, Tooltip("서버가 라이어 라운드 문제를 선택할 Prompt Database입니다.")]
     private PostItPromptDatabaseSO postItLiarPromptDatabase;
@@ -166,6 +170,7 @@ public class PostItRoundManager : NetworkBehaviour
     private bool _serverPostItLiarDeductionStarted;
     private bool _serverPostItLiarDeductionCancelled;
     private bool _serverPostItLiarResultFinalized;
+    private bool _serverPostItLiarTwoPlayerTestActive;
     private bool _hasSubscribedToPostItLiarPhaseState;
 
     private PostItLiarPrivateRoleData _localPostItLiarPrivateRole;
@@ -1613,8 +1618,9 @@ public class PostItRoundManager : NetworkBehaviour
             return false;
         }
 
-        if (!enablePostItLiarMode ||
-            roster.Count != PostItLiarFixedSet.Capacity)
+        if (!CanStartPostItLiarWithParticipantCount(
+                roster.Count,
+                out bool useTwoPlayerDevelopmentOverride))
         {
             LatchPostItLiarFallback(roundRevision);
             return true;
@@ -1643,8 +1649,9 @@ public class PostItRoundManager : NetworkBehaviour
             return true;
         }
 
-        byte liarSlot = (byte)random.Next(PostItLiarFixedSet.Capacity);
-        if (!_postItClueModule.BeginRound(PostItLiarFixedSet.Capacity) ||
+        int participantCount = roster.Count;
+        byte liarSlot = (byte)random.Next(participantCount);
+        if (!_postItClueModule.BeginRound((byte)participantCount) ||
             !_postItDeductionModule.BeginRound(
                 liarSlot,
                 prompt.CorrectChoiceSlot,
@@ -1671,11 +1678,22 @@ public class PostItRoundManager : NetworkBehaviour
         _serverPostItLiarDeductionStarted = false;
         _serverPostItLiarDeductionCancelled = false;
         _serverPostItLiarResultFinalized = false;
+        _serverPostItLiarTwoPlayerTestActive =
+            useTwoPlayerDevelopmentOverride;
         _serverPostItLiarAuthoredClues = default;
         _serverPostItLiarAnonymousClues = default;
         _serverPostItLiarBattleResultSet = default;
         _serverPostItLiarReveal = default;
-        LiarLog($"round={roundRevision} 준비 완료 participants=4");
+        if (_serverPostItLiarTwoPlayerTestActive)
+        {
+            LiarTestLog(
+                $"2-player development override active round={roundRevision} participants={participantCount}");
+        }
+        else
+        {
+            LiarLog(
+                $"round={roundRevision} 준비 완료 participants={participantCount}");
+        }
         return true;
     }
 
@@ -1912,13 +1930,13 @@ public class PostItRoundManager : NetworkBehaviour
             _serverPostItLiarReveal.RoundRevision != roundRevision ||
             _postItLiarPhaseState.Value.Phase != PostItLiarPhase.Complete ||
             _serverPostItLiarReveal.PlayerResults.Count !=
-            PostItLiarFixedSet.Capacity)
+            _serverPostItLiarRoster.Count)
         {
             return false;
         }
 
         results = new PostItLiarPlayerResultData[
-            PostItLiarFixedSet.Capacity];
+            _serverPostItLiarRoster.Count];
         for (int slot = 0; slot < results.Length; slot++)
         {
             PostItLiarPlayerResultData result =
@@ -1946,7 +1964,7 @@ public class PostItRoundManager : NetworkBehaviour
     {
         clientId = ulong.MaxValue;
         if (!ServerIsPostItLiarRoundActive(roundRevision) ||
-            stableSlot >= PostItLiarFixedSet.Capacity)
+            stableSlot >= _serverPostItLiarRoster.Count)
         {
             return false;
         }
@@ -1999,10 +2017,15 @@ public class PostItRoundManager : NetworkBehaviour
             return true;
         }
 
-        if (entry.StableSlot == _serverPostItLiarSlot &&
-            (phase == PostItLiarPhase.Brawl ||
-             phase == PostItLiarPhase.LiarGuess ||
-             phase == PostItLiarPhase.LiarVote))
+        bool isDeductionPhase =
+            phase == PostItLiarPhase.Brawl ||
+            phase == PostItLiarPhase.LiarGuess ||
+            phase == PostItLiarPhase.LiarVote;
+        bool shouldCancelDeduction =
+            isDeductionPhase &&
+            (entry.StableSlot == _serverPostItLiarSlot ||
+             _serverPostItLiarTwoPlayerTestActive);
+        if (shouldCancelDeduction)
         {
             _serverPostItLiarDeductionCancelled = true;
             deductionStateChanged = true;
@@ -2210,9 +2233,19 @@ public class PostItRoundManager : NetworkBehaviour
                 out byte stableSlot,
                 out result))
         {
-            result = _postItDeductionModule.SubmitCitizenVote(
-                stableSlot,
-                targetStableSlot);
+            int targetRosterIndex =
+                FindPostItLiarRosterIndexBySlot(targetStableSlot);
+            if (targetRosterIndex < 0 ||
+                !_serverPostItLiarRoster[targetRosterIndex].IsConnected)
+            {
+                result = PostItLiarSubmitResult.InvalidChoice;
+            }
+            else
+            {
+                result = _postItDeductionModule.SubmitCitizenVote(
+                    stableSlot,
+                    targetStableSlot);
+            }
         }
 
         SendPostItLiarSubmissionResult(
@@ -2259,7 +2292,8 @@ public class PostItRoundManager : NetworkBehaviour
     {
         if (roundRevision < 0 ||
             phaseRevision < 0 ||
-            battleScores.Count != PostItLiarFixedSet.Capacity ||
+            !IsValidReceivedPostItLiarParticipantCount(
+                battleScores.Count) ||
             !CanAcceptLocalPostItLiarPayload(roundRevision))
         {
             return;
@@ -2280,10 +2314,11 @@ public class PostItRoundManager : NetworkBehaviour
     {
         if (view.RoundRevision < 0 ||
             view.PhaseRevision < 0 ||
-            view.AnonymousClues.Count != PostItLiarFixedSet.Capacity ||
+            !IsValidReceivedPostItLiarParticipantCount(
+                view.AnonymousClues.Count) ||
             view.Choices.Count !=
             PostItPromptDatabaseSO.RequiredChoiceCount ||
-            view.BattleScores.Count != PostItLiarFixedSet.Capacity ||
+            view.BattleScores.Count != view.AnonymousClues.Count ||
             !CanAcceptLocalPostItLiarPayload(view.RoundRevision))
         {
             return;
@@ -2315,8 +2350,9 @@ public class PostItRoundManager : NetworkBehaviour
     {
         if (view.RoundRevision < 0 ||
             view.PhaseRevision < 0 ||
-            view.AuthoredClues.Count != PostItLiarFixedSet.Capacity ||
-            view.BattleScores.Count != PostItLiarFixedSet.Capacity ||
+            !IsValidReceivedPostItLiarParticipantCount(
+                view.AuthoredClues.Count) ||
+            view.BattleScores.Count != view.AuthoredClues.Count ||
             !CanAcceptLocalPostItLiarPayload(view.RoundRevision))
         {
             return;
@@ -2340,9 +2376,13 @@ public class PostItRoundManager : NetworkBehaviour
         int phaseRevision,
         RpcParams rpcParams = default)
     {
+        PostItLiarPhaseState state = _postItLiarPhaseState.Value;
         if (kind == PostItLiarSubmissionKind.None ||
             result == PostItLiarSubmitResult.None ||
-            roundRevision <= _localPostItLiarLastClearedRevision)
+            roundRevision <= _localPostItLiarLastClearedRevision ||
+            !state.IsActive ||
+            state.RoundRevision != roundRevision ||
+            state.PhaseRevision != phaseRevision)
         {
             return;
         }
@@ -2379,10 +2419,11 @@ public class PostItRoundManager : NetworkBehaviour
     {
         if (!reveal.IsValid ||
             reveal.RoundRevision < 0 ||
-            reveal.LiarSlot >= PostItLiarFixedSet.Capacity ||
-            reveal.AuthoredClues.Count != PostItLiarFixedSet.Capacity ||
-            reveal.Votes.Count != PostItLiarFixedSet.Capacity ||
-            reveal.PlayerResults.Count != PostItLiarFixedSet.Capacity ||
+            !IsValidReceivedPostItLiarParticipantCount(
+                reveal.AuthoredClues.Count) ||
+            reveal.LiarSlot >= reveal.AuthoredClues.Count ||
+            reveal.Votes.Count != reveal.AuthoredClues.Count ||
+            reveal.PlayerResults.Count != reveal.AuthoredClues.Count ||
             !CanAcceptLocalPostItLiarPayload(reveal.RoundRevision))
         {
             return;
@@ -2402,6 +2443,15 @@ public class PostItRoundManager : NetworkBehaviour
         int clearedRoundRevision,
         RpcParams rpcParams = default)
     {
+        PostItLiarPhaseState state = _postItLiarPhaseState.Value;
+        if (clearedRoundRevision <
+                _localPostItLiarSubmissionRoundRevision ||
+            (state.IsActive &&
+             state.RoundRevision > clearedRoundRevision))
+        {
+            return;
+        }
+
         _localPostItLiarLastClearedRevision = Math.Max(
             _localPostItLiarLastClearedRevision,
             clearedRoundRevision);
@@ -7416,6 +7466,7 @@ public class PostItRoundManager : NetworkBehaviour
         _serverPostItLiarDeductionStarted = false;
         _serverPostItLiarDeductionCancelled = false;
         _serverPostItLiarResultFinalized = false;
+        _serverPostItLiarTwoPlayerTestActive = false;
     }
 
     private static bool TryBuildPostItLiarChoiceSet(
@@ -7456,11 +7507,54 @@ public class PostItRoundManager : NetworkBehaviour
                PostItPromptDatabaseSO.RequiredChoiceCount;
     }
 
+    private bool CanStartPostItLiarWithParticipantCount(
+        int participantCount,
+        out bool useTwoPlayerDevelopmentOverride)
+    {
+        useTwoPlayerDevelopmentOverride = false;
+        if (!enablePostItLiarMode)
+            return false;
+
+        if (participantCount == PostItLiarFixedSet.Capacity)
+            return true;
+
+        useTwoPlayerDevelopmentOverride =
+            participantCount ==
+                TwoPlayerLiarDevelopmentTestParticipantCount &&
+            allowTwoPlayerLiarTestMode &&
+            IsPostItLiarDevelopmentEnvironment();
+        return useTwoPlayerDevelopmentOverride;
+    }
+
+    private bool IsPreparedPostItLiarParticipantCountValid(
+        int participantCount)
+    {
+        return participantCount == PostItLiarFixedSet.Capacity ||
+               (_serverPostItLiarTwoPlayerTestActive &&
+                participantCount ==
+                    TwoPlayerLiarDevelopmentTestParticipantCount &&
+                IsPostItLiarDevelopmentEnvironment());
+    }
+
+    private static bool IsValidReceivedPostItLiarParticipantCount(
+        int participantCount)
+    {
+        return participantCount == PostItLiarFixedSet.Capacity ||
+               (participantCount ==
+                    TwoPlayerLiarDevelopmentTestParticipantCount &&
+                IsPostItLiarDevelopmentEnvironment());
+    }
+
+    private static bool IsPostItLiarDevelopmentEnvironment()
+    {
+        return Application.isEditor || Debug.isDebugBuild;
+    }
+
     private bool TryValidateFrozenPostItLiarRoster(
         bool requireAllConnected)
     {
-        if (_serverPostItLiarRoster.Count !=
-            PostItLiarFixedSet.Capacity)
+        if (!IsPreparedPostItLiarParticipantCountValid(
+                _serverPostItLiarRoster.Count))
         {
             return false;
         }
@@ -7512,8 +7606,8 @@ public class PostItRoundManager : NetworkBehaviour
 
     private bool TryRefreshPostItLiarRosterConnections()
     {
-        if (_serverPostItLiarRoster.Count !=
-            PostItLiarFixedSet.Capacity)
+        if (!IsPreparedPostItLiarParticipantCountValid(
+                _serverPostItLiarRoster.Count))
         {
             return false;
         }
@@ -7589,7 +7683,7 @@ public class PostItRoundManager : NetworkBehaviour
         }
 
         if (inventoryByOwner.Count + zeroScoreOwners.Count !=
-            PostItLiarFixedSet.Capacity)
+            _serverPostItLiarRoster.Count)
         {
             return false;
         }
@@ -7626,7 +7720,7 @@ public class PostItRoundManager : NetworkBehaviour
         }
 
         return _serverPostItLiarBattleScores.Count ==
-               PostItLiarFixedSet.Capacity;
+               _serverPostItLiarRoster.Count;
     }
 
     private bool TryBuildPostItLiarBattleResultSet(
@@ -7655,7 +7749,7 @@ public class PostItRoundManager : NetworkBehaviour
             }
         }
 
-        return resultSet.Count == PostItLiarFixedSet.Capacity;
+        return resultSet.Count == _serverPostItLiarRoster.Count;
     }
 
     private bool IsPostItLiarSlotConnected(byte stableSlot)
@@ -8338,6 +8432,16 @@ public class PostItRoundManager : NetworkBehaviour
         {
             Debug.Log(
                 $"[{nameof(PostItRoundManager)}][Liar] {message}",
+                this);
+        }
+    }
+
+    private void LiarTestLog(string message)
+    {
+        if (debugPostItLiarLogs)
+        {
+            Debug.Log(
+                $"[{nameof(PostItRoundManager)}][LiarTest] {message}",
                 this);
         }
     }

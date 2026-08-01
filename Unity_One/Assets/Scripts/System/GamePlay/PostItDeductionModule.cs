@@ -131,7 +131,8 @@ public sealed class PostItDeductionModule
     {
         if (!_active ||
             roster == null ||
-            roster.Count != PostItLiarFixedSet.Capacity)
+            !IsValidParticipantCount(roster.Count) ||
+            _liarSlot >= roster.Count)
         {
             return false;
         }
@@ -172,6 +173,8 @@ public sealed class PostItDeductionModule
         result = default;
         error = null;
 
+        int participantCount = roster != null ? roster.Count : 0;
+
         if (_finalized)
         {
             if (roundRevision != _finalizedRoundRevision)
@@ -186,11 +189,11 @@ public sealed class PostItDeductionModule
 
         if (!_active ||
             roundRevision < 0 ||
-            roster == null ||
-            roster.Count != PostItLiarFixedSet.Capacity ||
+            !IsValidParticipantCount(participantCount) ||
+            _liarSlot >= participantCount ||
             battleScores == null ||
-            battleScores.Count != PostItLiarFixedSet.Capacity ||
-            authoredClues.Count != PostItLiarFixedSet.Capacity ||
+            battleScores.Count != participantCount ||
+            authoredClues.Count != participantCount ||
             shuffledChoices.Count != _choiceCount ||
             secretAnswer.IsEmpty)
         {
@@ -204,7 +207,7 @@ public sealed class PostItDeductionModule
         for (int index = 0; index < roster.Count; index++)
         {
             PostItLiarRosterEntry entry = roster[index];
-            if (entry.StableSlot >= PostItLiarFixedSet.Capacity ||
+            if (entry.StableSlot != index ||
                 !clientIds.Add(entry.ClientId) ||
                 !stableSlots.Add(entry.StableSlot) ||
                 !battleScores.TryGetValue(
@@ -213,6 +216,14 @@ public sealed class PostItDeductionModule
                 battleScore < 0)
             {
                 error = "Deduction roster 또는 BattleScore가 유효하지 않습니다.";
+                return false;
+            }
+
+            if (_voteSubmitted[entry.StableSlot] &&
+                (_voteTargets[entry.StableSlot] >= participantCount ||
+                 _voteTargets[entry.StableSlot] == entry.StableSlot))
+            {
+                error = "Deduction vote target이 frozen roster에 없습니다.";
                 return false;
             }
 
@@ -248,7 +259,7 @@ public sealed class PostItDeductionModule
         }
 
         PostItLiarVoteSet votes = default;
-        for (byte slot = 0; slot < PostItLiarFixedSet.Capacity; slot++)
+        for (byte slot = 0; slot < participantCount; slot++)
         {
             bool isCitizen = slot != _liarSlot;
             bool wasSubmitted = isCitizen && _voteSubmitted[slot];
@@ -295,5 +306,11 @@ public sealed class PostItDeductionModule
         _finalizedRoundRevision = roundRevision;
         _cachedResult = result;
         return true;
+    }
+
+    private static bool IsValidParticipantCount(int participantCount)
+    {
+        return participantCount == 2 ||
+               participantCount == PostItLiarFixedSet.Capacity;
     }
 }
