@@ -7,6 +7,20 @@ using UnityEngine;
 [DefaultExecutionOrder(-100)]
 public class PostItRoundManager : NetworkBehaviour
 {
+    private enum PostItLiarAdmissionReason : byte
+    {
+        LiarModeDisabled = 0,
+        UnsupportedParticipantCount = 1,
+        TwoPlayerTestDisabled = 2,
+        NonDevelopmentEnvironment = 3,
+        InvalidServerTime = 4,
+        PromptDatabaseMissing = 5,
+        PromptSelectionRejected = 6,
+        RoundPreparationRejected = 7,
+        AdmittedExactFour = 8,
+        AdmittedTwoPlayerDevelopmentOverride = 9
+    }
+
     private const int InitialMapDrawingPostItCount = 2;
     private const int InitialMapBonusPostItCount = 1;
     private const int InitialMapPenaltyPostItCount = 1;
@@ -1618,10 +1632,24 @@ public class PostItRoundManager : NetworkBehaviour
             return false;
         }
 
+        int connectedCount = IsSpawnedNetworkSession() &&
+                             NetworkManager != null
+            ? NetworkManager.ConnectedClientsIds.Count
+            : roster.Count;
+        int resolvedInventoryCount = roster.Count;
+        int frozenRosterCount = roster.Count;
         if (!CanStartPostItLiarWithParticipantCount(
                 roster.Count,
-                out bool useTwoPlayerDevelopmentOverride))
+                out bool useTwoPlayerDevelopmentOverride,
+                out PostItLiarAdmissionReason admissionReason))
         {
+            LogPostItLiarAdmission(
+                roundRevision,
+                connectedCount,
+                resolvedInventoryCount,
+                frozenRosterCount,
+                false,
+                admissionReason);
             LatchPostItLiarFallback(roundRevision);
             return true;
         }
@@ -1631,6 +1659,13 @@ public class PostItRoundManager : NetworkBehaviour
             double.IsInfinity(serverTime) ||
             serverTime < 0d)
         {
+            LogPostItLiarAdmission(
+                roundRevision,
+                connectedCount,
+                resolvedInventoryCount,
+                frozenRosterCount,
+                false,
+                PostItLiarAdmissionReason.InvalidServerTime);
             return false;
         }
 
@@ -1645,6 +1680,15 @@ public class PostItRoundManager : NetworkBehaviour
                 out PostItPromptSelection prompt,
                 out _))
         {
+            LogPostItLiarAdmission(
+                roundRevision,
+                connectedCount,
+                resolvedInventoryCount,
+                frozenRosterCount,
+                false,
+                postItLiarPromptDatabase == null
+                    ? PostItLiarAdmissionReason.PromptDatabaseMissing
+                    : PostItLiarAdmissionReason.PromptSelectionRejected);
             LatchPostItLiarFallback(roundRevision);
             return true;
         }
@@ -1660,6 +1704,13 @@ public class PostItRoundManager : NetworkBehaviour
                 prompt,
                 out PostItLiarChoiceSet choices))
         {
+            LogPostItLiarAdmission(
+                roundRevision,
+                connectedCount,
+                resolvedInventoryCount,
+                frozenRosterCount,
+                false,
+                PostItLiarAdmissionReason.RoundPreparationRejected);
             LatchPostItLiarFallback(roundRevision);
             return true;
         }
@@ -1694,6 +1745,13 @@ public class PostItRoundManager : NetworkBehaviour
             LiarLog(
                 $"round={roundRevision} 준비 완료 participants={participantCount}");
         }
+        LogPostItLiarAdmission(
+            roundRevision,
+            connectedCount,
+            resolvedInventoryCount,
+            frozenRosterCount,
+            true,
+            admissionReason);
         return true;
     }
 
@@ -7509,21 +7567,50 @@ public class PostItRoundManager : NetworkBehaviour
 
     private bool CanStartPostItLiarWithParticipantCount(
         int participantCount,
-        out bool useTwoPlayerDevelopmentOverride)
+        out bool useTwoPlayerDevelopmentOverride,
+        out PostItLiarAdmissionReason admissionReason)
     {
         useTwoPlayerDevelopmentOverride = false;
         if (!enablePostItLiarMode)
+        {
+            admissionReason =
+                PostItLiarAdmissionReason.LiarModeDisabled;
             return false;
+        }
 
         if (participantCount == PostItLiarFixedSet.Capacity)
+        {
+            admissionReason =
+                PostItLiarAdmissionReason.AdmittedExactFour;
             return true;
+        }
 
-        useTwoPlayerDevelopmentOverride =
-            participantCount ==
-                TwoPlayerLiarDevelopmentTestParticipantCount &&
-            allowTwoPlayerLiarTestMode &&
-            IsPostItLiarDevelopmentEnvironment();
-        return useTwoPlayerDevelopmentOverride;
+        if (participantCount !=
+            TwoPlayerLiarDevelopmentTestParticipantCount)
+        {
+            admissionReason =
+                PostItLiarAdmissionReason.UnsupportedParticipantCount;
+            return false;
+        }
+
+        if (!allowTwoPlayerLiarTestMode)
+        {
+            admissionReason =
+                PostItLiarAdmissionReason.TwoPlayerTestDisabled;
+            return false;
+        }
+
+        if (!IsPostItLiarDevelopmentEnvironment())
+        {
+            admissionReason =
+                PostItLiarAdmissionReason.NonDevelopmentEnvironment;
+            return false;
+        }
+
+        useTwoPlayerDevelopmentOverride = true;
+        admissionReason = PostItLiarAdmissionReason
+            .AdmittedTwoPlayerDevelopmentOverride;
+        return true;
     }
 
     private bool IsPreparedPostItLiarParticipantCountValid(
@@ -8444,6 +8531,29 @@ public class PostItRoundManager : NetworkBehaviour
                 $"[{nameof(PostItRoundManager)}][LiarTest] {message}",
                 this);
         }
+    }
+
+    private void LogPostItLiarAdmission(
+        int roundRevision,
+        int connectedCount,
+        int resolvedInventoryCount,
+        int frozenRosterCount,
+        bool admitted,
+        PostItLiarAdmissionReason reason)
+    {
+        if (!debugPostItLiarLogs)
+            return;
+
+        Debug.Log(
+            $"[{nameof(PostItRoundManager)}][LiarAdmission] " +
+            $"round={roundRevision} connected={connectedCount} " +
+            $"resolved={resolvedInventoryCount} frozen={frozenRosterCount} " +
+            $"enable={enablePostItLiarMode} " +
+            $"allow2P={allowTwoPlayerLiarTestMode} " +
+            $"editor={Application.isEditor} debugBuild={Debug.isDebugBuild} " +
+            $"db={postItLiarPromptDatabase != null} admitted={admitted} " +
+            $"reason={reason}",
+            this);
     }
 
     private void Log(string message)
