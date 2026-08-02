@@ -422,11 +422,11 @@ public sealed class HamsterMotorShellRagdollRecoveryAdapter : MonoBehaviour
         if (_stateTimer < _activeKnockdownDuration)
             return;
 
+        DampenAngularVelocityDuringRecovery(0f);
         bool groundedOk = !groundedRequiredToFinishRecovery || motor == null || motor.IsGrounded;
         bool speedOk = GetPlanarSpeed() <= Mathf.Max(0f, maxRecoverPlanarSpeed);
         bool stableEnough = groundedOk && speedOk && IsRecoveryAngularVelocityOk();
-        bool failSafe = _stateTimer >= Mathf.Max(_activeKnockdownDuration, Mathf.Max(MinStateDuration, maxKnockdownDuration));
-        if (stableEnough || failSafe)
+        if (stableEnough)
             EnterPostKnockdownRecovery();
     }
 
