@@ -15,6 +15,9 @@ public sealed class HamsterVisualClipStateDriver : MonoBehaviour
     private const string PlayerBuildMotionFallbackWallRightStateName = "WallMove_Right";
     private const string CharacterGrabPresentationReason = "CharacterGrab";
     private const string CharacterCarryPresentationReason = "CharacterCarry";
+    private const float CharacterLiftCompletionNormalizedTime = 0.98f;
+    private const float CharacterLiftEntryTimeoutSeconds = 0.5f;
+    private const float CharacterLiftPlaybackTimeoutSeconds = 1.5f;
 
     [Header("References")]
     [SerializeField] private Animator visualAnimator;
@@ -38,6 +41,7 @@ public sealed class HamsterVisualClipStateDriver : MonoBehaviour
     [SerializeField] private string throwStateName = "Throw";
 
     [Header("Carry State Names")]
+    [SerializeField] private string carryLiftStateName = "CarryLift";
     [SerializeField] private string carryIdleStateName = "CarryIdle";
     [SerializeField] private string carryWalkStateName = "CarryWalk";
     [SerializeField] private string carryRunStateName = "CarryRun";
@@ -191,6 +195,8 @@ public sealed class HamsterVisualClipStateDriver : MonoBehaviour
     private bool _characterGrabPresentationPhaseObserved;
     private bool _characterLiftOneShotActive;
     private bool _characterLiftEntryPlayedForCurrentGrab;
+    private bool _characterLiftAnimatorEntryObserved;
+    private float _characterLiftElapsedTime;
     private bool _warnedMissingAnimator;
     private bool _warnedAnimatorDisabled;
     private bool _warnedMissingController;
@@ -390,7 +396,7 @@ public sealed class HamsterVisualClipStateDriver : MonoBehaviour
         }
 
         bool characterGrabPresentationActive =
-            TickCharacterGrabPresentation();
+            TickCharacterGrabPresentation(deltaTime);
 
         if (TickExternalOneShot(deltaTime))
         {
@@ -604,7 +610,7 @@ public sealed class HamsterVisualClipStateDriver : MonoBehaviour
         _subscribedCharacterThrowSource = null;
     }
 
-    private bool TickCharacterGrabPresentation()
+    private bool TickCharacterGrabPresentation(float deltaTime)
     {
         if (_characterGrabPresentationSource == null)
         {
@@ -627,9 +633,11 @@ public sealed class HamsterVisualClipStateDriver : MonoBehaviour
         _lastCharacterGrabPresentationPhase = phase;
         _characterGrabPresentationPhaseObserved = true;
         if (_characterLiftOneShotActive &&
-            !IsPlayingExternalOneShot(carryIdleStateName))
+            !IsPlayingExternalOneShot(carryLiftStateName))
         {
             _characterLiftOneShotActive = false;
+            _characterLiftAnimatorEntryObserved = false;
+            _characterLiftElapsedTime = 0f;
         }
 
         bool isGrabberPresentationActive =
@@ -651,6 +659,18 @@ public sealed class HamsterVisualClipStateDriver : MonoBehaviour
         if (!ShouldAuthoritativelyDriveUpdateLocomotionAnimator())
             return isGrabberPresentationActive;
 
+        if (_characterLiftOneShotActive &&
+            phase != PlayerInteractModule.CharacterGrabPresentationPhase
+                .Carrying)
+        {
+            CancelExternalOneShot(
+                "character lift phase left Carrying");
+            _characterLiftOneShotActive = false;
+            _characterLiftEntryPlayedForCurrentGrab = false;
+            _characterLiftAnimatorEntryObserved = false;
+            _characterLiftElapsedTime = 0f;
+        }
+
         if (isGrabberPresentationActive &&
             !wasGrabberPresentationActive)
         {
@@ -665,7 +685,7 @@ public sealed class HamsterVisualClipStateDriver : MonoBehaviour
 
         if (phase == PlayerInteractModule.CharacterGrabPresentationPhase
                 .Carrying &&
-            TickCharacterLiftEntryPending())
+            TickCharacterLiftEntryPending(deltaTime))
         {
             return true;
         }
@@ -682,22 +702,22 @@ public sealed class HamsterVisualClipStateDriver : MonoBehaviour
         {
             ClearCharacterGrabPresentationState(false);
             if (TryPlayOneShotState(
-                    carryIdleStateName,
+                    carryLiftStateName,
                     carryCrossFadeDuration,
-                    minGrabStateTime,
-                    maxGrabStateTime,
                     requireCarryStateMotion,
                     out _,
                     out string failureReason))
             {
                 _characterLiftOneShotActive = true;
                 _characterLiftEntryPlayedForCurrentGrab = true;
+                _characterLiftAnimatorEntryObserved = false;
+                _characterLiftElapsedTime = 0f;
                 if (ShouldLogInteraction())
                 {
                     Debug.Log(
                         "[HamsterVisualClipStateDriver] " +
                         "Character lift one-shot started " +
-                        $"state={carryIdleStateName}",
+                        $"state={carryLiftStateName}",
                         this);
                 }
 
@@ -709,7 +729,7 @@ public sealed class HamsterVisualClipStateDriver : MonoBehaviour
                 Debug.LogWarning(
                     "[HamsterVisualClipStateDriver] " +
                     "Character lift one-shot skipped " +
-                    $"state={carryIdleStateName} " +
+                    $"state={carryLiftStateName} " +
                     $"failure={failureReason}",
                     this);
             }
@@ -745,47 +765,115 @@ public sealed class HamsterVisualClipStateDriver : MonoBehaviour
         return true;
     }
 
-    private bool TickCharacterLiftEntryPending()
+    private bool TickCharacterLiftEntryPending(float deltaTime)
     {
         if (!_characterLiftOneShotActive)
             return false;
 
-        if (!IsPlayingExternalOneShot(carryIdleStateName))
+        if (!IsPlayingExternalOneShot(carryLiftStateName))
         {
             _characterLiftOneShotActive = false;
+            _characterLiftAnimatorEntryObserved = false;
+            _characterLiftElapsedTime = 0f;
             return false;
         }
 
-        if (!TryGetCurrentAnimatorStateNormalizedTime(
+        _characterLiftElapsedTime += Mathf.Max(0f, deltaTime);
+        bool isActualCurrentState =
+            TryGetCurrentAnimatorStateNormalizedTime(
                 _externalOneShotStateHash,
-                out float normalizedTime))
+                out float normalizedTime);
+        if (!_characterLiftAnimatorEntryObserved)
+        {
+            if (isActualCurrentState)
+            {
+                _characterLiftAnimatorEntryObserved = true;
+                if (ShouldLogInteraction())
+                {
+                    Debug.Log(
+                        "[HamsterVisualClipStateDriver] " +
+                        "Character lift actual entry confirmed " +
+                        $"state={carryLiftStateName} " +
+                        $"normalizedTime={normalizedTime:F3}",
+                        this);
+                }
+            }
+            else if (_characterLiftElapsedTime >=
+                     CharacterLiftEntryTimeoutSeconds)
+            {
+                CompleteCharacterLiftEntry(
+                    "actual CarryLift entry timeout",
+                    false);
+            }
+
+            return true;
+        }
+
+        if (!isActualCurrentState)
+        {
+            CompleteCharacterLiftEntry(
+                "Animator left CarryLift before normalized completion",
+                false);
+            return true;
+        }
+
+        if (normalizedTime < CharacterLiftCompletionNormalizedTime &&
+            _characterLiftElapsedTime <
+            CharacterLiftPlaybackTimeoutSeconds)
         {
             return true;
         }
 
-        int stateHash = _externalOneShotStateHash;
-        string stateName = _externalOneShotStateName;
+        bool completedByNormalizedTime =
+            normalizedTime >= CharacterLiftCompletionNormalizedTime;
+        string completionReason = completedByNormalizedTime
+            ? $"normalizedTime={normalizedTime:F3}"
+            : "CarryLift playback timeout";
+        CompleteCharacterLiftEntry(
+            completionReason,
+            completedByNormalizedTime);
+        return true;
+    }
+
+    private void CompleteCharacterLiftEntry(
+        string completionReason,
+        bool completionWasExpected)
+    {
         ClearExternalOneShot();
         _characterLiftOneShotActive = false;
-        _externalSustainedStateActive = true;
-        _externalSustainedStateHash = stateHash;
-        _externalSustainedStateName = stateName;
-        _externalSustainedStateReason =
-            CharacterCarryPresentationReason;
-        _externalSustainedStateTimer = 0f;
-        _externalSustainedCrossFadeDuration =
-            Mathf.Max(0f, carryCrossFadeDuration);
+        _characterLiftAnimatorEntryObserved = false;
+        _characterLiftElapsedTime = 0f;
 
-        if (ShouldLogInteraction())
+        bool started = TryBeginCharacterGrabPresentationState(
+            CharacterCarryPresentationReason,
+            carryIdleStateName,
+            carryCrossFadeDuration,
+            requireCarryStateMotion,
+            out string failureReason);
+
+        if (started && completionWasExpected)
         {
-            Debug.Log(
-                "[HamsterVisualClipStateDriver] " +
-                "Character lift CarryIdle entry confirmed " +
-                $"state={stateName} normalizedTime={normalizedTime:F3}",
-                this);
+            if (ShouldLogInteraction())
+            {
+                Debug.Log(
+                    "[HamsterVisualClipStateDriver] " +
+                    "Character lift completed; CarryIdle requested " +
+                    $"state={carryIdleStateName} " +
+                    $"completion={completionReason}",
+                    this);
+            }
+
+            return;
         }
 
-        return false;
+        Debug.LogWarning(
+            "[HamsterVisualClipStateDriver] " +
+            "Character lift completed through fallback " +
+            $"state={carryIdleStateName} " +
+            $"completion={completionReason} " +
+            $"handoffStarted={started} " +
+            $"failure={failureReason}",
+            this);
     }
 
     private bool TryBeginCharacterGrabPresentationState(
@@ -824,7 +912,7 @@ public sealed class HamsterVisualClipStateDriver : MonoBehaviour
     {
         if (_characterLiftOneShotActive)
         {
-            if (IsPlayingExternalOneShot(carryIdleStateName))
+            if (IsPlayingExternalOneShot(carryLiftStateName))
             {
                 CancelExternalOneShot(
                     "character grab presentation ended");
@@ -834,6 +922,8 @@ public sealed class HamsterVisualClipStateDriver : MonoBehaviour
         }
 
         _characterLiftEntryPlayedForCurrentGrab = false;
+        _characterLiftAnimatorEntryObserved = false;
+        _characterLiftElapsedTime = 0f;
 
         if (!_externalSustainedStateActive ||
             !IsCharacterGrabPresentationReason(
@@ -1264,6 +1354,12 @@ public sealed class HamsterVisualClipStateDriver : MonoBehaviour
         if (!_externalOneShotActive)
             return false;
 
+        if (_characterLiftOneShotActive &&
+            IsPlayingExternalOneShot(carryLiftStateName))
+        {
+            return true;
+        }
+
         _externalOneShotTimer += Mathf.Max(0f, deltaTime);
         if (_externalOneShotTimer < _externalOneShotMinTime)
             return true;
@@ -1358,6 +1454,8 @@ public sealed class HamsterVisualClipStateDriver : MonoBehaviour
         _characterGrabPresentationPhaseObserved = false;
         _characterLiftOneShotActive = false;
         _characterLiftEntryPlayedForCurrentGrab = false;
+        _characterLiftAnimatorEntryObserved = false;
+        _characterLiftElapsedTime = 0f;
         ClearExternalOneShot();
         ClearExternalSustainedState();
         ClearInteractionState();
