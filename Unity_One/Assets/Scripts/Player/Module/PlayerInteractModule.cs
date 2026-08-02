@@ -77,6 +77,7 @@ public class PlayerInteractModule : NetworkBehaviour
     private const string GrabberMoveMultiplierKey = "CharacterGrabber";
     private const string GrabbedMoveMultiplierKey = "CharacterGrabbed";
     private const string CharacterGrabEscapeReason = "escape";
+    private const string MotorShellBodyName = "MotorShellBody";
     private const float GameplayGateResolveRetryInterval = 0.5f;
     private const float CharacterLiftRequestTimeoutSeconds = 1f;
 
@@ -298,6 +299,8 @@ public class PlayerInteractModule : NetworkBehaviour
     private float _localCharacterLiftRequestTimeoutAt;
     private CharacterController _carriedCharacterController;
     private Rigidbody _carriedCharacterRigidbody;
+    private MotorShellRootBodySync _carriedCharacterRootBodySync;
+    private bool _carriedCharacterUsesMotorShellBodyWriter;
     private bool _carriedCharacterControllerWasEnabled;
     private bool _carriedCharacterRigidbodyWasKinematic;
     private bool _carriedCharacterRigidbodyUseGravity;
@@ -1772,7 +1775,11 @@ public class PlayerInteractModule : NetworkBehaviour
             return false;
         }
 
-        if (!TryResolveCharacterCarryTarget(out Transform targetRoot, out CharacterController targetController, out Rigidbody targetRigidbody))
+        if (!TryResolveCharacterCarryTarget(
+                out Transform targetRoot,
+                out CharacterController targetController,
+                out Rigidbody targetRigidbody,
+                out MotorShellRootBodySync targetRootBodySync))
         {
             ServerReleaseCharacterGrab("invalid-target");
             return false;
@@ -1781,6 +1788,7 @@ public class PlayerInteractModule : NetworkBehaviour
         _carriedCharacterRoot = targetRoot;
         _carriedCharacterController = targetController;
         _carriedCharacterRigidbody = targetRigidbody;
+        _carriedCharacterRootBodySync = targetRootBodySync;
         _carriedCharacterControllerWasEnabled = targetController != null && targetController.enabled;
         _carriedCharacterRigidbodyWasKinematic = targetRigidbody != null && targetRigidbody.isKinematic;
         _carriedCharacterRigidbodyUseGravity = targetRigidbody != null && targetRigidbody.useGravity;
@@ -1794,6 +1802,11 @@ public class PlayerInteractModule : NetworkBehaviour
             targetRigidbody.isKinematic = true;
             targetRigidbody.useGravity = false;
         }
+
+        _carriedCharacterUsesMotorShellBodyWriter =
+            targetRootBodySync != null &&
+            targetRigidbody != null &&
+            targetRigidbody.isKinematic;
 
         ServerApplyCharacterCarryPose(true);
         SetCharacterGrabPresentationStateServer(
@@ -1860,11 +1873,26 @@ public class PlayerInteractModule : NetworkBehaviour
         CharacterController targetController = _carriedCharacterController;
         Rigidbody targetRigidbody = _carriedCharacterRigidbody;
 
+        Vector3 rootBefore = targetRoot != null
+            ? targetRoot.position
+            : Vector3.zero;
+        bool hasBody = targetRigidbody != null;
+        Vector3 bodyBefore = hasBody
+            ? targetRigidbody.position
+            : Vector3.zero;
+        Vector3 releasePosition = rootBefore;
+        Quaternion releaseRotation = targetRoot != null
+            ? targetRoot.rotation
+            : Quaternion.identity;
+        string appliedWriter = "RootOnly";
+
         if (targetRoot != null)
         {
             float releaseYOffset = Mathf.Max(0f, characterCarryGroundReleaseYOffset);
-            if (releaseYOffset > 0f)
-                targetRoot.position += Vector3.up * releaseYOffset;
+            releasePosition += Vector3.up * releaseYOffset;
+            appliedWriter = ApplyCharacterCarryPoseToCachedTarget(
+                releasePosition,
+                releaseRotation);
         }
 
         if (targetRigidbody != null && characterCarrySetTargetRigidbodyKinematic)
@@ -1876,35 +1904,110 @@ public class PlayerInteractModule : NetworkBehaviour
         if (targetController != null && characterCarryDisableTargetController)
             targetController.enabled = _carriedCharacterControllerWasEnabled;
 
+        LogCharacterCarryPoseDiagnostic(
+            "Release",
+            releasePosition,
+            rootBefore,
+            bodyBefore,
+            hasBody,
+            appliedWriter,
+            reason);
+
         CharacterGrabLog($"[PlayerInteract] Character carry released reason={reason ?? "<null>"}");
         CharacterGrabLog("[PlayerInteract] Character carry restored controller/rigidbody");
         ClearCharacterCarryRuntimeCache();
     }
 
-    private bool TryResolveCharacterCarryTarget(out Transform targetRoot, out CharacterController targetController, out Rigidbody targetRigidbody)
+    private bool TryResolveCharacterCarryTarget(
+        out Transform targetRoot,
+        out CharacterController targetController,
+        out Rigidbody targetRigidbody,
+        out MotorShellRootBodySync targetRootBodySync)
     {
         targetRoot = null;
         targetController = null;
         targetRigidbody = null;
+        targetRootBodySync = null;
 
         if (!TryGetNetworkObjectSafe(_grabbedCharacter, out NetworkObject targetNetObj) || targetNetObj == null || !targetNetObj.IsSpawned)
             return false;
 
         targetRoot = targetNetObj.transform;
+        targetRootBodySync =
+            targetRoot.GetComponent<MotorShellRootBodySync>();
 
         if (_grabbedCharacterStatus != null)
-        {
             targetController = _grabbedCharacterStatus.GetComponentInParent<CharacterController>();
-            targetRigidbody = _grabbedCharacterStatus.GetComponentInParent<Rigidbody>();
+
+        if (targetController != null &&
+            ResolveRootNetworkObject(targetController) != targetNetObj)
+        {
+            targetController = null;
         }
 
         if (targetController == null)
-            targetController = targetNetObj.GetComponentInChildren<CharacterController>(true);
+        {
+            targetController = ResolveSameNetworkObjectComponentInChildren<CharacterController>(
+                targetNetObj);
+        }
 
-        if (targetRigidbody == null)
-            targetRigidbody = targetNetObj.GetComponentInChildren<Rigidbody>(true);
+        if (targetRootBodySync != null)
+        {
+            if (ResolveRootNetworkObject(targetRootBodySync) != targetNetObj)
+                return false;
+
+            Transform motorShellBody =
+                targetRoot.Find(MotorShellBodyName);
+            targetRigidbody = motorShellBody != null
+                ? motorShellBody.GetComponent<Rigidbody>()
+                : null;
+            if (targetRigidbody == null ||
+                ResolveRootNetworkObject(targetRigidbody) != targetNetObj)
+            {
+                return false;
+            }
+        }
+        else
+        {
+            if (_grabbedCharacterStatus != null)
+            {
+                targetRigidbody =
+                    _grabbedCharacterStatus.GetComponentInParent<Rigidbody>();
+            }
+
+            if (targetRigidbody != null &&
+                ResolveRootNetworkObject(targetRigidbody) != targetNetObj)
+            {
+                targetRigidbody = null;
+            }
+
+            if (targetRigidbody == null)
+            {
+                targetRigidbody = ResolveSameNetworkObjectComponentInChildren<Rigidbody>(
+                    targetNetObj);
+            }
+        }
 
         return targetRoot != null;
+    }
+
+    private static T ResolveSameNetworkObjectComponentInChildren<T>(
+        NetworkObject targetNetworkObject)
+        where T : Component
+    {
+        if (targetNetworkObject == null)
+            return null;
+
+        T[] candidates =
+            targetNetworkObject.GetComponentsInChildren<T>(true);
+        for (int index = 0; index < candidates.Length; index++)
+        {
+            T candidate = candidates[index];
+            if (ResolveRootNetworkObject(candidate) == targetNetworkObject)
+                return candidate;
+        }
+
+        return null;
     }
 
     private void ServerApplyCharacterCarryPose(bool immediate)
@@ -1923,7 +2026,124 @@ public class PlayerInteractModule : NetworkBehaviour
             targetRotation = Quaternion.Slerp(_carriedCharacterRoot.rotation, targetRotation, t);
         }
 
-        _carriedCharacterRoot.SetPositionAndRotation(targetPosition, targetRotation);
+        Vector3 rootBefore = _carriedCharacterRoot.position;
+        bool hasBody = _carriedCharacterRigidbody != null;
+        Vector3 bodyBefore = hasBody
+            ? _carriedCharacterRigidbody.position
+            : Vector3.zero;
+        string appliedWriter = ApplyCharacterCarryPoseToCachedTarget(
+            targetPosition,
+            targetRotation);
+
+        if (immediate)
+        {
+            LogCharacterCarryPoseDiagnostic(
+                "CarryingStart",
+                targetPosition,
+                rootBefore,
+                bodyBefore,
+                hasBody,
+                appliedWriter,
+                null);
+        }
+    }
+
+    private string ApplyCharacterCarryPoseToCachedTarget(
+        Vector3 targetPosition,
+        Quaternion targetRotation)
+    {
+        if (_carriedCharacterRoot == null)
+            return "RootOnly";
+
+        _carriedCharacterRoot.SetPositionAndRotation(
+            targetPosition,
+            targetRotation);
+
+        if (_carriedCharacterUsesMotorShellBodyWriter &&
+            _carriedCharacterRigidbody != null)
+        {
+            _carriedCharacterRigidbody.position = targetPosition;
+            _carriedCharacterRigidbody.rotation = targetRotation;
+            return "RootAndMotorShellBody";
+        }
+
+        return _carriedCharacterController != null
+            ? "LegacyCharacterController"
+            : "RootOnly";
+    }
+
+    private void LogCharacterCarryPoseDiagnostic(
+        string phase,
+        Vector3 targetPosition,
+        Vector3 rootBefore,
+        Vector3 bodyBefore,
+        bool hasBody,
+        string appliedWriter,
+        string releaseReason)
+    {
+        if (!enableDebugLogs && !characterGrabDebugLogs)
+            return;
+
+        Vector3 rootAfter = _carriedCharacterRoot != null
+            ? _carriedCharacterRoot.position
+            : rootBefore;
+        Vector3 bodyAfter = hasBody && _carriedCharacterRigidbody != null
+            ? _carriedCharacterRigidbody.position
+            : bodyBefore;
+        float distanceBefore = hasBody
+            ? Vector3.Distance(rootBefore, bodyBefore)
+            : 0f;
+        float distanceAfter = hasBody
+            ? Vector3.Distance(rootAfter, bodyAfter)
+            : 0f;
+        ulong targetOwnerClientId = ulong.MaxValue;
+        if (TryGetNetworkObjectSafe(
+                _grabbedCharacter,
+                out NetworkObject targetNetworkObject) &&
+            targetNetworkObject != null)
+        {
+            targetOwnerClientId = targetNetworkObject.OwnerClientId;
+        }
+
+        string role = IsHost
+            ? "Host"
+            : IsServer
+                ? "Server"
+                : IsClient
+                    ? "Client"
+                    : "Offline";
+        string rigidbodyName = _carriedCharacterRigidbody != null
+            ? _carriedCharacterRigidbody.name
+            : "<null>";
+        string rigidbodyKinematic = _carriedCharacterRigidbody != null
+            ? _carriedCharacterRigidbody.isKinematic.ToString()
+            : "<null>";
+        string bodyBeforeText = hasBody
+            ? FormatVector(bodyBefore)
+            : "<null>";
+        string bodyAfterText = hasBody
+            ? FormatVector(bodyAfter)
+            : "<null>";
+
+        Debug.Log(
+            "[PlayerInteract/CarryPoseDiagnostic] " +
+            $"role={role} grabberOwnerClientId={OwnerClientId} " +
+            $"targetOwnerClientId={targetOwnerClientId} phase={phase} " +
+            $"targetPosition={FormatVector(targetPosition)} " +
+            $"rootBefore={FormatVector(rootBefore)} " +
+            $"rootAfter={FormatVector(rootAfter)} " +
+            $"bodyBefore={bodyBeforeText} bodyAfter={bodyAfterText} " +
+            $"rootBodyDistanceBefore={distanceBefore:F3} " +
+            $"rootBodyDistanceAfter={distanceAfter:F3} " +
+            $"targetRigidbody={rigidbodyName} " +
+            $"targetRigidbodyIsKinematic={rigidbodyKinematic} " +
+            $"rootBodySync={_carriedCharacterRootBodySync != null} " +
+            $"appliedWriter={appliedWriter} " +
+            $"forwardOffset={characterCarryForwardOffset:F3} " +
+            $"upOffset={characterCarryUpOffset:F3} " +
+            $"rightOffset={characterCarryRightOffset:F3} " +
+            $"releaseReason={releaseReason ?? "<none>"}",
+            this);
     }
 
     private Vector3 GetCharacterCarryAnchorPosition()
@@ -1991,6 +2211,8 @@ public class PlayerInteractModule : NetworkBehaviour
         _isCarryingCharacter = false;
         _carriedCharacterController = null;
         _carriedCharacterRigidbody = null;
+        _carriedCharacterRootBodySync = null;
+        _carriedCharacterUsesMotorShellBodyWriter = false;
         _carriedCharacterControllerWasEnabled = false;
         _carriedCharacterRigidbodyWasKinematic = false;
         _carriedCharacterRigidbodyUseGravity = false;
