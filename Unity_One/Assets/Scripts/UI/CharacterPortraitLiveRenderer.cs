@@ -15,6 +15,9 @@ public sealed class CharacterPortraitLiveRenderer : MonoBehaviour
     private const string ExpectedWingRendererPath = "날개";
     private const string ExpectedBodyRendererPath = "몸통";
     private const string ExpectedFaceRendererPath = "평면";
+    private const string ExpectedHeadTransformName = "head";
+    private const string ExpectedLeftEarTipTransformName = "ear_L.003";
+    private const string ExpectedRightEarTipTransformName = "ear_R.003";
     private const int ExpectedRendererCount = 3;
     private const int FaceMaterialIndex = 0;
     private const int MinimumNetworkFaceExpressionId = 0;
@@ -30,13 +33,7 @@ public sealed class CharacterPortraitLiveRenderer : MonoBehaviour
     private const float MaximumPresentationOffset = 0.25f;
     private const float MinimumOrthographicSize = 0.2f;
     private const float MaximumOrthographicSize = 0.40f;
-    private const float UpperBodyBottomRatio = 0.375f;
-    private const float UpperBodyTargetFaceWeight = 0.55f;
-    private const float UpperBodyHorizontalMargin = 1.12f;
-    private const float UpperBodyVerticalMargin = 1.08f;
-    private const float LegacyMinimumOrthographicSize = 0.62f;
-    private const float LegacyMaximumOrthographicSize = 0.9f;
-    private const float LegacyBoundsMargin = 1.15f;
+    private const float FaceFramingSafetyMargin = 1.08f;
     private const float CameraDistance = 2.5f;
     private const float CameraHeightOffset = 0.12f;
     private const float FacingEpsilon = 0.0001f;
@@ -87,12 +84,19 @@ public sealed class CharacterPortraitLiveRenderer : MonoBehaviour
     private Transform _sourceModelRoot;
     private FaceExpressionController _sourceFaceController;
     private HamsterFullRagdollMotor _sourceMotor;
+    private Transform _sourceHeadTransform;
+    private Transform _sourceLeftEarTipTransform;
+    private Transform _sourceRightEarTipTransform;
     private SkinnedMeshRenderer _sourceFaceRenderer;
     private Material _sourceFaceMaterial;
     private Material _cloneFaceMaterial;
 
     private GameObject _stageRoot;
     private Transform _motionRoot;
+    private Transform _cloneHeadTransform;
+    private Transform _cloneLeftEarTipTransform;
+    private Transform _cloneRightEarTipTransform;
+    private SkinnedMeshRenderer _cloneFaceRenderer;
     private Camera _portraitCamera;
     private RenderTexture _outputTexture;
     private UniversalRenderPipeline.SingleCameraRequest
@@ -105,6 +109,7 @@ public sealed class CharacterPortraitLiveRenderer : MonoBehaviour
 
     private Vector3 _sourceVisualBindLocalPosition;
     private Vector3 _focusPointInVisualLocalSpace;
+    private Vector3 _faceCenterOffsetInHeadLocalSpace;
     private Vector3 _lastValidPlanarFacing = Vector3.forward;
     private float _orthographicSize = MinimumOrthographicSize;
     private bool _isBound;
@@ -122,6 +127,10 @@ public sealed class CharacterPortraitLiveRenderer : MonoBehaviour
         _sourceModelRoot != null &&
         _sourceFaceController != null &&
         _motionRoot != null &&
+        _cloneHeadTransform != null &&
+        _cloneLeftEarTipTransform != null &&
+        _cloneRightEarTipTransform != null &&
+        _cloneFaceRenderer != null &&
         _portraitCamera != null &&
         _outputTexture != null &&
         _outputTexture.IsCreated() &&
@@ -224,7 +233,11 @@ public sealed class CharacterPortraitLiveRenderer : MonoBehaviour
             return FailBind(failureReason);
         }
 
-        ResolveFixedFraming(sourceRenderers);
+        if (!TryResolveFixedFraming(out failureReason))
+        {
+            Unbind();
+            return FailBind(failureReason);
+        }
         _sourceFaceController.ExpressionChanged +=
             HandleSourceExpressionChanged;
 
@@ -279,6 +292,9 @@ public sealed class CharacterPortraitLiveRenderer : MonoBehaviour
         _sourceModelRoot = null;
         _sourceFaceController = null;
         _sourceMotor = null;
+        _sourceHeadTransform = null;
+        _sourceLeftEarTipTransform = null;
+        _sourceRightEarTipTransform = null;
         _sourceFaceRenderer = null;
         _sourceFaceMaterial = null;
         _isBound = false;
@@ -721,6 +737,14 @@ public sealed class CharacterPortraitLiveRenderer : MonoBehaviour
             return false;
         }
 
+        if (!TryCacheFaceFramingTransforms(
+                cloneBySource,
+                out failureReason))
+        {
+            DestroyClone();
+            return false;
+        }
+
         List<RendererPair> rendererPairs =
             new List<RendererPair>(sourceRenderers.Length);
         List<Material> ownedMaterials =
@@ -847,6 +871,7 @@ public sealed class CharacterPortraitLiveRenderer : MonoBehaviour
             cloneMaterials[FaceMaterialIndex] =
                 _cloneFaceMaterial;
             ownedMaterials.Add(_cloneFaceMaterial);
+            _cloneFaceRenderer = clone;
         }
 
         clone.sharedMaterials = cloneMaterials;
@@ -870,121 +895,228 @@ public sealed class CharacterPortraitLiveRenderer : MonoBehaviour
         return false;
     }
 
-    private void ResolveFixedFraming(
-        SkinnedMeshRenderer[] sourceRenderers)
+    private bool TryCacheFaceFramingTransforms(
+        Dictionary<Transform, Transform> cloneBySource,
+        out string failureReason)
     {
-        if (!TryGetCombinedBoundsInVisualLocalSpace(
-                sourceRenderers,
-                out Bounds bodyBounds) ||
-            !TryGetBoundsInVisualLocalSpace(
+        failureReason = string.Empty;
+        Transform sourceHead = null;
+        Transform sourceLeftEarTip = null;
+        Transform sourceRightEarTip = null;
+        Transform cloneHead = null;
+        Transform cloneLeftEarTip = null;
+        Transform cloneRightEarTip = null;
+
+        foreach (KeyValuePair<Transform, Transform> mapping in cloneBySource)
+        {
+            Transform source = mapping.Key;
+            if (source == null || mapping.Value == null)
+                continue;
+
+            if (source.name == ExpectedHeadTransformName)
+            {
+                if (sourceHead != null)
+                {
+                    failureReason =
+                        "More than one mapped Sugar head transform was found.";
+                    return false;
+                }
+
+                sourceHead = source;
+                cloneHead = mapping.Value;
+            }
+            else if (source.name == ExpectedLeftEarTipTransformName)
+            {
+                if (sourceLeftEarTip != null)
+                {
+                    failureReason =
+                        "More than one mapped Sugar left ear tip was found.";
+                    return false;
+                }
+
+                sourceLeftEarTip = source;
+                cloneLeftEarTip = mapping.Value;
+            }
+            else if (source.name == ExpectedRightEarTipTransformName)
+            {
+                if (sourceRightEarTip != null)
+                {
+                    failureReason =
+                        "More than one mapped Sugar right ear tip was found.";
+                    return false;
+                }
+
+                sourceRightEarTip = source;
+                cloneRightEarTip = mapping.Value;
+            }
+        }
+
+        if (sourceHead == null ||
+            sourceLeftEarTip == null ||
+            sourceRightEarTip == null ||
+            cloneHead == null ||
+            cloneLeftEarTip == null ||
+            cloneRightEarTip == null)
+        {
+            failureReason =
+                "Mapped Sugar head or ear framing transforms are missing.";
+            return false;
+        }
+
+        _sourceHeadTransform = sourceHead;
+        _sourceLeftEarTipTransform = sourceLeftEarTip;
+        _sourceRightEarTipTransform = sourceRightEarTip;
+        _cloneHeadTransform = cloneHead;
+        _cloneLeftEarTipTransform = cloneLeftEarTip;
+        _cloneRightEarTipTransform = cloneRightEarTip;
+        return true;
+    }
+
+    private bool TryResolveFixedFraming(
+        out string failureReason)
+    {
+        failureReason = string.Empty;
+        if (_sourceHeadTransform == null ||
+            _sourceLeftEarTipTransform == null ||
+            _sourceRightEarTipTransform == null)
+        {
+            failureReason =
+                "Mapped Sugar head or ear framing transforms are unavailable.";
+            return false;
+        }
+
+        if (!TryGetBoundsInVisualLocalSpace(
                 _sourceFaceRenderer,
                 out Bounds faceBounds) ||
-            bodyBounds.size.y <= FacingEpsilon)
+            !IsFiniteVector(faceBounds.center) ||
+            !IsFiniteVector(faceBounds.extents) ||
+            faceBounds.extents.sqrMagnitude <= FacingEpsilon)
         {
-            ResolveLegacyFixedFraming(sourceRenderers);
-            return;
+            failureReason =
+                "Sugar face renderer bounds are invalid for portrait framing.";
+            return false;
         }
-
-        float upperBottomY = Mathf.Lerp(
-            bodyBounds.min.y,
-            bodyBounds.max.y,
-            UpperBodyBottomRatio);
-        float upperTopY = Mathf.Max(
-            bodyBounds.max.y,
-            faceBounds.max.y);
-        if (!IsFinite(upperBottomY) ||
-            !IsFinite(upperTopY) ||
-            upperTopY - upperBottomY <= FacingEpsilon)
-        {
-            ResolveLegacyFixedFraming(sourceRenderers);
-            return;
-        }
-
-        Vector3 chestPoint = new Vector3(
-            bodyBounds.center.x,
-            Mathf.Lerp(
-                upperBottomY,
-                faceBounds.center.y,
-                0.5f),
-            bodyBounds.center.z);
-        Vector3 target = Vector3.Lerp(
-            chestPoint,
-            faceBounds.center,
-            UpperBodyTargetFaceWeight);
-        target.y = Mathf.Clamp(
-            target.y,
-            upperBottomY,
-            upperTopY);
 
         Vector3 visualScale =
             SanitizeScale(_sourceVisualRoot.lossyScale);
-        float verticalScale = Mathf.Abs(visualScale.y);
-        float planarScale = Mathf.Max(
-            Mathf.Abs(visualScale.x),
-            Mathf.Abs(visualScale.z));
-        float requiredHalfHeight = Mathf.Max(
-                target.y - upperBottomY,
-                upperTopY - target.y) *
-            verticalScale *
-            UpperBodyVerticalMargin;
+        float aspect =
+            (float)RenderTextureWidth / RenderTextureHeight;
+        float faceHalfHeight =
+            faceBounds.extents.y * Mathf.Abs(visualScale.y);
+        float faceHalfWidth = Mathf.Max(
+            faceBounds.extents.x * Mathf.Abs(visualScale.x),
+            faceBounds.extents.z * Mathf.Abs(visualScale.z));
+        float faceRequiredHalfHeight = Mathf.Max(
+            faceHalfHeight,
+            faceHalfWidth / aspect);
+        float headEarRequiredHalfHeight =
+            faceRequiredHalfHeight;
 
-        float requiredHalfWidth = Mathf.Max(
-                Mathf.Max(
-                    target.x - bodyBounds.min.x,
-                    bodyBounds.max.x - target.x),
-                Mathf.Max(
-                    target.z - bodyBounds.min.z,
-                    bodyBounds.max.z - target.z)) *
-            planarScale *
-            UpperBodyHorizontalMargin /
-            ((float)RenderTextureWidth / RenderTextureHeight);
+        if (!TryExpandFaceFramingEnvelope(
+                _sourceHeadTransform,
+                faceBounds.center,
+                visualScale,
+                aspect,
+                ref headEarRequiredHalfHeight) ||
+            !TryExpandFaceFramingEnvelope(
+                _sourceLeftEarTipTransform,
+                faceBounds.center,
+                visualScale,
+                aspect,
+                ref headEarRequiredHalfHeight) ||
+            !TryExpandFaceFramingEnvelope(
+                _sourceRightEarTipTransform,
+                faceBounds.center,
+                visualScale,
+                aspect,
+                ref headEarRequiredHalfHeight) ||
+            !IsFinite(faceRequiredHalfHeight) ||
+            faceRequiredHalfHeight <= FacingEpsilon)
+        {
+            failureReason =
+                "Sugar face, head, or ear framing envelope is invalid.";
+            return false;
+        }
 
-        float requiredSize = Mathf.Max(
-            requiredHalfHeight,
-            requiredHalfWidth);
-        if (!IsFiniteVector(target) ||
+        float faceFramingPadding =
+            Mathf.Max(
+                1f,
+                headEarRequiredHalfHeight /
+                faceRequiredHalfHeight) *
+            FaceFramingSafetyMargin;
+        float requiredSize =
+            faceRequiredHalfHeight * faceFramingPadding;
+        if (!IsFinite(faceFramingPadding) ||
             !IsFinite(requiredSize) ||
             requiredSize <= FacingEpsilon)
         {
-            ResolveLegacyFixedFraming(sourceRenderers);
-            return;
+            failureReason =
+                "Sugar face framing size is invalid.";
+            return false;
         }
 
-        _focusPointInVisualLocalSpace = target;
+        _focusPointInVisualLocalSpace = faceBounds.center;
+        Vector3 faceCenterWorld =
+            _sourceVisualRoot.TransformPoint(
+                _focusPointInVisualLocalSpace);
+        _faceCenterOffsetInHeadLocalSpace =
+            _sourceHeadTransform.InverseTransformPoint(
+                faceCenterWorld);
+        if (!IsFiniteVector(_faceCenterOffsetInHeadLocalSpace))
+        {
+            failureReason =
+                "Sugar head-local face center offset is invalid.";
+            return false;
+        }
+
         _orthographicSize = Mathf.Clamp(
             requiredSize,
             MinimumOrthographicSize,
             MaximumOrthographicSize);
         _portraitCamera.orthographicSize = _orthographicSize;
+        return true;
     }
 
-    private bool TryGetCombinedBoundsInVisualLocalSpace(
-        SkinnedMeshRenderer[] sourceRenderers,
-        out Bounds combinedBounds)
+    private bool TryExpandFaceFramingEnvelope(
+        Transform sourceTransform,
+        Vector3 faceCenterInVisualLocalSpace,
+        Vector3 visualScale,
+        float aspect,
+        ref float requiredHalfHeight)
     {
-        combinedBounds = default;
-        bool hasBounds = false;
-        for (int i = 0; i < sourceRenderers.Length; i++)
+        if (sourceTransform == null ||
+            _sourceVisualRoot == null ||
+            aspect <= FacingEpsilon)
         {
-            if (!TryGetBoundsInVisualLocalSpace(
-                    sourceRenderers[i],
-                    out Bounds rendererBounds))
-            {
-                return false;
-            }
-
-            if (!hasBounds)
-            {
-                combinedBounds = rendererBounds;
-                hasBounds = true;
-            }
-            else
-            {
-                combinedBounds.Encapsulate(rendererBounds);
-            }
+            return false;
         }
 
-        return hasBounds;
+        Vector3 pointInVisualLocalSpace =
+            _sourceVisualRoot.InverseTransformPoint(
+                sourceTransform.position);
+        if (!IsFiniteVector(pointInVisualLocalSpace))
+            return false;
+
+        Vector3 offset =
+            pointInVisualLocalSpace -
+            faceCenterInVisualLocalSpace;
+        float verticalDistance =
+            Mathf.Abs(offset.y * visualScale.y);
+        Vector2 planarOffset = new Vector2(
+            offset.x * visualScale.x,
+            offset.z * visualScale.z);
+        float horizontalRequiredHalfHeight =
+            planarOffset.magnitude / aspect;
+        float pointRequiredHalfHeight = Mathf.Max(
+            verticalDistance,
+            horizontalRequiredHalfHeight);
+        if (!IsFinite(pointRequiredHalfHeight))
+            return false;
+
+        requiredHalfHeight = Mathf.Max(
+            requiredHalfHeight,
+            pointRequiredHalfHeight);
+        return true;
     }
 
     private bool TryGetBoundsInVisualLocalSpace(
@@ -1034,26 +1166,6 @@ public sealed class CharacterPortraitLiveRenderer : MonoBehaviour
         }
 
         return hasPoint;
-    }
-
-    private void ResolveLegacyFixedFraming(
-        SkinnedMeshRenderer[] sourceRenderers)
-    {
-        Bounds combinedBounds = sourceRenderers[0].bounds;
-        for (int i = 1; i < sourceRenderers.Length; i++)
-            combinedBounds.Encapsulate(sourceRenderers[i].bounds);
-
-        _focusPointInVisualLocalSpace =
-            _sourceVisualRoot.InverseTransformPoint(
-                combinedBounds.center);
-        float radiusInVisualSpace =
-            _sourceVisualRoot.InverseTransformVector(
-                combinedBounds.extents).magnitude;
-        _orthographicSize = Mathf.Clamp(
-            radiusInVisualSpace * LegacyBoundsMargin,
-            LegacyMinimumOrthographicSize,
-            LegacyMaximumOrthographicSize);
-        _portraitCamera.orthographicSize = _orthographicSize;
     }
 
     private void SubscribeRenderCallback()
@@ -1222,9 +1334,7 @@ public sealed class CharacterPortraitLiveRenderer : MonoBehaviour
     private void UpdateCameraPose()
     {
         Vector3 planarFacing = ResolvePlanarFacing();
-        Vector3 focus =
-            _motionRoot.TransformPoint(
-                _focusPointInVisualLocalSpace);
+        Vector3 focus = ResolvePortraitFocusPoint();
         Vector3 cameraPosition =
             focus +
             planarFacing * CameraDistance +
@@ -1244,6 +1354,33 @@ public sealed class CharacterPortraitLiveRenderer : MonoBehaviour
                 lookDirection.normalized,
                 Vector3.up));
         _portraitCamera.orthographicSize = _orthographicSize;
+    }
+
+    private Vector3 ResolvePortraitFocusPoint()
+    {
+        if (_cloneFaceRenderer != null &&
+            _cloneFaceRenderer.enabled)
+        {
+            Bounds faceBounds = _cloneFaceRenderer.bounds;
+            if (IsFiniteVector(faceBounds.center) &&
+                IsFiniteVector(faceBounds.extents) &&
+                faceBounds.extents.sqrMagnitude > FacingEpsilon)
+            {
+                return faceBounds.center;
+            }
+        }
+
+        if (_cloneHeadTransform != null)
+        {
+            Vector3 headRelativeFocus =
+                _cloneHeadTransform.TransformPoint(
+                    _faceCenterOffsetInHeadLocalSpace);
+            if (IsFiniteVector(headRelativeFocus))
+                return headRelativeFocus;
+        }
+
+        return _motionRoot.TransformPoint(
+            _focusPointInVisualLocalSpace);
     }
 
     private Vector3 ResolveInitialPlanarFacing(
@@ -1436,6 +1573,12 @@ public sealed class CharacterPortraitLiveRenderer : MonoBehaviour
         }
 
         _motionRoot = null;
+        _cloneHeadTransform = null;
+        _cloneLeftEarTipTransform = null;
+        _cloneRightEarTipTransform = null;
+        _cloneFaceRenderer = null;
+        _focusPointInVisualLocalSpace = Vector3.zero;
+        _faceCenterOffsetInHeadLocalSpace = Vector3.zero;
         _posePairs = Array.Empty<PosePair>();
         _rendererPairs = Array.Empty<RendererPair>();
 
