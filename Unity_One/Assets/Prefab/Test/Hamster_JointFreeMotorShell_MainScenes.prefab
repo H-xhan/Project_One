@@ -2859,8 +2859,8 @@ MonoBehaviour:
   escapeRegrabImmunitySeconds: 0.75
   characterGrabDebugLogs: 0
   enableCharacterCarryFollow: 1
-  characterCarryForwardOffset: 0.75
-  characterCarryUpOffset: 0.5
+  characterCarryForwardOffset: 0.05
+  characterCarryUpOffset: 0.85
   characterCarryRightOffset: 0
   characterCarryFollowLerp: 18
   characterCarryMaxDistance: 4
