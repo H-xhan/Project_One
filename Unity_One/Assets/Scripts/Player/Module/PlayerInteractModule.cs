@@ -305,6 +305,8 @@ public class PlayerInteractModule : NetworkBehaviour
     private bool _carriedCharacterRigidbodyWasKinematic;
     private bool _carriedCharacterRigidbodyUseGravity;
     private Transform _carriedCharacterRoot;
+    private NetworkObject _characterThrowFacingOwnerRoot;
+    private HamsterFullRagdollMotor _characterThrowFacingMotor;
 
     private int _cachedWeaponAnimId;
     private Vector3 _cachedLocalPos;
@@ -364,6 +366,7 @@ public class PlayerInteractModule : NetworkBehaviour
         ClearExternalHeldItemPoseOverrideInternal("NetworkDespawn", false);
         DestroyLocalHeldVisual();
         CleanupCharacterGrabOnLifecycle("network-despawn");
+        ClearCharacterThrowFacingReferences();
         _characterGrabPresentationState.Reset();
         ResetGameplayGateCache();
         base.OnNetworkDespawn();
@@ -835,6 +838,8 @@ public class PlayerInteractModule : NetworkBehaviour
         if (!CanStartCharacterGrab(targetStatus, out PlayerInteractModule targetInteract, out NetworkObject selfNetObj, out NetworkObject targetNetObj))
             return false;
 
+        CacheCharacterThrowFacingReferences(selfNetObj);
+
         float now = Time.time;
         float liftDuration = Mathf.Max(0f, liftChargeDuration);
         bool liftReadyImmediately = liftDuration <= 0f;
@@ -1153,7 +1158,7 @@ public class PlayerInteractModule : NetworkBehaviour
             return false;
         }
 
-        Vector3 throwDirection = GetCharacterThrowDirection(targetRoot);
+        Vector3 throwDirection = GetCharacterThrowDirection();
         Vector3 releasePosition = GetCharacterThrowReleasePosition(throwDirection);
         Quaternion releaseRotation = Quaternion.LookRotation(throwDirection, Vector3.up);
         Vector3 impulse = throwDirection * Mathf.Max(0f, characterThrowForwardImpulse) + Vector3.up * Mathf.Max(0f, characterThrowUpImpulse);
@@ -2168,21 +2173,74 @@ public class PlayerInteractModule : NetworkBehaviour
         return Quaternion.LookRotation(forward, Vector3.up);
     }
 
-    private Vector3 GetCharacterThrowDirection(Transform targetRoot)
+    private Vector3 GetCharacterThrowDirection()
     {
-        Vector3 direction = characterThrowUseCarryAnchorDirection
-            ? GetSafeCharacterCarryForward()
-            : targetRoot != null ? targetRoot.forward : Vector3.zero;
+        if (!characterThrowUseCarryAnchorDirection)
+        {
+            CharacterGrabLog(
+                "[PlayerInteract] Legacy target-facing character throw " +
+                "is disabled; using grabber body facing.");
+        }
 
-        if (direction.sqrMagnitude >= 0.0001f)
-            return direction.normalized;
+        NetworkObject ownerRoot = _characterThrowFacingOwnerRoot;
+        if (ownerRoot == null || !ownerRoot.IsSpawned)
+            ownerRoot = ResolveRootNetworkObject(this);
 
-        direction = transform.forward;
-        if (direction.sqrMagnitude >= 0.0001f)
-            return direction.normalized;
+        if (_characterThrowFacingMotor != null &&
+            ownerRoot != null &&
+            ResolveRootNetworkObject(_characterThrowFacingMotor) == ownerRoot)
+        {
+            if (TryNormalizeCharacterGrabPlanarDirection(
+                    _characterThrowFacingMotor.DesiredFacingDirection,
+                    out Vector3 direction))
+            {
+                return direction;
+            }
 
-        direction = transform.rotation * Vector3.forward;
-        return direction.sqrMagnitude >= 0.0001f ? direction.normalized : Vector3.forward;
+            if (TryNormalizeCharacterGrabPlanarDirection(
+                    _characterThrowFacingMotor.SmoothedMoveWorldDirection,
+                    out direction))
+            {
+                return direction;
+            }
+        }
+
+        if (ownerRoot != null &&
+            TryNormalizeCharacterGrabPlanarDirection(
+                ownerRoot.transform.forward,
+                out Vector3 rootDirection))
+        {
+            return rootDirection;
+        }
+
+        return Vector3.forward;
+    }
+
+    private void CacheCharacterThrowFacingReferences(NetworkObject ownerRoot)
+    {
+        if (ownerRoot == null)
+        {
+            ClearCharacterThrowFacingReferences();
+            return;
+        }
+
+        if (_characterThrowFacingOwnerRoot == ownerRoot &&
+            _characterThrowFacingMotor != null &&
+            ResolveRootNetworkObject(_characterThrowFacingMotor) == ownerRoot)
+        {
+            return;
+        }
+
+        _characterThrowFacingOwnerRoot = ownerRoot;
+        _characterThrowFacingMotor =
+            ResolveSameNetworkObjectComponentInChildren<
+                HamsterFullRagdollMotor>(ownerRoot);
+    }
+
+    private void ClearCharacterThrowFacingReferences()
+    {
+        _characterThrowFacingOwnerRoot = null;
+        _characterThrowFacingMotor = null;
     }
 
     private Vector3 GetCharacterThrowReleasePosition(Vector3 throwDirection)
