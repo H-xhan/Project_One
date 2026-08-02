@@ -2860,7 +2860,7 @@ MonoBehaviour:
   characterGrabDebugLogs: 0
   enableCharacterCarryFollow: 1
   characterCarryForwardOffset: 0.05
-  characterCarryUpOffset: 0.85
+  characterCarryUpOffset: 0.8
   characterCarryRightOffset: 0
   characterCarryFollowLerp: 18
   characterCarryMaxDistance: 4
