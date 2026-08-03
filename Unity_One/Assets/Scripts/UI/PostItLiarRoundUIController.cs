@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Globalization;
 using System.Text;
 using TMPro;
@@ -25,6 +26,10 @@ public sealed class PostItLiarRoundUIController : MonoBehaviour
     [SerializeField] private TMP_Text phaseDeadlineText;
 
     [Header("Phase Panels")]
+    [SerializeField] private GameObject promptAuthorPanel;
+    [SerializeField] private CanvasGroup promptAuthorCanvasGroup;
+    [SerializeField] private GameObject promptAuthorWaitingPanel;
+    [SerializeField] private CanvasGroup promptAuthorWaitingCanvasGroup;
     [SerializeField] private GameObject secretRolePanel;
     [SerializeField] private GameObject clueInputPanel;
     [SerializeField] private GameObject liarGuessPanel;
@@ -32,6 +37,17 @@ public sealed class PostItLiarRoundUIController : MonoBehaviour
     [SerializeField] private GameObject liarVotePanel;
     [SerializeField] private GameObject liarVoteWaitingPanel;
     [SerializeField] private GameObject postItRevealPanel;
+
+    [Header("Prompt Authoring")]
+    [SerializeField] private TMP_Text promptAuthorRoleText;
+    [SerializeField] private TMP_Dropdown promptAuthorCategoryDropdown;
+    [SerializeField] private TMP_InputField promptAuthorAnswerInputField;
+    [SerializeField] private TMP_Text promptAuthorCharacterCountText;
+    [SerializeField] private Button promptAuthorSubmitButton;
+    [SerializeField] private TMP_Text promptAuthorErrorText;
+    [SerializeField] private TMP_Text promptAuthorDeadlineText;
+    [SerializeField] private TMP_Text promptAuthorWaitingRoleText;
+    [SerializeField] private TMP_Text promptAuthorWaitingDeadlineText;
 
     [Header("Secret Role")]
     [SerializeField] private TMP_Text secretCategoryText;
@@ -79,6 +95,7 @@ public sealed class PostItLiarRoundUIController : MonoBehaviour
     [SerializeField] private TMP_Text revealAuthoredCluesText;
     [SerializeField] private TMP_Text revealVotesText;
     [SerializeField] private TMP_Text revealPlayerScoresText;
+    [SerializeField] private TMP_Text revealPromptSourceText;
 
     [Header("Selection")]
     [SerializeField] private Color selectedChoiceColor =
@@ -93,6 +110,8 @@ public sealed class PostItLiarRoundUIController : MonoBehaviour
     private readonly ColorBlock[] _voteCandidateBaseColors =
         new ColorBlock[PostItLiarFixedSet.Capacity];
     private readonly StringBuilder _builder = new StringBuilder(512);
+    private readonly List<string> _promptAuthorCategoryOptions =
+        new List<string>(PostItLiarCategorySet.Capacity);
 
     private PostItRoundManager _boundRoundManager;
     private float _nextBindAttemptTime;
@@ -211,6 +230,9 @@ public sealed class PostItLiarRoundUIController : MonoBehaviour
         TMP_Text target = null;
         switch (kind)
         {
+            case PostItLiarSubmissionKind.CustomPrompt:
+                target = promptAuthorErrorText;
+                break;
             case PostItLiarSubmissionKind.Clue:
                 target = clueValidationText;
                 break;
@@ -222,7 +244,11 @@ public sealed class PostItLiarRoundUIController : MonoBehaviour
                 break;
         }
 
-        SetText(target, GetSubmitResultLabel(result));
+        SetText(
+            target,
+            kind == PostItLiarSubmissionKind.CustomPrompt
+                ? GetCustomPromptSubmitResultLabel(result)
+                : GetSubmitResultLabel(result));
         ApplyCurrentState();
     }
 
@@ -265,6 +291,7 @@ public sealed class PostItLiarRoundUIController : MonoBehaviour
             state.Phase == PostItLiarPhase.Brawl);
 
         bool showRoot =
+            state.Phase == PostItLiarPhase.PromptAuthoring ||
             state.Phase == PostItLiarPhase.SecretReveal ||
             state.Phase == PostItLiarPhase.ClueWrite ||
             state.Phase == PostItLiarPhase.ClueLock ||
@@ -273,6 +300,8 @@ public sealed class PostItLiarRoundUIController : MonoBehaviour
             state.Phase == PostItLiarPhase.Reveal;
         SetLiarRootVisible(showRoot);
 
+        SetPromptAuthorPanelVisible(false);
+        SetPromptAuthorWaitingPanelVisible(false);
         SetActive(
             secretRolePanel,
             state.Phase == PostItLiarPhase.SecretReveal);
@@ -290,6 +319,9 @@ public sealed class PostItLiarRoundUIController : MonoBehaviour
 
         switch (state.Phase)
         {
+            case PostItLiarPhase.PromptAuthoring:
+                RenderPromptAuthoring();
+                break;
             case PostItLiarPhase.SecretReveal:
                 RenderSecretRole(state);
                 break;
@@ -308,8 +340,45 @@ public sealed class PostItLiarRoundUIController : MonoBehaviour
                 break;
         }
 
+        if (state.Phase != PostItLiarPhase.PromptAuthoring)
+            ReleasePromptAuthorInputFocus();
+
         _lastDeadlineSeconds = int.MinValue;
         RefreshDeadline(true);
+    }
+
+    private void RenderPromptAuthoring()
+    {
+        if (!TryGetLocalPrivateRole(
+                out PostItLiarPrivateRoleData privateRole) ||
+            _boundRoundManager == null ||
+            privateRole.PhaseRevision !=
+                _boundRoundManager.LiarPublicState.PhaseRevision)
+        {
+            SetPromptAuthorWaitingPanelVisible(true);
+            SetText(
+                promptAuthorWaitingRoleText,
+                "출제 역할 정보를 동기화하고 있습니다");
+            return;
+        }
+
+        if (!privateRole.IsPromptAuthor)
+        {
+            SetPromptAuthorWaitingPanelVisible(true);
+            SetText(
+                promptAuthorWaitingRoleText,
+                privateRole.Role == PostItLiarRole.Liar
+                    ? "당신은 라이어입니다.\n시민이 주제를 정하고 있습니다."
+                    : "당신은 시민입니다.\n출제자가 주제와 정답을 정하고 있습니다.");
+            return;
+        }
+
+        SetPromptAuthorPanelVisible(true);
+        SetText(
+            promptAuthorRoleText,
+            "당신은 시민 출제자입니다.\n이번 라운드의 주제와 정답을 정하세요.");
+        RefreshPromptAuthorCategories(privateRole.EligibleCategories);
+        RefreshPromptAuthorInputState();
     }
 
     private void RenderSecretRole(PostItLiarPhaseState state)
@@ -565,6 +634,7 @@ public sealed class PostItLiarRoundUIController : MonoBehaviour
             SetText(revealAuthoredCluesText, string.Empty);
             SetText(revealVotesText, string.Empty);
             SetText(revealPlayerScoresText, string.Empty);
+            SetText(revealPromptSourceText, string.Empty);
             return;
         }
 
@@ -660,6 +730,22 @@ public sealed class PostItLiarRoundUIController : MonoBehaviour
                 _builder.Append(" · 연결 종료");
         }
         SetText(revealPlayerScoresText, _builder.ToString());
+
+        if (reveal.UsedCustomPrompt &&
+            reveal.PromptAuthorSlot < PostItLiarFixedSet.Capacity)
+        {
+            SetText(
+                revealPromptSourceText,
+                $"이번 주제 출제자 · P{reveal.PromptAuthorSlot + 1}");
+        }
+        else if (reveal.UsedPresetFallback)
+        {
+            SetText(revealPromptSourceText, "기본 주제 사용");
+        }
+        else
+        {
+            SetText(revealPromptSourceText, string.Empty);
+        }
     }
 
     private void RefreshDeadline(bool force)
@@ -681,7 +767,10 @@ public sealed class PostItLiarRoundUIController : MonoBehaviour
         if (!deadlineVisible)
         {
             if (force || _lastDeadlineSeconds != int.MinValue)
+            {
                 SetText(phaseDeadlineText, string.Empty);
+                SetPromptAuthorDeadlineText(string.Empty);
+            }
             _lastDeadlineSeconds = int.MinValue;
             return;
         }
@@ -699,7 +788,149 @@ public sealed class PostItLiarRoundUIController : MonoBehaviour
             return;
 
         _lastDeadlineSeconds = remainingSeconds;
-        SetText(phaseDeadlineText, $"남은 시간 · {remainingSeconds}초");
+        string deadlineLabel = $"남은 시간 · {remainingSeconds}초";
+        SetText(
+            phaseDeadlineText,
+            state.Phase == PostItLiarPhase.PromptAuthoring
+                ? string.Empty
+                : deadlineLabel);
+        SetPromptAuthorDeadlineText(
+            state.Phase == PostItLiarPhase.PromptAuthoring
+                ? deadlineLabel
+                : string.Empty);
+    }
+
+    private void RefreshPromptAuthorCategories(
+        PostItLiarCategorySet categories)
+    {
+        if (promptAuthorCategoryDropdown == null)
+            return;
+
+        string selectedCategory =
+            promptAuthorCategoryDropdown.options.Count > 0 &&
+            promptAuthorCategoryDropdown.value >= 0 &&
+            promptAuthorCategoryDropdown.value <
+            promptAuthorCategoryDropdown.options.Count
+                ? promptAuthorCategoryDropdown.options[
+                    promptAuthorCategoryDropdown.value].text
+                : string.Empty;
+
+        bool optionsChanged =
+            promptAuthorCategoryDropdown.options.Count != categories.Count;
+        if (!optionsChanged)
+        {
+            for (int index = 0; index < categories.Count; index++)
+            {
+                if (!string.Equals(
+                        promptAuthorCategoryDropdown.options[index].text,
+                        categories.Get(index).ToString(),
+                        StringComparison.Ordinal))
+                {
+                    optionsChanged = true;
+                    break;
+                }
+            }
+        }
+
+        if (!optionsChanged)
+            return;
+
+        _promptAuthorCategoryOptions.Clear();
+        int selectedIndex = 0;
+        for (int index = 0; index < categories.Count; index++)
+        {
+            string category = categories.Get(index).ToString();
+            if (string.IsNullOrEmpty(category))
+                continue;
+
+            if (string.Equals(
+                    category,
+                    selectedCategory,
+                    StringComparison.Ordinal))
+            {
+                selectedIndex = _promptAuthorCategoryOptions.Count;
+            }
+            _promptAuthorCategoryOptions.Add(category);
+        }
+
+        promptAuthorCategoryDropdown.ClearOptions();
+        promptAuthorCategoryDropdown.AddOptions(
+            _promptAuthorCategoryOptions);
+        promptAuthorCategoryDropdown.SetValueWithoutNotify(
+            Mathf.Clamp(
+                selectedIndex,
+                0,
+                Mathf.Max(0, _promptAuthorCategoryOptions.Count - 1)));
+        promptAuthorCategoryDropdown.RefreshShownValue();
+    }
+
+    private void RefreshPromptAuthorInputState()
+    {
+        string answer = promptAuthorAnswerInputField != null
+            ? promptAuthorAnswerInputField.text ?? string.Empty
+            : string.Empty;
+        TryGetTextMetrics(
+            answer,
+            PostItPromptAuthoringModule.MaxAnswerTextElements,
+            PostItPromptAuthoringModule.MaxAnswerUtf8Bytes,
+            out int textElementCount,
+            out int utf8ByteCount);
+        SetText(
+            promptAuthorCharacterCountText,
+            $"{textElementCount}/{PostItPromptAuthoringModule.MaxAnswerTextElements} · " +
+            $"{utf8ByteCount}/{PostItPromptAuthoringModule.MaxAnswerUtf8Bytes}B");
+
+        bool alreadySubmitted =
+            _boundRoundManager != null &&
+            _boundRoundManager.HasSubmittedLiarCustomPrompt;
+        bool hasCategory =
+            promptAuthorCategoryDropdown != null &&
+            promptAuthorCategoryDropdown.options.Count > 0;
+        bool canEdit = !alreadySubmitted && hasCategory;
+        if (promptAuthorCategoryDropdown != null)
+            promptAuthorCategoryDropdown.interactable = canEdit;
+        if (promptAuthorAnswerInputField != null)
+            promptAuthorAnswerInputField.interactable = canEdit;
+        if (promptAuthorSubmitButton != null)
+            promptAuthorSubmitButton.interactable = canEdit;
+
+        if (alreadySubmitted)
+            SetText(promptAuthorErrorText, "출제 완료 · 수정할 수 없습니다");
+        else if (!hasCategory)
+            SetText(promptAuthorErrorText, "사용 가능한 카테고리가 없습니다");
+    }
+
+    private void HandlePromptAuthorCategoryChanged(int value)
+    {
+        SetText(promptAuthorErrorText, string.Empty);
+        RefreshPromptAuthorInputState();
+    }
+
+    private void HandlePromptAuthorAnswerChanged(string value)
+    {
+        SetText(promptAuthorErrorText, string.Empty);
+        RefreshPromptAuthorInputState();
+    }
+
+    private void SubmitPromptAuthoring()
+    {
+        if (_boundRoundManager == null ||
+            promptAuthorCategoryDropdown == null ||
+            promptAuthorAnswerInputField == null ||
+            promptAuthorSubmitButton == null ||
+            !promptAuthorSubmitButton.interactable ||
+            promptAuthorCategoryDropdown.options.Count == 0)
+        {
+            return;
+        }
+
+        int selectedIndex = Mathf.Clamp(
+            promptAuthorCategoryDropdown.value,
+            0,
+            promptAuthorCategoryDropdown.options.Count - 1);
+        _boundRoundManager.RequestSubmitPostItCustomPrompt(
+            promptAuthorCategoryDropdown.options[selectedIndex].text,
+            promptAuthorAnswerInputField.text ?? string.Empty);
     }
 
     private void RefreshClueInputState(PostItLiarPhase phase)
@@ -709,6 +940,8 @@ public sealed class PostItLiarRoundUIController : MonoBehaviour
             : string.Empty;
         bool textValid = TryGetTextMetrics(
             clue,
+            PostItClueModule.MaxTextElements,
+            PostItClueModule.MaxUtf8Bytes,
             out int textElementCount,
             out int utf8ByteCount);
         SetText(
@@ -837,6 +1070,18 @@ public sealed class PostItLiarRoundUIController : MonoBehaviour
         if (_buttonListenersRegistered)
             return;
 
+        if (promptAuthorCategoryDropdown != null)
+        {
+            promptAuthorCategoryDropdown.onValueChanged.AddListener(
+                HandlePromptAuthorCategoryChanged);
+        }
+        if (promptAuthorAnswerInputField != null)
+        {
+            promptAuthorAnswerInputField.onValueChanged.AddListener(
+                HandlePromptAuthorAnswerChanged);
+        }
+        if (promptAuthorSubmitButton != null)
+            promptAuthorSubmitButton.onClick.AddListener(SubmitPromptAuthoring);
         if (clueInputField != null)
             clueInputField.onValueChanged.AddListener(HandleClueTextChanged);
         if (clueSubmitButton != null)
@@ -878,6 +1123,21 @@ public sealed class PostItLiarRoundUIController : MonoBehaviour
         if (!_buttonListenersRegistered)
             return;
 
+        if (promptAuthorCategoryDropdown != null)
+        {
+            promptAuthorCategoryDropdown.onValueChanged.RemoveListener(
+                HandlePromptAuthorCategoryChanged);
+        }
+        if (promptAuthorAnswerInputField != null)
+        {
+            promptAuthorAnswerInputField.onValueChanged.RemoveListener(
+                HandlePromptAuthorAnswerChanged);
+        }
+        if (promptAuthorSubmitButton != null)
+        {
+            promptAuthorSubmitButton.onClick.RemoveListener(
+                SubmitPromptAuthoring);
+        }
         if (clueInputField != null)
             clueInputField.onValueChanged.RemoveListener(HandleClueTextChanged);
         if (clueSubmitButton != null)
@@ -913,20 +1173,33 @@ public sealed class PostItLiarRoundUIController : MonoBehaviour
 
     private void ConfigureInputField()
     {
-        if (clueInputField == null)
+        ConfigureSingleLineInputField(promptAuthorAnswerInputField);
+        ConfigureSingleLineInputField(clueInputField);
+    }
+
+    private static void ConfigureSingleLineInputField(
+        TMP_InputField inputField)
+    {
+        if (inputField == null)
             return;
 
-        clueInputField.lineType = TMP_InputField.LineType.SingleLine;
-        clueInputField.contentType = TMP_InputField.ContentType.Standard;
-        clueInputField.characterLimit = 0;
-        clueInputField.richText = false;
-        clueInputField.isRichTextEditingAllowed = false;
+        inputField.lineType = TMP_InputField.LineType.SingleLine;
+        inputField.contentType = TMP_InputField.ContentType.Standard;
+        inputField.characterLimit = 0;
+        inputField.richText = false;
+        inputField.isRichTextEditingAllowed = false;
     }
 
     private void ConfigureDynamicText()
     {
         SetRichTextDisabled(publicTopicText);
         SetRichTextDisabled(phaseDeadlineText);
+        SetRichTextDisabled(promptAuthorRoleText);
+        SetRichTextDisabled(promptAuthorCharacterCountText);
+        SetRichTextDisabled(promptAuthorErrorText);
+        SetRichTextDisabled(promptAuthorDeadlineText);
+        SetRichTextDisabled(promptAuthorWaitingRoleText);
+        SetRichTextDisabled(promptAuthorWaitingDeadlineText);
         SetRichTextDisabled(secretCategoryText);
         SetRichTextDisabled(secretRoleText);
         SetRichTextDisabled(secretAnswerText);
@@ -946,6 +1219,7 @@ public sealed class PostItLiarRoundUIController : MonoBehaviour
         SetRichTextDisabled(revealAuthoredCluesText);
         SetRichTextDisabled(revealVotesText);
         SetRichTextDisabled(revealPlayerScoresText);
+        SetRichTextDisabled(revealPromptSourceText);
         SetRichTextDisabled(anonymousClueTexts);
         SetRichTextDisabled(liarChoiceLabels);
         SetRichTextDisabled(voteCandidateSlotTexts);
@@ -1041,11 +1315,26 @@ public sealed class PostItLiarRoundUIController : MonoBehaviour
         _selectedVoteSlot = -1;
         _lastDeadlineSeconds = int.MinValue;
 
+        ReleasePromptAuthorInputFocus();
+        if (promptAuthorAnswerInputField != null)
+            promptAuthorAnswerInputField.SetTextWithoutNotify(string.Empty);
+        if (promptAuthorCategoryDropdown != null)
+        {
+            promptAuthorCategoryDropdown.ClearOptions();
+        }
+        _promptAuthorCategoryOptions.Clear();
+
         if (clueInputField != null)
             clueInputField.SetTextWithoutNotify(string.Empty);
 
         SetText(publicTopicText, string.Empty);
         SetText(phaseDeadlineText, string.Empty);
+        SetText(promptAuthorRoleText, string.Empty);
+        SetText(promptAuthorCharacterCountText, string.Empty);
+        SetText(promptAuthorErrorText, string.Empty);
+        SetText(promptAuthorDeadlineText, string.Empty);
+        SetText(promptAuthorWaitingRoleText, string.Empty);
+        SetText(promptAuthorWaitingDeadlineText, string.Empty);
         SetText(secretCategoryText, string.Empty);
         SetText(secretRoleText, string.Empty);
         SetText(secretAnswerText, string.Empty);
@@ -1065,6 +1354,7 @@ public sealed class PostItLiarRoundUIController : MonoBehaviour
         SetText(revealAuthoredCluesText, string.Empty);
         SetText(revealVotesText, string.Empty);
         SetText(revealPlayerScoresText, string.Empty);
+        SetText(revealPromptSourceText, string.Empty);
         ClearTextArray(anonymousClueTexts);
         ClearTextArray(liarChoiceLabels);
         ClearTextArray(voteCandidateSlotTexts);
@@ -1078,6 +1368,8 @@ public sealed class PostItLiarRoundUIController : MonoBehaviour
     {
         SetActive(publicTopicHud, false);
         SetLiarRootVisible(false);
+        SetPromptAuthorPanelVisible(false);
+        SetPromptAuthorWaitingPanelVisible(false);
         SetActive(secretRolePanel, false);
         SetActive(clueInputPanel, false);
         SetActive(liarGuessPanel, false);
@@ -1098,6 +1390,51 @@ public sealed class PostItLiarRoundUIController : MonoBehaviour
         liarRoundCanvasGroup.alpha = visible ? 1f : 0f;
         liarRoundCanvasGroup.interactable = visible;
         liarRoundCanvasGroup.blocksRaycasts = visible;
+    }
+
+    private void SetPromptAuthorPanelVisible(bool visible)
+    {
+        SetPanelVisible(
+            promptAuthorPanel,
+            promptAuthorCanvasGroup,
+            visible);
+    }
+
+    private void SetPromptAuthorWaitingPanelVisible(bool visible)
+    {
+        SetPanelVisible(
+            promptAuthorWaitingPanel,
+            promptAuthorWaitingCanvasGroup,
+            visible);
+    }
+
+    private static void SetPanelVisible(
+        GameObject root,
+        CanvasGroup canvasGroup,
+        bool visible)
+    {
+        SetActive(root, visible);
+        if (canvasGroup == null)
+            return;
+
+        canvasGroup.alpha = visible ? 1f : 0f;
+        canvasGroup.interactable = visible;
+        canvasGroup.blocksRaycasts = visible;
+    }
+
+    private void SetPromptAuthorDeadlineText(string value)
+    {
+        SetText(promptAuthorDeadlineText, value);
+        SetText(promptAuthorWaitingDeadlineText, value);
+    }
+
+    private void ReleasePromptAuthorInputFocus()
+    {
+        if (promptAuthorAnswerInputField != null &&
+            promptAuthorAnswerInputField.isFocused)
+        {
+            promptAuthorAnswerInputField.DeactivateInputField();
+        }
     }
 
     private bool TryGetLocalPrivateRole(
@@ -1161,6 +1498,8 @@ public sealed class PostItLiarRoundUIController : MonoBehaviour
 
     private static bool TryGetTextMetrics(
         string value,
+        int maxTextElements,
+        int maxUtf8Bytes,
         out int textElementCount,
         out int utf8ByteCount)
     {
@@ -1172,8 +1511,8 @@ public sealed class PostItLiarRoundUIController : MonoBehaviour
             textElementCount =
                 StringInfo.ParseCombiningCharacters(text).Length;
             utf8ByteCount = StrictUtf8.GetByteCount(text);
-            return textElementCount <= PostItClueModule.MaxTextElements &&
-                   utf8ByteCount <= PostItClueModule.MaxUtf8Bytes;
+            return textElementCount <= maxTextElements &&
+                   utf8ByteCount <= maxUtf8Bytes;
         }
         catch (EncoderFallbackException)
         {
@@ -1235,6 +1574,28 @@ public sealed class PostItLiarRoundUIController : MonoBehaviour
                 return "현재 단계에서는 제출할 수 없습니다";
             default:
                 return string.Empty;
+        }
+    }
+
+    private static string GetCustomPromptSubmitResultLabel(
+        PostItLiarSubmitResult result)
+    {
+        switch (result)
+        {
+            case PostItLiarSubmitResult.Accepted:
+                return "출제 완료 · 수정할 수 없습니다";
+            case PostItLiarSubmitResult.Empty:
+                return "정답을 입력하세요";
+            case PostItLiarSubmitResult.TooLong:
+                return "정답은 12자 또는 UTF-8 96B 이하여야 합니다";
+            case PostItLiarSubmitResult.InvalidCategory:
+                return "사용 가능한 카테고리를 선택하세요";
+            case PostItLiarSubmitResult.AnswerMatchesCategory:
+                return "카테고리와 같은 정답은 사용할 수 없습니다";
+            case PostItLiarSubmitResult.InsufficientChoices:
+                return "이 카테고리의 선택지 후보가 부족합니다";
+            default:
+                return GetSubmitResultLabel(result);
         }
     }
 
