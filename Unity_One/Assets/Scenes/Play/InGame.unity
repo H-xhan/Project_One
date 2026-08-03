@@ -25233,7 +25233,7 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: 
   ShowTopMostFoldoutHeaderGroup: 1
-  minPlayersToStart: 1
+  minPlayersToStart: 4
 --- !u!114 &1995524427
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -27545,7 +27545,7 @@ MonoBehaviour:
   guessingDurationSeconds: 15
   debugGuessLogs: 0
   enablePostItLiarMode: 1
-  allowTwoPlayerLiarTestMode: 1
+  allowTwoPlayerLiarTestMode: 0
   postItLiarPromptDatabase: {fileID: 11400000, guid: af1b4a74b6996bb4bb95870c9a27500c, type: 2}
   postItLiarSecretRevealSeconds: 5
   postItLiarClueWriteSeconds: 30
