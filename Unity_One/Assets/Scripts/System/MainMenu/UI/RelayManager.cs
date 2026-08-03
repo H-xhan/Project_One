@@ -29,6 +29,7 @@ public class RelayManager : MonoBehaviour
 
     private bool _servicesInitialized;
     private TaskCompletionSource<bool> _clientConnectedTcs;
+    private int _sessionGeneration;
 
     private void Awake()
     {
@@ -144,9 +145,14 @@ public class RelayManager : MonoBehaviour
 
     public async Task<string> CreateRelay(int maxConnections)
     {
+        int generation = _sessionGeneration;
+
         try
         {
             await EnsureServicesInitialized();
+
+            if (generation != _sessionGeneration)
+                return string.Empty;
 
             if (!TryGetNet(out var nm, out var utp))
                 return string.Empty;
@@ -160,7 +166,14 @@ public class RelayManager : MonoBehaviour
             int mc = Mathf.Max(1, maxConnections);
 
             Allocation alloc = await RelayService.Instance.CreateAllocationAsync(mc);
+
+            if (generation != _sessionGeneration)
+                return string.Empty;
+
             string joinCode = await RelayService.Instance.GetJoinCodeAsync(alloc.AllocationId);
+
+            if (generation != _sessionGeneration)
+                return string.Empty;
 
             utp.SetRelayServerData(
                 alloc.RelayServer.IpV4,
@@ -188,6 +201,9 @@ public class RelayManager : MonoBehaviour
         }
         catch (Exception e)
         {
+            if (generation != _sessionGeneration)
+                return string.Empty;
+
             Debug.LogError($"[Relay] CreateRelay failed: {e}");
             SetCurrentJoinCode(string.Empty);
             return string.Empty;
@@ -201,11 +217,15 @@ public class RelayManager : MonoBehaviour
 
     public async Task<bool> JoinRelay(string joinCode)
     {
+        int generation = _sessionGeneration;
         ClearJoinFailure();
 
         try
         {
             await EnsureServicesInitialized();
+
+            if (generation != _sessionGeneration)
+                return false;
 
             if (!TryGetNet(out var nm, out var utp))
             {
@@ -239,9 +259,15 @@ public class RelayManager : MonoBehaviour
             try
             {
                 joinAlloc = await RelayService.Instance.JoinAllocationAsync(code);
+
+                if (generation != _sessionGeneration)
+                    return false;
             }
             catch (RelayServiceException e)
             {
+                if (generation != _sessionGeneration)
+                    return false;
+
                 int statusCode = GetRelayFailureStatusCode(e);
                 if (IsRelayJoinNotFound(e))
                     SetJoinFailure("RelayJoinNotFound", "방 연결 정보가 만료되었습니다. 새 방 코드로 다시 참가해주세요.", statusCode);
@@ -254,6 +280,9 @@ public class RelayManager : MonoBehaviour
             }
             catch (RequestFailedException e)
             {
+                if (generation != _sessionGeneration)
+                    return false;
+
                 SetJoinFailure("RelayJoinFailed", "Relay 접속에 실패했습니다.", GetRelayFailureStatusCode(e));
                 Debug.LogError($"[Relay] JoinAllocation request failed. reason={LastJoinFailureReason}, status={LastJoinFailureStatusCode}, exception={e}");
                 SetCurrentJoinCode(string.Empty);
@@ -295,6 +324,10 @@ public class RelayManager : MonoBehaviour
                 });
 
                 bool connected = await _clientConnectedTcs.Task;
+
+                if (generation != _sessionGeneration)
+                    return false;
+
                 Log($"[Relay] Client Connected Result={connected}");
 
                 if (connected)
@@ -315,6 +348,9 @@ public class RelayManager : MonoBehaviour
         }
         catch (Exception e)
         {
+            if (generation != _sessionGeneration)
+                return false;
+
             if (!HasJoinFailure)
                 SetJoinFailure("RelayJoinFailed", "Relay 접속에 실패했습니다.");
 
@@ -327,6 +363,28 @@ public class RelayManager : MonoBehaviour
     public async Task<bool> JoinViaCode(string joinCode)
     {
         return await JoinRelay(joinCode);
+    }
+
+    public void ResetSessionState(
+        bool shutdownNetwork,
+        bool clearJoinFailure = true)
+    {
+        _sessionGeneration++;
+
+        if (IsWaitingForClientConnection())
+            _clientConnectedTcs.TrySetResult(false);
+
+        _clientConnectedTcs = null;
+        if (clearJoinFailure)
+            ClearJoinFailure();
+        SetCurrentJoinCode(string.Empty);
+
+        if (shutdownNetwork &&
+            NetworkManager.Singleton != null &&
+            NetworkManager.Singleton.IsListening)
+        {
+            NetworkManager.Singleton.Shutdown();
+        }
     }
 
     private void ClearJoinFailure()
