@@ -22,6 +22,9 @@ public class LobbyUI : MonoBehaviour
     [Tooltip("참가 코드 입력")]
     [SerializeField] private TMP_InputField codeInput;
 
+    [Tooltip("방 생성 전 mutable settings Draft를 편집하는 Controller")]
+    [SerializeField] private RoomSettingsPanelController roomSettingsPanelController;
+
     [Header("Lobby List")]
     [Tooltip("목록 아이템이 생성될 부모(Content)")]
     [SerializeField] private Transform container;
@@ -44,6 +47,7 @@ public class LobbyUI : MonoBehaviour
     [SerializeField] private bool enableDebugLogs = false;
 
     private Coroutine _autoRefreshRoutine;
+    private bool _lobbyEventsSubscribed;
 
     private void Awake()
     {
@@ -61,7 +65,13 @@ public class LobbyUI : MonoBehaviour
                 if (string.IsNullOrEmpty(lobbyName)) lobbyName = "New Room";
 
                 if (LobbyManager.Instance != null)
-                    LobbyManager.Instance.CreateLobby(lobbyName, 4);
+                {
+                    RoomGameplaySettingsSnapshot snapshot =
+                        roomSettingsPanelController != null
+                            ? roomSettingsPanelController.FreezeForCreate()
+                            : RoomGameplaySettingsValidator.CreateDefaultSnapshot();
+                    LobbyManager.Instance.CreateLobby(lobbyName, snapshot);
+                }
             });
         }
 
@@ -111,10 +121,17 @@ public class LobbyUI : MonoBehaviour
         _autoRefreshRoutine = StartCoroutine(WaitForServicesThenEnableUI());
     }
 
+    private void OnDestroy()
+    {
+        UnsubscribeLobbyEvents();
+    }
+
     private IEnumerator WaitForServicesThenEnableUI()
     {
         while (LobbyManager.Instance == null)
             yield return null;
+
+        SubscribeLobbyEvents();
 
         while (UnityServices.State != ServicesInitializationState.Initialized)
             yield return null;
@@ -140,6 +157,48 @@ public class LobbyUI : MonoBehaviour
         if (createLobbyButton != null) createLobbyButton.interactable = enabled;
         if (joinCodeButton != null) joinCodeButton.interactable = enabled;
         if (refreshButton != null) refreshButton.interactable = enabled;
+        if (roomSettingsPanelController != null)
+            roomSettingsPanelController.SetCreateLocked(!enabled);
+    }
+
+    private void SubscribeLobbyEvents()
+    {
+        if (_lobbyEventsSubscribed || LobbyManager.Instance == null)
+            return;
+
+        LobbyManager.Instance.LobbyOperationStarted += HandleLobbyOperationStarted;
+        LobbyManager.Instance.LobbyOperationSucceeded += HandleLobbyOperationSucceeded;
+        LobbyManager.Instance.LobbyOperationFailed += HandleLobbyOperationFailed;
+        _lobbyEventsSubscribed = true;
+    }
+
+    private void UnsubscribeLobbyEvents()
+    {
+        if (!_lobbyEventsSubscribed || LobbyManager.Instance == null)
+            return;
+
+        LobbyManager.Instance.LobbyOperationStarted -= HandleLobbyOperationStarted;
+        LobbyManager.Instance.LobbyOperationSucceeded -= HandleLobbyOperationSucceeded;
+        LobbyManager.Instance.LobbyOperationFailed -= HandleLobbyOperationFailed;
+        _lobbyEventsSubscribed = false;
+    }
+
+    private void HandleLobbyOperationStarted(string message)
+    {
+        _ = message;
+        SetInteractable(false);
+    }
+
+    private void HandleLobbyOperationSucceeded(string message)
+    {
+        _ = message;
+        SetInteractable(false);
+    }
+
+    private void HandleLobbyOperationFailed(string message)
+    {
+        _ = message;
+        SetInteractable(IsServicesReady());
     }
 
     private void SetupTemplateHeader()

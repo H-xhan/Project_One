@@ -26,6 +26,9 @@ public class RoundUI : MonoBehaviour
     [SerializeField, Tooltip("방 코드를 표시할 텍스트")]
     private TMP_Text roomCodeText;
 
+    [SerializeField, Tooltip("canonical 방 설정을 읽기 전용으로 표시할 텍스트")]
+    private TMP_Text roomSettingsText;
+
     private bool _readyButtonListenerRegistered;
 
     private void Awake()
@@ -70,6 +73,9 @@ public class RoundUI : MonoBehaviour
 
         if (roomCodeText == null)
             roomCodeText = FindChildTextByName("RoomCodeText");
+
+        if (roomSettingsText == null)
+            roomSettingsText = FindChildTextByName("RoomSettingsText");
     }
 
     private void RegisterReadyButtonListener()
@@ -100,6 +106,7 @@ public class RoundUI : MonoBehaviour
         UpdateTimerText();
         UpdateStateText();
         UpdateRoomCodeText();
+        UpdateRoomSettingsText();
     }
 
     private void UpdateReadyText()
@@ -197,6 +204,22 @@ public class RoundUI : MonoBehaviour
         }
 
         roomCodeText.text = lobbyCode;
+    }
+
+    private void UpdateRoomSettingsText()
+    {
+        if (roomSettingsText == null)
+            return;
+
+        RoomGameplaySettingsSnapshot snapshot = LobbyManager.Instance != null
+            ? LobbyManager.Instance.CanonicalRoomSettings
+            : RoomGameplaySettingsValidator.CreateDefaultSnapshot();
+        string promptMode = snapshot.PostItLiar.PromptSourceMode ==
+                            PostItLiarPromptSourceMode.CitizenAuthor
+            ? "시민 직접 출제"
+            : "기본 주제";
+
+        roomSettingsText.text = $"주제 방식: {promptMode}";
     }
 
     private void OnClickReady()
