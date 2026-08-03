@@ -48,6 +48,21 @@ public sealed class PostItClueModule
         IReadOnlyList<string> forbiddenStrings,
         out string normalized)
     {
+        return ValidateAndNormalize(
+            raw,
+            secretAnswer,
+            forbiddenStrings,
+            true,
+            out normalized);
+    }
+
+    public static PostItLiarSubmitResult ValidateAndNormalize(
+        string raw,
+        string secretAnswer,
+        IReadOnlyList<string> forbiddenStrings,
+        bool validateSecretRestrictions,
+        out string normalized)
+    {
         normalized = string.Empty;
         if (!TryNormalizeSingleLine(raw, out normalized))
             return PostItLiarSubmitResult.InvalidText;
@@ -75,6 +90,9 @@ public sealed class PostItClueModule
             normalized = string.Empty;
             return PostItLiarSubmitResult.InvalidText;
         }
+
+        if (!validateSecretRestrictions)
+            return PostItLiarSubmitResult.Accepted;
 
         if (!TryNormalizeSearchTerm(secretAnswer, out string normalizedAnswer))
         {
@@ -118,6 +136,23 @@ public sealed class PostItClueModule
         IReadOnlyList<string> forbiddenStrings,
         out string normalized)
     {
+        return TrySubmit(
+            stableSlot,
+            raw,
+            secretAnswer,
+            forbiddenStrings,
+            true,
+            out normalized);
+    }
+
+    public PostItLiarSubmitResult TrySubmit(
+        byte stableSlot,
+        string raw,
+        string secretAnswer,
+        IReadOnlyList<string> forbiddenStrings,
+        bool validateSecretRestrictions,
+        out string normalized)
+    {
         normalized = string.Empty;
         if (stableSlot >= _participantCount)
             return PostItLiarSubmitResult.NotParticipant;
@@ -132,6 +167,7 @@ public sealed class PostItClueModule
             raw,
             secretAnswer,
             forbiddenStrings,
+            validateSecretRestrictions,
             out normalized);
         if (validationResult != PostItLiarSubmitResult.Accepted)
             return validationResult;

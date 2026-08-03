@@ -14,7 +14,8 @@ public enum PostItLiarPhase : byte
     LiarGuess = 6,
     LiarVote = 7,
     Reveal = 8,
-    Complete = 9
+    Complete = 9,
+    PromptAuthoring = 10
 }
 
 [Serializable]
@@ -43,7 +44,10 @@ public enum PostItLiarSubmitResult : byte
     Duplicate = 12,
     Late = 13,
     Stale = 14,
-    InvalidText = 15
+    InvalidText = 15,
+    InvalidCategory = 16,
+    AnswerMatchesCategory = 17,
+    InsufficientChoices = 18
 }
 
 [Serializable]
@@ -52,7 +56,8 @@ public enum PostItLiarSubmissionKind : byte
     None = 0,
     Clue = 1,
     LiarAnswer = 2,
-    CitizenVote = 3
+    CitizenVote = 3,
+    CustomPrompt = 4
 }
 
 [Serializable]
@@ -155,6 +160,90 @@ public struct PostItLiarRosterEntry
 }
 
 [Serializable]
+public struct PostItLiarCategorySet : INetworkSerializable
+{
+    public const byte Capacity = 8;
+
+    public byte Count;
+    public FixedString128Bytes Item0;
+    public FixedString128Bytes Item1;
+    public FixedString128Bytes Item2;
+    public FixedString128Bytes Item3;
+    public FixedString128Bytes Item4;
+    public FixedString128Bytes Item5;
+    public FixedString128Bytes Item6;
+    public FixedString128Bytes Item7;
+
+    public FixedString128Bytes Get(int index)
+    {
+        switch (index)
+        {
+            case 0: return Item0;
+            case 1: return Item1;
+            case 2: return Item2;
+            case 3: return Item3;
+            case 4: return Item4;
+            case 5: return Item5;
+            case 6: return Item6;
+            case 7: return Item7;
+            default: return default;
+        }
+    }
+
+    public bool TrySet(int index, FixedString128Bytes value)
+    {
+        switch (index)
+        {
+            case 0:
+                Item0 = value;
+                break;
+            case 1:
+                Item1 = value;
+                break;
+            case 2:
+                Item2 = value;
+                break;
+            case 3:
+                Item3 = value;
+                break;
+            case 4:
+                Item4 = value;
+                break;
+            case 5:
+                Item5 = value;
+                break;
+            case 6:
+                Item6 = value;
+                break;
+            case 7:
+                Item7 = value;
+                break;
+            default:
+                return false;
+        }
+
+        if (Count <= index)
+            Count = (byte)(index + 1);
+
+        return true;
+    }
+
+    public void NetworkSerialize<T>(BufferSerializer<T> serializer)
+        where T : IReaderWriter
+    {
+        serializer.SerializeValue(ref Count);
+        serializer.SerializeValue(ref Item0);
+        serializer.SerializeValue(ref Item1);
+        serializer.SerializeValue(ref Item2);
+        serializer.SerializeValue(ref Item3);
+        serializer.SerializeValue(ref Item4);
+        serializer.SerializeValue(ref Item5);
+        serializer.SerializeValue(ref Item6);
+        serializer.SerializeValue(ref Item7);
+    }
+}
+
+[Serializable]
 public struct PostItLiarPrivateRoleData : INetworkSerializable
 {
     public int RoundRevision;
@@ -162,6 +251,8 @@ public struct PostItLiarPrivateRoleData : INetworkSerializable
     public byte StableSlot;
     public PostItLiarRole Role;
     public FixedString128Bytes SecretAnswer;
+    public bool IsPromptAuthor;
+    public PostItLiarCategorySet EligibleCategories;
 
     public bool IsValid =>
         RoundRevision >= 0 &&
@@ -181,6 +272,26 @@ public struct PostItLiarPrivateRoleData : INetworkSerializable
         StableSlot = stableSlot;
         Role = role;
         SecretAnswer = secretAnswer;
+        IsPromptAuthor = false;
+        EligibleCategories = default;
+    }
+
+    public PostItLiarPrivateRoleData(
+        int roundRevision,
+        int phaseRevision,
+        byte stableSlot,
+        PostItLiarRole role,
+        FixedString128Bytes secretAnswer,
+        bool isPromptAuthor,
+        PostItLiarCategorySet eligibleCategories)
+    {
+        RoundRevision = roundRevision;
+        PhaseRevision = phaseRevision;
+        StableSlot = stableSlot;
+        Role = role;
+        SecretAnswer = secretAnswer;
+        IsPromptAuthor = isPromptAuthor;
+        EligibleCategories = eligibleCategories;
     }
 
     public void NetworkSerialize<T>(BufferSerializer<T> serializer)
@@ -191,6 +302,8 @@ public struct PostItLiarPrivateRoleData : INetworkSerializable
         serializer.SerializeValue(ref StableSlot);
         serializer.SerializeValue(ref Role);
         serializer.SerializeValue(ref SecretAnswer);
+        serializer.SerializeValue(ref IsPromptAuthor);
+        serializer.SerializeValue(ref EligibleCategories);
     }
 }
 
@@ -567,6 +680,9 @@ public struct PostItLiarRevealData : INetworkSerializable
     public PostItLiarClueSet AuthoredClues;
     public PostItLiarVoteSet Votes;
     public PostItLiarPlayerResultSet PlayerResults;
+    public bool UsedCustomPrompt;
+    public bool UsedPresetFallback;
+    public byte PromptAuthorSlot;
 
     public void NetworkSerialize<T>(BufferSerializer<T> serializer)
         where T : IReaderWriter
@@ -582,6 +698,9 @@ public struct PostItLiarRevealData : INetworkSerializable
         serializer.SerializeValue(ref AuthoredClues);
         serializer.SerializeValue(ref Votes);
         serializer.SerializeValue(ref PlayerResults);
+        serializer.SerializeValue(ref UsedCustomPrompt);
+        serializer.SerializeValue(ref UsedPresetFallback);
+        serializer.SerializeValue(ref PromptAuthorSlot);
     }
 }
 

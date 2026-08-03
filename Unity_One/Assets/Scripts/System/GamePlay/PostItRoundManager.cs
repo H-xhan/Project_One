@@ -78,6 +78,9 @@ public class PostItRoundManager : NetworkBehaviour
     [SerializeField, Min(0.1f), Tooltip("역할과 비밀 정답을 확인하는 시간(초)입니다.")]
     private float postItLiarSecretRevealSeconds = 5f;
 
+    [SerializeField, Min(0.1f), Tooltip("시민 출제자가 카테고리와 비밀 정답을 제출하는 시간(초)입니다.")]
+    private float postItLiarPromptAuthoringSeconds = 20f;
+
     [SerializeField, Min(0.1f), Tooltip("각 참가자가 단서 하나를 작성하는 시간(초)입니다.")]
     private float postItLiarClueWriteSeconds = 30f;
 
@@ -161,6 +164,8 @@ public class PostItRoundManager : NetworkBehaviour
             NetworkVariableWritePermission.Server);
     private readonly PostItPromptModule _postItPromptModule =
         new PostItPromptModule();
+    private readonly PostItPromptAuthoringModule _postItPromptAuthoringModule =
+        new PostItPromptAuthoringModule();
     private readonly PostItClueModule _postItClueModule =
         new PostItClueModule();
     private readonly PostItDeductionModule _postItDeductionModule =
@@ -169,8 +174,12 @@ public class PostItRoundManager : NetworkBehaviour
         new List<PostItLiarRosterEntry>(PostItLiarFixedSet.Capacity);
     private readonly Dictionary<ulong, int> _serverPostItLiarBattleScores =
         new Dictionary<ulong, int>();
+    private readonly List<string> _serverPostItLiarEligibleCategories =
+        new List<string>(PostItLiarCategorySet.Capacity);
     private System.Random _serverPostItLiarRandom;
+    private PostItPromptSelection _serverPostItLiarPresetFallbackPrompt;
     private PostItPromptSelection _serverPostItLiarPrompt;
+    private PostItLiarCategorySet _serverPostItLiarEligibleCategorySet;
     private PostItLiarClueSet _serverPostItLiarAuthoredClues;
     private PostItLiarClueSet _serverPostItLiarAnonymousClues;
     private PostItLiarChoiceSet _serverPostItLiarChoices;
@@ -178,6 +187,13 @@ public class PostItRoundManager : NetworkBehaviour
     private PostItLiarRevealData _serverPostItLiarReveal;
     private int _serverPostItLiarDecisionRoundRevision = -1;
     private byte _serverPostItLiarSlot = PostItLiarFixedSet.InvalidSlot;
+    private byte _serverPostItLiarPromptAuthorSlot =
+        PostItLiarFixedSet.InvalidSlot;
+    private bool _serverPostItLiarCitizenAuthorMode;
+    private bool _serverPostItLiarPromptFrozen;
+    private bool _serverPostItLiarUsedCustomPrompt;
+    private bool _serverPostItLiarUsedPresetFallback;
+    private bool _serverPostItLiarAuthorDisconnectedDuringAuthoring;
     private bool _serverPostItLiarPreparedActive;
     private bool _serverPostItLiarStarted;
     private bool _serverPostItLiarBrawlCommitted;
@@ -202,6 +218,7 @@ public class PostItRoundManager : NetworkBehaviour
     private bool _hasSubmittedPostItLiarClue;
     private bool _hasSubmittedPostItLiarAnswer;
     private bool _hasSubmittedPostItLiarVote;
+    private bool _hasSubmittedPostItLiarCustomPrompt;
 
     public event Action WorldDropsChanged;
     public event Action GuessScoresChanged;
@@ -252,6 +269,8 @@ public class PostItRoundManager : NetworkBehaviour
         HasCurrentLocalLiarSubmission(_hasSubmittedPostItLiarAnswer);
     public bool HasSubmittedLiarVote =>
         HasCurrentLocalLiarSubmission(_hasSubmittedPostItLiarVote);
+    public bool HasSubmittedLiarCustomPrompt =>
+        HasCurrentLocalLiarSubmission(_hasSubmittedPostItLiarCustomPrompt);
 
     private struct ServerPostItGuessEntry
     {
@@ -338,6 +357,8 @@ public class PostItRoundManager : NetworkBehaviour
     public override void OnNetworkSpawn()
     {
         base.OnNetworkSpawn();
+        _localPostItLiarLastClearedRevision = -1;
+        ClearLocalPostItLiarState(false);
 
         if (IsServer && _worldDropPayloads.Count == 0 && _networkWorldDrops.Count > 0)
         {
@@ -435,6 +456,7 @@ public class PostItRoundManager : NetworkBehaviour
             }
 
             ClearLocalPostItLiarState(true);
+            _localPostItLiarLastClearedRevision = -1;
             NotifyWorldDropsChanged();
             NotifyGuessScoresChanged();
         }
@@ -1715,13 +1737,67 @@ public class PostItRoundManager : NetworkBehaviour
             return true;
         }
 
+        bool citizenAuthorMode =
+            ResolveServerPostItLiarPromptSourceMode() ==
+            PostItLiarPromptSourceMode.CitizenAuthor;
+        bool promptAuthoringReady = false;
+        byte promptAuthorSlot = PostItLiarFixedSet.InvalidSlot;
+        PostItLiarCategorySet eligibleCategorySet = default;
+        List<string> eligibleCategories = new List<string>(
+            PostItLiarCategorySet.Capacity);
+        if (citizenAuthorMode &&
+            _postItPromptAuthoringModule.TryGetEligibleCategories(
+                postItLiarPromptDatabase,
+                eligibleCategories,
+                out _) &&
+            TryBuildPostItLiarCategorySet(
+                eligibleCategories,
+                out eligibleCategorySet))
+        {
+            List<byte> authorCandidates = new List<byte>(participantCount - 1);
+            for (int index = 0; index < roster.Count; index++)
+            {
+                PostItLiarRosterEntry entry = roster[index];
+                if (entry.IsConnected && entry.StableSlot != liarSlot)
+                    authorCandidates.Add(entry.StableSlot);
+            }
+
+            if (authorCandidates.Count > 0)
+            {
+                promptAuthorSlot = authorCandidates[
+                    random.Next(authorCandidates.Count)];
+                promptAuthoringReady = true;
+            }
+        }
+
         _serverPostItLiarRoster.Clear();
         _serverPostItLiarRoster.AddRange(roster);
         _serverPostItLiarBattleScores.Clear();
+        _serverPostItLiarEligibleCategories.Clear();
+        if (promptAuthoringReady)
+        {
+            int categoryCount = Math.Min(
+                eligibleCategories.Count,
+                PostItLiarCategorySet.Capacity);
+            for (int index = 0; index < categoryCount; index++)
+                _serverPostItLiarEligibleCategories.Add(eligibleCategories[index]);
+        }
         _serverPostItLiarRandom = random;
+        _serverPostItLiarPresetFallbackPrompt = prompt;
         _serverPostItLiarPrompt = prompt;
+        _serverPostItLiarEligibleCategorySet = promptAuthoringReady
+            ? eligibleCategorySet
+            : default;
         _serverPostItLiarChoices = choices;
         _serverPostItLiarSlot = liarSlot;
+        _serverPostItLiarPromptAuthorSlot = promptAuthoringReady
+            ? promptAuthorSlot
+            : PostItLiarFixedSet.InvalidSlot;
+        _serverPostItLiarCitizenAuthorMode = citizenAuthorMode;
+        _serverPostItLiarPromptFrozen = !promptAuthoringReady;
+        _serverPostItLiarUsedCustomPrompt = false;
+        _serverPostItLiarUsedPresetFallback =
+            citizenAuthorMode && !promptAuthoringReady;
         _serverPostItLiarDecisionRoundRevision = roundRevision;
         _serverPostItLiarPreparedActive = true;
         _serverPostItLiarStarted = false;
@@ -1735,6 +1811,14 @@ public class PostItRoundManager : NetworkBehaviour
         _serverPostItLiarAnonymousClues = default;
         _serverPostItLiarBattleResultSet = default;
         _serverPostItLiarReveal = default;
+        if (citizenAuthorMode)
+        {
+            CustomPromptLog(
+                roundRevision,
+                promptAuthoringReady
+                    ? $"mode=CitizenAuthor phase=Prepared eligibleCategories={_serverPostItLiarEligibleCategories.Count}"
+                    : "mode=CitizenAuthor source=PresetFallback reason=NoEligibleAuthoringPath");
+        }
         if (_serverPostItLiarTwoPlayerTestActive)
         {
             LiarTestLog(
@@ -1775,54 +1859,37 @@ public class PostItRoundManager : NetworkBehaviour
 
         if (!IsCountdownState() ||
             !TryValidateFrozenPostItLiarRoster(true) ||
-            _serverPostItLiarPrompt == null)
+            _serverPostItLiarPresetFallbackPrompt == null)
         {
             return false;
         }
 
-        if (!SetPostItLiarPhase(
-                PostItLiarPhase.SecretReveal,
-                postItLiarSecretRevealSeconds))
+        if (_serverPostItLiarCitizenAuthorMode &&
+            !_serverPostItLiarPromptFrozen)
+        {
+            if (!SetPostItLiarPhase(
+                    PostItLiarPhase.PromptAuthoring,
+                    postItLiarPromptAuthoringSeconds))
+            {
+                return false;
+            }
+
+            if (!SendPostItLiarPrivateRoles(includeSecretAnswer: false))
+                return false;
+
+            _serverPostItLiarStarted = true;
+            CustomPromptLog(
+                roundRevision,
+                $"mode=CitizenAuthor phase=PromptAuthoring authorSelected=True eligibleCategories={_serverPostItLiarEligibleCategories.Count}");
+            return true;
+        }
+
+        if (!EnterPostItLiarSecretReveal())
         {
             return false;
         }
 
         _serverPostItLiarStarted = true;
-        int phaseRevision = _postItLiarPhaseState.Value.PhaseRevision;
-        FixedString128Bytes secretAnswer;
-        try
-        {
-            secretAnswer =
-                new FixedString128Bytes(_serverPostItLiarPrompt.SecretAnswer);
-        }
-        catch (ArgumentException)
-        {
-            return false;
-        }
-
-        for (int index = 0;
-             index < _serverPostItLiarRoster.Count;
-             index++)
-        {
-            PostItLiarRosterEntry entry = _serverPostItLiarRoster[index];
-            PostItLiarRole role =
-                entry.StableSlot == _serverPostItLiarSlot
-                    ? PostItLiarRole.Liar
-                    : PostItLiarRole.Citizen;
-            PostItLiarPrivateRoleData privateData =
-                new PostItLiarPrivateRoleData(
-                    roundRevision,
-                    phaseRevision,
-                    entry.StableSlot,
-                    role,
-                    role == PostItLiarRole.Citizen
-                        ? secretAnswer
-                        : default);
-            ReceivePostItLiarPrivateRoleRpc(
-                privateData,
-                RpcTarget.Single(entry.ClientId, RpcTargetUse.Temp));
-        }
-
         return true;
     }
 
@@ -1849,7 +1916,7 @@ public class PostItRoundManager : NetworkBehaviour
         if (!_serverPostItLiarStarted ||
             !_postItLiarPhaseState.Value.IsActive ||
             _postItLiarPhaseState.Value.RoundRevision != roundRevision ||
-            !TryValidateFrozenPostItLiarRoster(true))
+            !TryValidatePostItLiarRosterForPlayingGate())
         {
             shouldAbortToLobby = true;
             return true;
@@ -2066,6 +2133,19 @@ public class PostItRoundManager : NetworkBehaviour
         _serverPostItLiarRoster[rosterIndex] = entry;
 
         PostItLiarPhase phase = _postItLiarPhaseState.Value.Phase;
+        if (phase == PostItLiarPhase.PromptAuthoring)
+        {
+            if (entry.StableSlot == _serverPostItLiarPromptAuthorSlot)
+            {
+                _serverPostItLiarAuthorDisconnectedDuringAuthoring = true;
+                return UsePostItLiarPresetFallbackAndEnterSecretReveal(
+                    "AuthorDisconnected");
+            }
+
+            shouldAbortToLobby = true;
+            return true;
+        }
+
         if (phase == PostItLiarPhase.SecretReveal ||
             phase == PostItLiarPhase.ClueWrite ||
             phase == PostItLiarPhase.ClueLock ||
@@ -2161,6 +2241,55 @@ public class PostItRoundManager : NetworkBehaviour
             cluePayload);
     }
 
+    public void RequestSubmitPostItCustomPrompt(
+        string category,
+        string answer)
+    {
+        if (!TryGetLocalPostItLiarRequestContext(
+                PostItLiarPhase.PromptAuthoring,
+                out int roundRevision,
+                out int phaseRevision,
+                out ulong playerNetworkObjectId,
+                out PostItLiarSubmitResult preflightResult))
+        {
+            NotifyPostItLiarSubmissionResult(
+                PostItLiarSubmissionKind.CustomPrompt,
+                preflightResult);
+            return;
+        }
+
+        if (!_hasLocalPostItLiarPrivateRole ||
+            !_localPostItLiarPrivateRole.IsPromptAuthor)
+        {
+            NotifyPostItLiarSubmissionResult(
+                PostItLiarSubmissionKind.CustomPrompt,
+                PostItLiarSubmitResult.WrongRole);
+            return;
+        }
+
+        FixedString128Bytes categoryPayload;
+        FixedString128Bytes answerPayload;
+        try
+        {
+            categoryPayload = new FixedString128Bytes(category ?? string.Empty);
+            answerPayload = new FixedString128Bytes(answer ?? string.Empty);
+        }
+        catch (ArgumentException)
+        {
+            NotifyPostItLiarSubmissionResult(
+                PostItLiarSubmissionKind.CustomPrompt,
+                PostItLiarSubmitResult.TooLong);
+            return;
+        }
+
+        SubmitPostItCustomPromptRpc(
+            roundRevision,
+            phaseRevision,
+            playerNetworkObjectId,
+            categoryPayload,
+            answerPayload);
+    }
+
     public void RequestSubmitLiarAnswerChoice(byte shuffledChoiceSlot)
     {
         if (!TryGetLocalPostItLiarRequestContext(
@@ -2229,12 +2358,116 @@ public class PostItRoundManager : NetworkBehaviour
                 clue.ToString(),
                 _serverPostItLiarPrompt.SecretAnswer,
                 _serverPostItLiarPrompt.ForbiddenStrings,
+                stableSlot != _serverPostItLiarSlot,
                 out _);
         }
 
         SendPostItLiarSubmissionResult(
             senderClientId,
             PostItLiarSubmissionKind.Clue,
+            result,
+            roundRevision,
+            phaseRevision);
+    }
+
+    [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Everyone)]
+    private void SubmitPostItCustomPromptRpc(
+        int roundRevision,
+        int phaseRevision,
+        ulong playerNetworkObjectId,
+        FixedString128Bytes category,
+        FixedString128Bytes answer,
+        RpcParams rpcParams = default)
+    {
+        ulong senderClientId = rpcParams.Receive.SenderClientId;
+        PostItLiarSubmitResult result;
+        if (TryValidatePostItLiarSubmissionSender(
+                senderClientId,
+                playerNetworkObjectId,
+                roundRevision,
+                phaseRevision,
+                PostItLiarPhase.PromptAuthoring,
+                out byte stableSlot,
+                out result))
+        {
+            if (!_serverPostItLiarCitizenAuthorMode ||
+                _serverPostItLiarPromptFrozen)
+            {
+                result = _serverPostItLiarPromptFrozen
+                    ? PostItLiarSubmitResult.Duplicate
+                    : PostItLiarSubmitResult.InvalidPhase;
+            }
+            else if (stableSlot == _serverPostItLiarSlot ||
+                     stableSlot != _serverPostItLiarPromptAuthorSlot)
+            {
+                result = PostItLiarSubmitResult.WrongRole;
+            }
+            else
+            {
+                string submittedCategory = category.ToString();
+                if (!_serverPostItLiarEligibleCategories.Contains(
+                        submittedCategory))
+                {
+                    result = PostItLiarSubmitResult.InvalidCategory;
+                }
+                else if (!_postItPromptAuthoringModule.TryCreateSelection(
+                             postItLiarPromptDatabase,
+                             submittedCategory,
+                             answer.ToString(),
+                             _serverPostItLiarRandom,
+                             out PostItPromptSelection selection,
+                             out PostItPromptAuthoringRejectionReason rejection))
+                {
+                    result = MapPostItPromptAuthoringRejection(rejection);
+                }
+                else if (_serverPostItLiarPresetFallbackPrompt == null ||
+                         string.Equals(
+                             selection.SecretAnswer,
+                             _serverPostItLiarPresetFallbackPrompt.SecretAnswer,
+                             StringComparison.Ordinal))
+                {
+                    result = PostItLiarSubmitResult.InvalidText;
+                }
+                else if (!TryBuildPostItLiarChoiceSet(
+                             selection,
+                             out PostItLiarChoiceSet choices) ||
+                         !_postItDeductionModule.BeginRound(
+                             _serverPostItLiarSlot,
+                             selection.CorrectChoiceSlot,
+                             selection.ChoiceCount))
+                {
+                    RestorePostItLiarPresetFallbackPrompt();
+                    result = PostItLiarSubmitResult.InsufficientChoices;
+                }
+                else
+                {
+                    _serverPostItLiarPrompt = selection;
+                    _serverPostItLiarChoices = choices;
+                    _serverPostItLiarPromptFrozen = true;
+                    _serverPostItLiarUsedCustomPrompt = true;
+                    _serverPostItLiarUsedPresetFallback = false;
+                    result = EnterPostItLiarSecretReveal()
+                        ? PostItLiarSubmitResult.Accepted
+                        : PostItLiarSubmitResult.NotActive;
+                    CustomPromptLog(
+                        roundRevision,
+                        result == PostItLiarSubmitResult.Accepted
+                            ? "submit=Accepted source=Custom"
+                            : "submit=Rejected reason=TransitionFailed");
+                }
+            }
+        }
+
+        if (result != PostItLiarSubmitResult.Accepted)
+        {
+            CustomPromptLog(
+                roundRevision,
+                $"submit=Rejected reason={result}");
+        }
+
+        SendPostItLiarSubmissionResult(
+            senderClientId,
+            PostItLiarSubmissionKind.CustomPrompt,
             result,
             roundRevision,
             phaseRevision);
@@ -2321,19 +2554,51 @@ public class PostItRoundManager : NetworkBehaviour
         PostItLiarPrivateRoleData privateData,
         RpcParams rpcParams = default)
     {
+        bool categorySetValid =
+            privateData.EligibleCategories.Count <=
+            PostItLiarCategorySet.Capacity;
+        bool hasAuthorCategories =
+            privateData.EligibleCategories.Count > 0;
         bool roleInvariantValid =
             (privateData.Role == PostItLiarRole.Liar &&
-             privateData.SecretAnswer.IsEmpty) ||
+             privateData.SecretAnswer.IsEmpty &&
+             !privateData.IsPromptAuthor &&
+             !hasAuthorCategories) ||
             (privateData.Role == PostItLiarRole.Citizen &&
-             !privateData.SecretAnswer.IsEmpty);
+             ((privateData.SecretAnswer.IsEmpty &&
+               ((!privateData.IsPromptAuthor && !hasAuthorCategories) ||
+                (privateData.IsPromptAuthor && hasAuthorCategories))) ||
+              (!privateData.SecretAnswer.IsEmpty &&
+               !hasAuthorCategories)));
         if (!privateData.IsValid ||
+            !categorySetValid ||
             !roleInvariantValid ||
             !CanAcceptLocalPostItLiarPayload(privateData.RoundRevision))
         {
             return;
         }
 
+        PostItLiarPhaseState publicState = _postItLiarPhaseState.Value;
+        if (publicState.IsActive &&
+            publicState.RoundRevision == privateData.RoundRevision &&
+            privateData.PhaseRevision < publicState.PhaseRevision)
+        {
+            return;
+        }
+
         PrepareLocalPostItLiarRoundCache(privateData.RoundRevision);
+        if (_hasLocalPostItLiarPrivateRole &&
+            _localPostItLiarPrivateRole.RoundRevision ==
+                privateData.RoundRevision &&
+            (_localPostItLiarPrivateRole.PhaseRevision >
+                 privateData.PhaseRevision ||
+             _localPostItLiarPrivateRole.StableSlot !=
+                 privateData.StableSlot ||
+             _localPostItLiarPrivateRole.Role != privateData.Role))
+        {
+            return;
+        }
+
         _localPostItLiarPrivateRole = privateData;
         _hasLocalPostItLiarPrivateRole = true;
         NotifyPostItLiarLocalStateChanged();
@@ -2435,12 +2700,23 @@ public class PostItRoundManager : NetworkBehaviour
         RpcParams rpcParams = default)
     {
         PostItLiarPhaseState state = _postItLiarPhaseState.Value;
+        bool isCurrentPhaseResult =
+            state.IsActive &&
+            state.RoundRevision == roundRevision &&
+            state.PhaseRevision == phaseRevision;
+        bool isAcceptedCustomPromptAfterTransition =
+            kind == PostItLiarSubmissionKind.CustomPrompt &&
+            result == PostItLiarSubmitResult.Accepted &&
+            phaseRevision < int.MaxValue &&
+            state.IsActive &&
+            state.RoundRevision == roundRevision &&
+            state.Phase == PostItLiarPhase.SecretReveal &&
+            state.PhaseRevision == phaseRevision + 1;
         if (kind == PostItLiarSubmissionKind.None ||
             result == PostItLiarSubmitResult.None ||
             roundRevision <= _localPostItLiarLastClearedRevision ||
-            !state.IsActive ||
-            state.RoundRevision != roundRevision ||
-            state.PhaseRevision != phaseRevision)
+            (!isCurrentPhaseResult &&
+             !isAcceptedCustomPromptAfterTransition))
         {
             return;
         }
@@ -2460,6 +2736,9 @@ public class PostItRoundManager : NetworkBehaviour
                 case PostItLiarSubmissionKind.CitizenVote:
                     _hasSubmittedPostItLiarVote = true;
                     break;
+                case PostItLiarSubmissionKind.CustomPrompt:
+                    _hasSubmittedPostItLiarCustomPrompt = true;
+                    break;
             }
 
             NotifyPostItLiarLocalStateChanged();
@@ -2475,7 +2754,15 @@ public class PostItRoundManager : NetworkBehaviour
         PostItLiarRevealData reveal,
         RpcParams rpcParams = default)
     {
+        bool customSourceInvariantValid =
+            reveal.UsedCustomPrompt
+                ? !reveal.UsedPresetFallback &&
+                  reveal.PromptAuthorSlot < reveal.AuthoredClues.Count &&
+                  reveal.PromptAuthorSlot != reveal.LiarSlot
+                : reveal.PromptAuthorSlot ==
+                  PostItLiarFixedSet.InvalidSlot;
         if (!reveal.IsValid ||
+            !customSourceInvariantValid ||
             reveal.RoundRevision < 0 ||
             !IsValidReceivedPostItLiarParticipantCount(
                 reveal.AuthoredClues.Count) ||
@@ -7139,6 +7426,14 @@ public class PostItRoundManager : NetworkBehaviour
             serverTime >= state.DeadlineServerTime;
         switch (state.Phase)
         {
+            case PostItLiarPhase.PromptAuthoring:
+                if (IsCountdownState() && deadlineReached)
+                {
+                    UsePostItLiarPresetFallbackAndEnterSecretReveal(
+                        "DeadlineReached");
+                }
+                break;
+
             case PostItLiarPhase.SecretReveal:
                 if (IsCountdownState() && deadlineReached)
                 {
@@ -7288,6 +7583,11 @@ public class PostItRoundManager : NetworkBehaviour
             return false;
         }
 
+        reveal.UsedCustomPrompt = _serverPostItLiarUsedCustomPrompt;
+        reveal.UsedPresetFallback = _serverPostItLiarUsedPresetFallback;
+        reveal.PromptAuthorSlot = _serverPostItLiarUsedCustomPrompt
+            ? _serverPostItLiarPromptAuthorSlot
+            : PostItLiarFixedSet.InvalidSlot;
         _serverPostItLiarReveal = reveal;
         _serverPostItLiarResultFinalized = true;
         ReceivePostItLiarRevealRpc(reveal);
@@ -7345,7 +7645,8 @@ public class PostItRoundManager : NetworkBehaviour
         if (!CanMutateServerState() ||
             !_serverPostItLiarPreparedActive ||
             _serverPostItLiarDecisionRoundRevision < 0 ||
-            _serverPostItLiarPrompt == null)
+            (_serverPostItLiarPrompt == null &&
+             phase != PostItLiarPhase.PromptAuthoring))
         {
             return false;
         }
@@ -7365,15 +7666,18 @@ public class PostItRoundManager : NetworkBehaviour
         if (!IsFinitePostItLiarTime(serverTime))
             return false;
 
-        FixedString128Bytes publicCategory;
-        try
+        FixedString128Bytes publicCategory = default;
+        if (phase != PostItLiarPhase.PromptAuthoring)
         {
-            publicCategory = new FixedString128Bytes(
-                _serverPostItLiarPrompt.PublicCategory);
-        }
-        catch (ArgumentException)
-        {
-            return false;
+            try
+            {
+                publicCategory = new FixedString128Bytes(
+                    _serverPostItLiarPrompt.PublicCategory);
+            }
+            catch (ArgumentException)
+            {
+                return false;
+            }
         }
 
         int phaseRevision = previous.IsActive
@@ -7509,8 +7813,11 @@ public class PostItRoundManager : NetworkBehaviour
         _postItDeductionModule.Reset();
         _serverPostItLiarRoster.Clear();
         _serverPostItLiarBattleScores.Clear();
+        _serverPostItLiarEligibleCategories.Clear();
         _serverPostItLiarRandom = null;
+        _serverPostItLiarPresetFallbackPrompt = null;
         _serverPostItLiarPrompt = null;
+        _serverPostItLiarEligibleCategorySet = default;
         _serverPostItLiarAuthoredClues = default;
         _serverPostItLiarAnonymousClues = default;
         _serverPostItLiarChoices = default;
@@ -7518,6 +7825,13 @@ public class PostItRoundManager : NetworkBehaviour
         _serverPostItLiarReveal = default;
         _serverPostItLiarDecisionRoundRevision = -1;
         _serverPostItLiarSlot = PostItLiarFixedSet.InvalidSlot;
+        _serverPostItLiarPromptAuthorSlot =
+            PostItLiarFixedSet.InvalidSlot;
+        _serverPostItLiarCitizenAuthorMode = false;
+        _serverPostItLiarPromptFrozen = false;
+        _serverPostItLiarUsedCustomPrompt = false;
+        _serverPostItLiarUsedPresetFallback = false;
+        _serverPostItLiarAuthorDisconnectedDuringAuthoring = false;
         _serverPostItLiarPreparedActive = false;
         _serverPostItLiarStarted = false;
         _serverPostItLiarBrawlCommitted = false;
@@ -7525,6 +7839,197 @@ public class PostItRoundManager : NetworkBehaviour
         _serverPostItLiarDeductionCancelled = false;
         _serverPostItLiarResultFinalized = false;
         _serverPostItLiarTwoPlayerTestActive = false;
+    }
+
+    private PostItLiarPromptSourceMode ResolveServerPostItLiarPromptSourceMode()
+    {
+        LobbyManager lobbyManager = LobbyManager.Instance;
+        if (lobbyManager == null || !lobbyManager.HasCanonicalRoomSettings)
+            return PostItLiarPromptSourceMode.PresetDatabase;
+
+        RoomGameplaySettingsSnapshot snapshot =
+            lobbyManager.CanonicalRoomSettings;
+        return snapshot?.PostItLiar?.PromptSourceMode ==
+               PostItLiarPromptSourceMode.CitizenAuthor
+            ? PostItLiarPromptSourceMode.CitizenAuthor
+            : PostItLiarPromptSourceMode.PresetDatabase;
+    }
+
+    private static bool TryBuildPostItLiarCategorySet(
+        IReadOnlyList<string> categories,
+        out PostItLiarCategorySet categorySet)
+    {
+        categorySet = default;
+        if (categories == null || categories.Count == 0)
+            return false;
+
+        int count = Math.Min(categories.Count, PostItLiarCategorySet.Capacity);
+        try
+        {
+            for (int index = 0; index < count; index++)
+            {
+                FixedString128Bytes category =
+                    new FixedString128Bytes(categories[index]);
+                if (category.IsEmpty || !categorySet.TrySet(index, category))
+                {
+                    categorySet = default;
+                    return false;
+                }
+            }
+        }
+        catch (ArgumentException)
+        {
+            categorySet = default;
+            return false;
+        }
+
+        return categorySet.Count > 0;
+    }
+
+    private bool EnterPostItLiarSecretReveal()
+    {
+        if (!_serverPostItLiarPromptFrozen ||
+            _serverPostItLiarPrompt == null ||
+            !SetPostItLiarPhase(
+                PostItLiarPhase.SecretReveal,
+                postItLiarSecretRevealSeconds))
+        {
+            return false;
+        }
+
+        return SendPostItLiarPrivateRoles(includeSecretAnswer: true);
+    }
+
+    private bool SendPostItLiarPrivateRoles(bool includeSecretAnswer)
+    {
+        if (_serverPostItLiarDecisionRoundRevision < 0 ||
+            _serverPostItLiarRoster.Count == 0)
+        {
+            return false;
+        }
+
+        FixedString128Bytes secretAnswer = default;
+        if (includeSecretAnswer)
+        {
+            if (_serverPostItLiarPrompt == null)
+                return false;
+
+            try
+            {
+                secretAnswer = new FixedString128Bytes(
+                    _serverPostItLiarPrompt.SecretAnswer);
+            }
+            catch (ArgumentException)
+            {
+                return false;
+            }
+        }
+
+        int phaseRevision = _postItLiarPhaseState.Value.PhaseRevision;
+        bool isPromptAuthoringPhase =
+            _postItLiarPhaseState.Value.Phase ==
+            PostItLiarPhase.PromptAuthoring;
+        for (int index = 0; index < _serverPostItLiarRoster.Count; index++)
+        {
+            PostItLiarRosterEntry entry = _serverPostItLiarRoster[index];
+            if (!entry.IsConnected)
+                continue;
+
+            PostItLiarRole role =
+                entry.StableSlot == _serverPostItLiarSlot
+                    ? PostItLiarRole.Liar
+                    : PostItLiarRole.Citizen;
+            bool isPromptAuthor =
+                role == PostItLiarRole.Citizen &&
+                entry.StableSlot == _serverPostItLiarPromptAuthorSlot &&
+                (isPromptAuthoringPhase ||
+                 _serverPostItLiarUsedCustomPrompt);
+            PostItLiarCategorySet categories =
+                isPromptAuthoringPhase && isPromptAuthor
+                    ? _serverPostItLiarEligibleCategorySet
+                    : default;
+            PostItLiarPrivateRoleData privateData =
+                new PostItLiarPrivateRoleData(
+                    _serverPostItLiarDecisionRoundRevision,
+                    phaseRevision,
+                    entry.StableSlot,
+                    role,
+                    includeSecretAnswer && role == PostItLiarRole.Citizen
+                        ? secretAnswer
+                        : default,
+                    isPromptAuthor,
+                    categories);
+            ReceivePostItLiarPrivateRoleRpc(
+                privateData,
+                RpcTarget.Single(entry.ClientId, RpcTargetUse.Temp));
+        }
+
+        return true;
+    }
+
+    private bool RestorePostItLiarPresetFallbackPrompt()
+    {
+        PostItPromptSelection fallback =
+            _serverPostItLiarPresetFallbackPrompt;
+        if (fallback == null ||
+            !TryBuildPostItLiarChoiceSet(
+                fallback,
+                out PostItLiarChoiceSet fallbackChoices) ||
+            !_postItDeductionModule.BeginRound(
+                _serverPostItLiarSlot,
+                fallback.CorrectChoiceSlot,
+                fallback.ChoiceCount))
+        {
+            return false;
+        }
+
+        _serverPostItLiarPrompt = fallback;
+        _serverPostItLiarChoices = fallbackChoices;
+        return true;
+    }
+
+    private bool UsePostItLiarPresetFallbackAndEnterSecretReveal(
+        string reason)
+    {
+        if (_postItLiarPhaseState.Value.Phase !=
+                PostItLiarPhase.PromptAuthoring ||
+            !RestorePostItLiarPresetFallbackPrompt())
+        {
+            return false;
+        }
+
+        _serverPostItLiarPromptFrozen = true;
+        _serverPostItLiarUsedCustomPrompt = false;
+        _serverPostItLiarUsedPresetFallback = true;
+        bool transitioned = EnterPostItLiarSecretReveal();
+        CustomPromptLog(
+            _serverPostItLiarDecisionRoundRevision,
+            transitioned
+                ? $"source=PresetFallback reason={reason}"
+                : $"source=PresetFallback transition=Failed reason={reason}");
+        return transitioned;
+    }
+
+    private static PostItLiarSubmitResult MapPostItPromptAuthoringRejection(
+        PostItPromptAuthoringRejectionReason rejection)
+    {
+        switch (rejection)
+        {
+            case PostItPromptAuthoringRejectionReason.EmptyAnswer:
+                return PostItLiarSubmitResult.Empty;
+            case PostItPromptAuthoringRejectionReason.AnswerTooLong:
+                return PostItLiarSubmitResult.TooLong;
+            case PostItPromptAuthoringRejectionReason.InvalidCategory:
+                return PostItLiarSubmitResult.InvalidCategory;
+            case PostItPromptAuthoringRejectionReason.AnswerMatchesCategory:
+                return PostItLiarSubmitResult.AnswerMatchesCategory;
+            case PostItPromptAuthoringRejectionReason.InsufficientDistractors:
+                return PostItLiarSubmitResult.InsufficientChoices;
+            case PostItPromptAuthoringRejectionReason.InvalidAnswerText:
+                return PostItLiarSubmitResult.InvalidText;
+            default:
+                return PostItLiarSubmitResult.InvalidText;
+        }
     }
 
     private static bool TryBuildPostItLiarChoiceSet(
@@ -7683,6 +8188,54 @@ public class PostItRoundManager : NetworkBehaviour
                 client.PlayerObject.OwnerClientId != entry.ClientId ||
                 client.PlayerObject.NetworkObjectId !=
                 entry.PlayerNetworkObjectId)
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private bool TryValidatePostItLiarRosterForPlayingGate()
+    {
+        if (!_serverPostItLiarAuthorDisconnectedDuringAuthoring)
+            return TryValidateFrozenPostItLiarRoster(true);
+
+        if (!TryValidateFrozenPostItLiarRoster(false))
+            return false;
+
+        int disconnectedCount = 0;
+        for (int index = 0; index < _serverPostItLiarRoster.Count; index++)
+        {
+            PostItLiarRosterEntry entry = _serverPostItLiarRoster[index];
+            if (entry.IsConnected)
+                continue;
+
+            disconnectedCount++;
+            if (entry.StableSlot != _serverPostItLiarPromptAuthorSlot)
+                return false;
+        }
+
+        if (disconnectedCount != 1 || !IsSpawnedNetworkSession())
+            return disconnectedCount == 1;
+
+        int expectedConnectedCount = _serverPostItLiarRoster.Count - 1;
+        if (NetworkManager == null ||
+            NetworkManager.ConnectedClientsIds.Count != expectedConnectedCount)
+        {
+            return false;
+        }
+
+        for (int index = 0;
+             index < NetworkManager.ConnectedClientsIds.Count;
+             index++)
+        {
+            ulong connectedClientId =
+                NetworkManager.ConnectedClientsIds[index];
+            int rosterIndex =
+                FindPostItLiarRosterIndex(connectedClientId);
+            if (rosterIndex < 0 ||
+                !_serverPostItLiarRoster[rosterIndex].IsConnected)
             {
                 return false;
             }
@@ -7898,7 +8451,8 @@ public class PostItRoundManager : NetworkBehaviour
         }
 
         if (state.Phase != expectedPhase ||
-            (expectedPhase == PostItLiarPhase.ClueWrite
+            (expectedPhase == PostItLiarPhase.ClueWrite ||
+             expectedPhase == PostItLiarPhase.PromptAuthoring
                 ? !IsCountdownState()
                 : !IsGuessingState()))
         {
@@ -8029,7 +8583,9 @@ public class PostItRoundManager : NetworkBehaviour
     private bool CanAcceptLocalPostItLiarPayload(int roundRevision)
     {
         if (roundRevision < 0 ||
-            roundRevision <= _localPostItLiarLastClearedRevision)
+            roundRevision <= _localPostItLiarLastClearedRevision ||
+            (_localPostItLiarSubmissionRoundRevision >= 0 &&
+             roundRevision < _localPostItLiarSubmissionRoundRevision))
         {
             return false;
         }
@@ -8042,6 +8598,12 @@ public class PostItRoundManager : NetworkBehaviour
     {
         if (_localPostItLiarSubmissionRoundRevision == roundRevision)
             return;
+
+        if (_localPostItLiarSubmissionRoundRevision >= 0 &&
+            roundRevision < _localPostItLiarSubmissionRoundRevision)
+        {
+            return;
+        }
 
         ClearLocalPostItLiarState(false);
         _localPostItLiarSubmissionRoundRevision = roundRevision;
@@ -8063,6 +8625,7 @@ public class PostItRoundManager : NetworkBehaviour
         _hasSubmittedPostItLiarClue = false;
         _hasSubmittedPostItLiarAnswer = false;
         _hasSubmittedPostItLiarVote = false;
+        _hasSubmittedPostItLiarCustomPrompt = false;
 
         if (!notify)
             return;
@@ -8471,6 +9034,8 @@ public class PostItRoundManager : NetworkBehaviour
         guessingDurationSeconds = Mathf.Max(0.1f, guessingDurationSeconds);
         postItLiarSecretRevealSeconds =
             Mathf.Max(0.1f, postItLiarSecretRevealSeconds);
+        postItLiarPromptAuthoringSeconds =
+            Mathf.Max(0.1f, postItLiarPromptAuthoringSeconds);
         postItLiarClueWriteSeconds =
             Mathf.Max(0.1f, postItLiarClueWriteSeconds);
         postItLiarClueLockSeconds =
@@ -8519,6 +9084,17 @@ public class PostItRoundManager : NetworkBehaviour
         {
             Debug.Log(
                 $"[{nameof(PostItRoundManager)}][Liar] {message}",
+                this);
+        }
+    }
+
+    private void CustomPromptLog(int roundRevision, string message)
+    {
+        if (debugPostItLiarLogs)
+        {
+            Debug.Log(
+                $"[{nameof(PostItRoundManager)}][CustomPrompt] " +
+                $"round={roundRevision} {message}",
                 this);
         }
     }
