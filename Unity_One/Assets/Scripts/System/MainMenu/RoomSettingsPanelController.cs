@@ -1,9 +1,20 @@
+using System;
 using TMPro;
 using UnityEngine;
+using UnityEngine.EventSystems;
 using UnityEngine.UI;
 
 public sealed class RoomSettingsPanelController : MonoBehaviour
 {
+    [Header("Create Modal")]
+    [SerializeField] private GameObject modalRoot;
+    [SerializeField] private CanvasGroup modalCanvasGroup;
+    [SerializeField] private Button cancelButton;
+    [SerializeField] private Button createConfirmButton;
+    [SerializeField] private TMP_Text createStatusText;
+    [SerializeField] private Selectable firstSelectable;
+    [SerializeField] private Selectable returnFocusSelectable;
+
     [Header("Post-it Liar")]
     [SerializeField] private Button presetDatabaseButton;
     [SerializeField] private Button citizenAuthorButton;
@@ -19,28 +30,99 @@ public sealed class RoomSettingsPanelController : MonoBehaviour
 
     private readonly RoomGameplaySettingsDraft _draft =
         new RoomGameplaySettingsDraft();
+    private bool _isInitialized;
+    private bool _isModalOpen;
     private bool _isCreateLocked;
 
+    public bool IsModalOpen => _isModalOpen;
+    public bool IsCreateLocked => _isCreateLocked;
     public PostItLiarPromptSourceMode SelectedPromptSourceMode =>
         _draft.PostItLiar.PromptSourceMode;
 
+    public event Action CreateRequested;
+    public event Action ModalCancelled;
+
     private void Awake()
     {
-        ResolveReferences();
-        RegisterListeners();
-        ResetDraft();
+        EnsureInitialized();
     }
 
     private void OnDestroy()
     {
-        UnregisterListeners();
+        if (_isInitialized)
+            UnregisterListeners();
+    }
+
+    public bool OpenForCreate()
+    {
+        EnsureInitialized();
+
+        if (_isModalOpen || _isCreateLocked)
+            return false;
+
+        _draft.ResetToDefaults();
+        _isCreateLocked = false;
+        _isModalOpen = true;
+        SetStatus(string.Empty);
+        ApplyModalVisibility(true);
+        RefreshVisuals();
+        FocusSelectable(firstSelectable != null ? firstSelectable : presetDatabaseButton);
+        return true;
+    }
+
+    public bool TryFreezeSnapshot(out RoomGameplaySettingsSnapshot snapshot)
+    {
+        EnsureInitialized();
+        snapshot = null;
+
+        if (!_isModalOpen || _isCreateLocked)
+            return false;
+
+        snapshot = FreezeForCreate();
+        return true;
     }
 
     public RoomGameplaySettingsSnapshot FreezeForCreate()
     {
+        EnsureInitialized();
         _isCreateLocked = true;
+
+        if (_isModalOpen)
+            SetStatus("방 생성 중...");
+
         RefreshVisuals();
         return _draft.Freeze();
+    }
+
+    public void HandleCreateSucceeded()
+    {
+        if (!_isModalOpen || !_isCreateLocked)
+            return;
+
+        _isModalOpen = false;
+        ApplyModalVisibility(false);
+    }
+
+    public void HandleCreateFailed(string message)
+    {
+        if (!_isModalOpen || !_isCreateLocked)
+            return;
+
+        _isCreateLocked = false;
+        SetStatus(string.IsNullOrWhiteSpace(message)
+            ? "방 생성에 실패했습니다."
+            : message);
+        RefreshVisuals();
+        FocusSelectable(createConfirmButton);
+    }
+
+    public void ShowCreateError(string message)
+    {
+        if (!_isModalOpen || _isCreateLocked)
+            return;
+
+        SetStatus(message);
+        RefreshVisuals();
     }
 
     public void SetCreateLocked(bool isLocked)
@@ -51,8 +133,10 @@ public sealed class RoomSettingsPanelController : MonoBehaviour
 
     public void ResetDraft()
     {
+        EnsureInitialized();
         _draft.ResetToDefaults();
         _isCreateLocked = false;
+        SetStatus(string.Empty);
         RefreshVisuals();
     }
 
@@ -99,6 +183,12 @@ public sealed class RoomSettingsPanelController : MonoBehaviour
 
         if (citizenAuthorButton != null)
             citizenAuthorButton.onClick.AddListener(SelectCitizenAuthor);
+
+        if (cancelButton != null)
+            cancelButton.onClick.AddListener(CancelCreate);
+
+        if (createConfirmButton != null)
+            createConfirmButton.onClick.AddListener(RequestCreate);
     }
 
     private void UnregisterListeners()
@@ -108,6 +198,78 @@ public sealed class RoomSettingsPanelController : MonoBehaviour
 
         if (citizenAuthorButton != null)
             citizenAuthorButton.onClick.RemoveListener(SelectCitizenAuthor);
+
+        if (cancelButton != null)
+            cancelButton.onClick.RemoveListener(CancelCreate);
+
+        if (createConfirmButton != null)
+            createConfirmButton.onClick.RemoveListener(RequestCreate);
+    }
+
+    private void EnsureInitialized()
+    {
+        if (_isInitialized)
+            return;
+
+        _isInitialized = true;
+        ResolveReferences();
+        RegisterListeners();
+        _draft.ResetToDefaults();
+        _isCreateLocked = false;
+        SetStatus(string.Empty);
+        RefreshVisuals();
+    }
+
+    private void RequestCreate()
+    {
+        if (!_isModalOpen || _isCreateLocked)
+            return;
+
+        CreateRequested?.Invoke();
+    }
+
+    private void CancelCreate()
+    {
+        if (!_isModalOpen || _isCreateLocked)
+            return;
+
+        _draft.ResetToDefaults();
+        _isModalOpen = false;
+        SetStatus(string.Empty);
+        RefreshVisuals();
+        ApplyModalVisibility(false);
+        ModalCancelled?.Invoke();
+        FocusSelectable(returnFocusSelectable);
+    }
+
+    private void ApplyModalVisibility(bool isVisible)
+    {
+        if (modalCanvasGroup != null)
+        {
+            modalCanvasGroup.alpha = isVisible ? 1f : 0f;
+            modalCanvasGroup.interactable = isVisible;
+            modalCanvasGroup.blocksRaycasts = isVisible;
+        }
+
+        if (modalRoot != null && modalRoot.activeSelf != isVisible)
+            modalRoot.SetActive(isVisible);
+    }
+
+    private void SetStatus(string message)
+    {
+        if (createStatusText != null)
+            createStatusText.text = message ?? string.Empty;
+    }
+
+    private static void FocusSelectable(Selectable selectable)
+    {
+        if (selectable == null || !selectable.IsActive() || !selectable.IsInteractable())
+            return;
+
+        if (EventSystem.current != null)
+            EventSystem.current.SetSelectedGameObject(selectable.gameObject);
+        else
+            selectable.Select();
     }
 
     private void RefreshVisuals()
@@ -121,6 +283,12 @@ public sealed class RoomSettingsPanelController : MonoBehaviour
 
         if (citizenAuthorButton != null)
             citizenAuthorButton.interactable = !_isCreateLocked;
+
+        if (cancelButton != null)
+            cancelButton.interactable = _isModalOpen && !_isCreateLocked;
+
+        if (createConfirmButton != null)
+            createConfirmButton.interactable = _isModalOpen && !_isCreateLocked;
 
         if (presetDatabaseButtonImage != null)
         {

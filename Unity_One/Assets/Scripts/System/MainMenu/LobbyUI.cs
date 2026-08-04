@@ -25,6 +25,9 @@ public class LobbyUI : MonoBehaviour
     [Tooltip("방 생성 전 mutable settings Draft를 편집하는 Controller")]
     [SerializeField] private RoomSettingsPanelController roomSettingsPanelController;
 
+    [Tooltip("설정 Modal이 열렸을 때 기존 MainMenu 입력을 차단할 CanvasGroup")]
+    [SerializeField] private CanvasGroup mainMenuInteractionCanvasGroup;
+
     [Header("Lobby List")]
     [Tooltip("목록 아이템이 생성될 부모(Content)")]
     [SerializeField] private Transform container;
@@ -47,49 +50,15 @@ public class LobbyUI : MonoBehaviour
     [SerializeField] private bool enableDebugLogs = false;
 
     private Coroutine _autoRefreshRoutine;
+    private bool _isCreateRequestInFlight;
+    private bool _uiListenersRegistered;
     private bool _lobbyEventsSubscribed;
 
     private void Awake()
     {
-        if (createLobbyButton != null)
-        {
-            createLobbyButton.onClick.AddListener(() =>
-            {
-                if (!IsServicesReady())
-                {
-                    LogWarning("[LobbyUI] 서비스 초기화 중입니다. 잠시 후 다시 시도해주세요.");
-                    return;
-                }
-
-                string lobbyName = createInput != null ? createInput.text : string.Empty;
-                if (string.IsNullOrEmpty(lobbyName)) lobbyName = "New Room";
-
-                if (LobbyManager.Instance != null)
-                {
-                    RoomGameplaySettingsSnapshot snapshot =
-                        roomSettingsPanelController != null
-                            ? roomSettingsPanelController.FreezeForCreate()
-                            : RoomGameplaySettingsValidator.CreateDefaultSnapshot();
-                    LobbyManager.Instance.CreateLobby(lobbyName, snapshot);
-                }
-            });
-        }
+        RegisterUiListeners();
 
         // CodeJoinButton은 Inspector On Click()으로만 연결해서 사용
-
-        if (refreshButton != null)
-        {
-            refreshButton.onClick.AddListener(() =>
-            {
-                if (!IsServicesReady())
-                {
-                    LogWarning("[LobbyUI] 서비스 초기화 중입니다. 잠시 후 다시 시도해주세요.");
-                    return;
-                }
-
-                RefreshLobbyList();
-            });
-        }
     }
 
     public void OnClickJoinByCode()
@@ -123,6 +92,7 @@ public class LobbyUI : MonoBehaviour
 
     private void OnDestroy()
     {
+        UnregisterUiListeners();
         UnsubscribeLobbyEvents();
     }
 
@@ -157,8 +127,12 @@ public class LobbyUI : MonoBehaviour
         if (createLobbyButton != null) createLobbyButton.interactable = enabled;
         if (joinCodeButton != null) joinCodeButton.interactable = enabled;
         if (refreshButton != null) refreshButton.interactable = enabled;
-        if (roomSettingsPanelController != null)
+        if (roomSettingsPanelController != null && roomSettingsPanelController.IsModalOpen)
             roomSettingsPanelController.SetCreateLocked(!enabled);
+
+        bool modalOpen = roomSettingsPanelController != null &&
+                         roomSettingsPanelController.IsModalOpen;
+        SetMainMenuInteractionEnabled(enabled && !modalOpen);
     }
 
     private void SubscribeLobbyEvents()
@@ -192,13 +166,158 @@ public class LobbyUI : MonoBehaviour
     private void HandleLobbyOperationSucceeded(string message)
     {
         _ = message;
+        if (_isCreateRequestInFlight && roomSettingsPanelController != null)
+            roomSettingsPanelController.HandleCreateSucceeded();
+        _isCreateRequestInFlight = false;
         SetInteractable(false);
     }
 
     private void HandleLobbyOperationFailed(string message)
     {
-        _ = message;
+        if (_isCreateRequestInFlight && roomSettingsPanelController != null)
+            roomSettingsPanelController.HandleCreateFailed(message);
+        _isCreateRequestInFlight = false;
         SetInteractable(IsServicesReady());
+    }
+
+    private void RegisterUiListeners()
+    {
+        if (_uiListenersRegistered)
+            return;
+
+        if (createLobbyButton != null)
+            createLobbyButton.onClick.AddListener(HandleCreateButtonClicked);
+
+        if (refreshButton != null)
+            refreshButton.onClick.AddListener(HandleRefreshButtonClicked);
+
+        if (roomSettingsPanelController != null)
+        {
+            roomSettingsPanelController.CreateRequested += HandleCreateRequested;
+            roomSettingsPanelController.ModalCancelled += HandleSettingsModalCancelled;
+        }
+
+        _uiListenersRegistered = true;
+    }
+
+    private void UnregisterUiListeners()
+    {
+        if (!_uiListenersRegistered)
+            return;
+
+        if (createLobbyButton != null)
+            createLobbyButton.onClick.RemoveListener(HandleCreateButtonClicked);
+
+        if (refreshButton != null)
+            refreshButton.onClick.RemoveListener(HandleRefreshButtonClicked);
+
+        if (roomSettingsPanelController != null)
+        {
+            roomSettingsPanelController.CreateRequested -= HandleCreateRequested;
+            roomSettingsPanelController.ModalCancelled -= HandleSettingsModalCancelled;
+        }
+
+        _uiListenersRegistered = false;
+    }
+
+    private void HandleCreateButtonClicked()
+    {
+        if (!IsServicesReady())
+        {
+            LogWarning("[LobbyUI] 서비스 초기화 중입니다. 잠시 후 다시 시도해주세요.");
+            return;
+        }
+
+        if (LobbyManager.Instance == null || LobbyManager.Instance.IsLobbyOperationInProgress)
+            return;
+
+        if (roomSettingsPanelController == null)
+        {
+            LogWarning("[LobbyUI] RoomSettingsPanelController가 연결되지 않았습니다.");
+            return;
+        }
+
+        if (createInput != null)
+            createInput.DeactivateInputField();
+
+        if (codeInput != null)
+            codeInput.DeactivateInputField();
+
+        if (roomSettingsPanelController.OpenForCreate())
+            SetMainMenuInteractionEnabled(false);
+    }
+
+    private void HandleCreateRequested()
+    {
+        if (roomSettingsPanelController == null ||
+            !roomSettingsPanelController.IsModalOpen ||
+            roomSettingsPanelController.IsCreateLocked)
+        {
+            return;
+        }
+
+        if (!IsServicesReady())
+        {
+            roomSettingsPanelController.ShowCreateError(
+                "서비스 초기화 중입니다. 잠시 후 다시 시도해주세요.");
+            return;
+        }
+
+        LobbyManager lobbyManager = LobbyManager.Instance;
+        if (lobbyManager == null)
+        {
+            roomSettingsPanelController.ShowCreateError(
+                "방 생성 서비스를 찾을 수 없습니다.");
+            return;
+        }
+
+        if (lobbyManager.IsLobbyOperationInProgress)
+        {
+            roomSettingsPanelController.ShowCreateError(
+                "다른 연결 작업이 진행 중입니다.");
+            return;
+        }
+
+        if (!roomSettingsPanelController.TryFreezeSnapshot(
+                out RoomGameplaySettingsSnapshot snapshot))
+        {
+            return;
+        }
+
+        string lobbyName = createInput != null ? createInput.text : string.Empty;
+        if (string.IsNullOrEmpty(lobbyName))
+            lobbyName = "New Room";
+
+        _isCreateRequestInFlight = true;
+        lobbyManager.CreateLobby(lobbyName, snapshot);
+    }
+
+    private void HandleSettingsModalCancelled()
+    {
+        bool canInteract = IsServicesReady() &&
+                           (LobbyManager.Instance == null ||
+                            !LobbyManager.Instance.IsLobbyOperationInProgress);
+        SetInteractable(canInteract);
+    }
+
+    private void HandleRefreshButtonClicked()
+    {
+        if (!IsServicesReady())
+        {
+            LogWarning("[LobbyUI] 서비스 초기화 중입니다. 잠시 후 다시 시도해주세요.");
+            return;
+        }
+
+        RefreshLobbyList();
+    }
+
+    private void SetMainMenuInteractionEnabled(bool enabled)
+    {
+        if (mainMenuInteractionCanvasGroup == null)
+            return;
+
+        mainMenuInteractionCanvasGroup.interactable = enabled;
+        mainMenuInteractionCanvasGroup.blocksRaycasts = enabled;
     }
 
     private void SetupTemplateHeader()
