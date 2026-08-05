@@ -174,12 +174,9 @@ public class PostItRoundManager : NetworkBehaviour
         new List<PostItLiarRosterEntry>(PostItLiarFixedSet.Capacity);
     private readonly Dictionary<ulong, int> _serverPostItLiarBattleScores =
         new Dictionary<ulong, int>();
-    private readonly List<string> _serverPostItLiarEligibleCategories =
-        new List<string>(PostItLiarCategorySet.Capacity);
     private System.Random _serverPostItLiarRandom;
     private PostItPromptSelection _serverPostItLiarPresetFallbackPrompt;
     private PostItPromptSelection _serverPostItLiarPrompt;
-    private PostItLiarCategorySet _serverPostItLiarEligibleCategorySet;
     private PostItLiarClueSet _serverPostItLiarAuthoredClues;
     private PostItLiarClueSet _serverPostItLiarAnonymousClues;
     private PostItLiarChoiceSet _serverPostItLiarChoices;
@@ -1742,17 +1739,7 @@ public class PostItRoundManager : NetworkBehaviour
             PostItLiarPromptSourceMode.CitizenAuthor;
         bool promptAuthoringReady = false;
         byte promptAuthorSlot = PostItLiarFixedSet.InvalidSlot;
-        PostItLiarCategorySet eligibleCategorySet = default;
-        List<string> eligibleCategories = new List<string>(
-            PostItLiarCategorySet.Capacity);
-        if (citizenAuthorMode &&
-            _postItPromptAuthoringModule.TryGetEligibleCategories(
-                postItLiarPromptDatabase,
-                eligibleCategories,
-                out _) &&
-            TryBuildPostItLiarCategorySet(
-                eligibleCategories,
-                out eligibleCategorySet))
+        if (citizenAuthorMode)
         {
             List<byte> authorCandidates = new List<byte>(participantCount - 1);
             for (int index = 0; index < roster.Count; index++)
@@ -1773,21 +1760,9 @@ public class PostItRoundManager : NetworkBehaviour
         _serverPostItLiarRoster.Clear();
         _serverPostItLiarRoster.AddRange(roster);
         _serverPostItLiarBattleScores.Clear();
-        _serverPostItLiarEligibleCategories.Clear();
-        if (promptAuthoringReady)
-        {
-            int categoryCount = Math.Min(
-                eligibleCategories.Count,
-                PostItLiarCategorySet.Capacity);
-            for (int index = 0; index < categoryCount; index++)
-                _serverPostItLiarEligibleCategories.Add(eligibleCategories[index]);
-        }
         _serverPostItLiarRandom = random;
         _serverPostItLiarPresetFallbackPrompt = prompt;
         _serverPostItLiarPrompt = prompt;
-        _serverPostItLiarEligibleCategorySet = promptAuthoringReady
-            ? eligibleCategorySet
-            : default;
         _serverPostItLiarChoices = choices;
         _serverPostItLiarSlot = liarSlot;
         _serverPostItLiarPromptAuthorSlot = promptAuthoringReady
@@ -1816,8 +1791,8 @@ public class PostItRoundManager : NetworkBehaviour
             CustomPromptLog(
                 roundRevision,
                 promptAuthoringReady
-                    ? $"mode=CitizenAuthor phase=Prepared eligibleCategories={_serverPostItLiarEligibleCategories.Count}"
-                    : "mode=CitizenAuthor source=PresetFallback reason=NoEligibleAuthoringPath");
+                    ? "mode=CitizenAuthor phase=Prepared"
+                    : "mode=CitizenAuthor source=PresetFallback reason=NoEligibleAuthor");
         }
         if (_serverPostItLiarTwoPlayerTestActive)
         {
@@ -1880,7 +1855,7 @@ public class PostItRoundManager : NetworkBehaviour
             _serverPostItLiarStarted = true;
             CustomPromptLog(
                 roundRevision,
-                $"mode=CitizenAuthor phase=PromptAuthoring authorSelected=True eligibleCategories={_serverPostItLiarEligibleCategories.Count}");
+                "mode=CitizenAuthor phase=PromptAuthoring authorSelected=True");
             return true;
         }
 
@@ -2242,8 +2217,11 @@ public class PostItRoundManager : NetworkBehaviour
     }
 
     public void RequestSubmitPostItCustomPrompt(
-        string category,
-        string answer)
+        string publicTopic,
+        string answer,
+        string distractor0,
+        string distractor1,
+        string distractor2)
     {
         if (!TryGetLocalPostItLiarRequestContext(
                 PostItLiarPhase.PromptAuthoring,
@@ -2267,12 +2245,22 @@ public class PostItRoundManager : NetworkBehaviour
             return;
         }
 
-        FixedString128Bytes categoryPayload;
+        FixedString128Bytes publicTopicPayload;
         FixedString128Bytes answerPayload;
+        FixedString128Bytes distractor0Payload;
+        FixedString128Bytes distractor1Payload;
+        FixedString128Bytes distractor2Payload;
         try
         {
-            categoryPayload = new FixedString128Bytes(category ?? string.Empty);
+            publicTopicPayload = new FixedString128Bytes(
+                publicTopic ?? string.Empty);
             answerPayload = new FixedString128Bytes(answer ?? string.Empty);
+            distractor0Payload = new FixedString128Bytes(
+                distractor0 ?? string.Empty);
+            distractor1Payload = new FixedString128Bytes(
+                distractor1 ?? string.Empty);
+            distractor2Payload = new FixedString128Bytes(
+                distractor2 ?? string.Empty);
         }
         catch (ArgumentException)
         {
@@ -2286,8 +2274,11 @@ public class PostItRoundManager : NetworkBehaviour
             roundRevision,
             phaseRevision,
             playerNetworkObjectId,
-            categoryPayload,
-            answerPayload);
+            publicTopicPayload,
+            answerPayload,
+            distractor0Payload,
+            distractor1Payload,
+            distractor2Payload);
     }
 
     public void RequestSubmitLiarAnswerChoice(byte shuffledChoiceSlot)
@@ -2375,8 +2366,11 @@ public class PostItRoundManager : NetworkBehaviour
         int roundRevision,
         int phaseRevision,
         ulong playerNetworkObjectId,
-        FixedString128Bytes category,
+        FixedString128Bytes publicTopic,
         FixedString128Bytes answer,
+        FixedString128Bytes distractor0,
+        FixedString128Bytes distractor1,
+        FixedString128Bytes distractor2,
         RpcParams rpcParams = default)
     {
         ulong senderClientId = rpcParams.Receive.SenderClientId;
@@ -2404,16 +2398,12 @@ public class PostItRoundManager : NetworkBehaviour
             }
             else
             {
-                string submittedCategory = category.ToString();
-                if (!_serverPostItLiarEligibleCategories.Contains(
-                        submittedCategory))
-                {
-                    result = PostItLiarSubmitResult.InvalidCategory;
-                }
-                else if (!_postItPromptAuthoringModule.TryCreateSelection(
-                             postItLiarPromptDatabase,
-                             submittedCategory,
+                if (!_postItPromptAuthoringModule.TryCreateSelection(
+                             publicTopic.ToString(),
                              answer.ToString(),
+                             distractor0.ToString(),
+                             distractor1.ToString(),
+                             distractor2.ToString(),
                              _serverPostItLiarRandom,
                              out PostItPromptSelection selection,
                              out PostItPromptAuthoringRejectionReason rejection))
@@ -2554,24 +2544,15 @@ public class PostItRoundManager : NetworkBehaviour
         PostItLiarPrivateRoleData privateData,
         RpcParams rpcParams = default)
     {
-        bool categorySetValid =
-            privateData.EligibleCategories.Count <=
-            PostItLiarCategorySet.Capacity;
-        bool hasAuthorCategories =
-            privateData.EligibleCategories.Count > 0;
+        bool reservedCategoriesEmpty =
+            privateData.EligibleCategories.Count == 0;
         bool roleInvariantValid =
             (privateData.Role == PostItLiarRole.Liar &&
              privateData.SecretAnswer.IsEmpty &&
-             !privateData.IsPromptAuthor &&
-             !hasAuthorCategories) ||
-            (privateData.Role == PostItLiarRole.Citizen &&
-             ((privateData.SecretAnswer.IsEmpty &&
-               ((!privateData.IsPromptAuthor && !hasAuthorCategories) ||
-                (privateData.IsPromptAuthor && hasAuthorCategories))) ||
-              (!privateData.SecretAnswer.IsEmpty &&
-               !hasAuthorCategories)));
+             !privateData.IsPromptAuthor) ||
+            privateData.Role == PostItLiarRole.Citizen;
         if (!privateData.IsValid ||
-            !categorySetValid ||
+            !reservedCategoriesEmpty ||
             !roleInvariantValid ||
             !CanAcceptLocalPostItLiarPayload(privateData.RoundRevision))
         {
@@ -7813,11 +7794,9 @@ public class PostItRoundManager : NetworkBehaviour
         _postItDeductionModule.Reset();
         _serverPostItLiarRoster.Clear();
         _serverPostItLiarBattleScores.Clear();
-        _serverPostItLiarEligibleCategories.Clear();
         _serverPostItLiarRandom = null;
         _serverPostItLiarPresetFallbackPrompt = null;
         _serverPostItLiarPrompt = null;
-        _serverPostItLiarEligibleCategorySet = default;
         _serverPostItLiarAuthoredClues = default;
         _serverPostItLiarAnonymousClues = default;
         _serverPostItLiarChoices = default;
@@ -7853,37 +7832,6 @@ public class PostItRoundManager : NetworkBehaviour
                PostItLiarPromptSourceMode.CitizenAuthor
             ? PostItLiarPromptSourceMode.CitizenAuthor
             : PostItLiarPromptSourceMode.PresetDatabase;
-    }
-
-    private static bool TryBuildPostItLiarCategorySet(
-        IReadOnlyList<string> categories,
-        out PostItLiarCategorySet categorySet)
-    {
-        categorySet = default;
-        if (categories == null || categories.Count == 0)
-            return false;
-
-        int count = Math.Min(categories.Count, PostItLiarCategorySet.Capacity);
-        try
-        {
-            for (int index = 0; index < count; index++)
-            {
-                FixedString128Bytes category =
-                    new FixedString128Bytes(categories[index]);
-                if (category.IsEmpty || !categorySet.TrySet(index, category))
-                {
-                    categorySet = default;
-                    return false;
-                }
-            }
-        }
-        catch (ArgumentException)
-        {
-            categorySet = default;
-            return false;
-        }
-
-        return categorySet.Count > 0;
     }
 
     private bool EnterPostItLiarSecretReveal()
@@ -7944,10 +7892,6 @@ public class PostItRoundManager : NetworkBehaviour
                 entry.StableSlot == _serverPostItLiarPromptAuthorSlot &&
                 (isPromptAuthoringPhase ||
                  _serverPostItLiarUsedCustomPrompt);
-            PostItLiarCategorySet categories =
-                isPromptAuthoringPhase && isPromptAuthor
-                    ? _serverPostItLiarEligibleCategorySet
-                    : default;
             PostItLiarPrivateRoleData privateData =
                 new PostItLiarPrivateRoleData(
                     _serverPostItLiarDecisionRoundRevision,
@@ -7958,7 +7902,7 @@ public class PostItRoundManager : NetworkBehaviour
                         ? secretAnswer
                         : default,
                     isPromptAuthor,
-                    categories);
+                    default);
             ReceivePostItLiarPrivateRoleRpc(
                 privateData,
                 RpcTarget.Single(entry.ClientId, RpcTargetUse.Temp));
@@ -8015,9 +7959,13 @@ public class PostItRoundManager : NetworkBehaviour
     {
         switch (rejection)
         {
+            case PostItPromptAuthoringRejectionReason.EmptyTopic:
             case PostItPromptAuthoringRejectionReason.EmptyAnswer:
+            case PostItPromptAuthoringRejectionReason.EmptyDistractor:
                 return PostItLiarSubmitResult.Empty;
+            case PostItPromptAuthoringRejectionReason.TopicTooLong:
             case PostItPromptAuthoringRejectionReason.AnswerTooLong:
+            case PostItPromptAuthoringRejectionReason.DistractorTooLong:
                 return PostItLiarSubmitResult.TooLong;
             case PostItPromptAuthoringRejectionReason.InvalidCategory:
                 return PostItLiarSubmitResult.InvalidCategory;
@@ -8025,8 +7973,12 @@ public class PostItRoundManager : NetworkBehaviour
                 return PostItLiarSubmitResult.AnswerMatchesCategory;
             case PostItPromptAuthoringRejectionReason.InsufficientDistractors:
                 return PostItLiarSubmitResult.InsufficientChoices;
+            case PostItPromptAuthoringRejectionReason.InvalidTopicText:
             case PostItPromptAuthoringRejectionReason.InvalidAnswerText:
+            case PostItPromptAuthoringRejectionReason.InvalidDistractorText:
                 return PostItLiarSubmitResult.InvalidText;
+            case PostItPromptAuthoringRejectionReason.DuplicateChoice:
+                return PostItLiarSubmitResult.InsufficientChoices;
             default:
                 return PostItLiarSubmitResult.InvalidText;
         }

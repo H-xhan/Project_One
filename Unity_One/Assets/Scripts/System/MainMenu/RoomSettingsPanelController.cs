@@ -313,7 +313,7 @@ public sealed class RoomSettingsPanelController : MonoBehaviour
         if (modeDescriptionText != null)
         {
             modeDescriptionText.text = isCitizenAuthor
-                ? "라이어 선정 후 시민 출제자 한 명이\n주제와 정답을 직접 정합니다."
+                ? "라이어 선정 후 시민 출제자 한 명이\n주제·정답·오답 3개를 직접 정합니다."
                 : "게임이 준비한 주제와 정답을 사용합니다.";
         }
     }

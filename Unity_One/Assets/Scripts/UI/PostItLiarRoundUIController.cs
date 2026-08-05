@@ -1,5 +1,4 @@
 using System;
-using System.Collections.Generic;
 using System.Globalization;
 using System.Text;
 using TMPro;
@@ -40,8 +39,10 @@ public sealed class PostItLiarRoundUIController : MonoBehaviour
 
     [Header("Prompt Authoring")]
     [SerializeField] private TMP_Text promptAuthorRoleText;
-    [SerializeField] private TMP_Dropdown promptAuthorCategoryDropdown;
+    [SerializeField] private TMP_InputField promptAuthorTopicInputField;
     [SerializeField] private TMP_InputField promptAuthorAnswerInputField;
+    [SerializeField] private TMP_InputField[] promptAuthorDistractorInputFields =
+        new TMP_InputField[PostItPromptAuthoringModule.RequiredDistractorCount];
     [SerializeField] private TMP_Text promptAuthorCharacterCountText;
     [SerializeField] private Button promptAuthorSubmitButton;
     [SerializeField] private TMP_Text promptAuthorErrorText;
@@ -110,9 +111,6 @@ public sealed class PostItLiarRoundUIController : MonoBehaviour
     private readonly ColorBlock[] _voteCandidateBaseColors =
         new ColorBlock[PostItLiarFixedSet.Capacity];
     private readonly StringBuilder _builder = new StringBuilder(512);
-    private readonly List<string> _promptAuthorCategoryOptions =
-        new List<string>(PostItLiarCategorySet.Capacity);
-
     private PostItRoundManager _boundRoundManager;
     private float _nextBindAttemptTime;
     private int _displayedRoundRevision = -1;
@@ -123,10 +121,12 @@ public sealed class PostItLiarRoundUIController : MonoBehaviour
     private bool _managerEventsSubscribed;
     private bool _buttonListenersRegistered;
     private bool _requiredArraysValid;
+    private bool _promptAuthorInputsValid;
 
     private void Awake()
     {
         _requiredArraysValid = HasRequiredArraySizes();
+        _promptAuthorInputsValid = HasRequiredPromptAuthorInputFields();
         ConfigureInputField();
         ConfigureDynamicText();
         CaptureButtonBaseColors();
@@ -368,22 +368,21 @@ public sealed class PostItLiarRoundUIController : MonoBehaviour
             SetText(
                 promptAuthorWaitingRoleText,
                 privateRole.Role == PostItLiarRole.Liar
-                    ? "당신은 라이어입니다.\n시민이 주제를 정하고 있습니다."
-                    : "당신은 시민입니다.\n출제자가 주제와 정답을 정하고 있습니다.");
+                    ? "당신은 라이어입니다.\n시민이 주제와 선택지를 정하고 있습니다."
+                    : "당신은 시민입니다.\n출제자가 주제와 선택지를 정하고 있습니다.");
             return;
         }
 
         SetPromptAuthorPanelVisible(true);
         SetText(
             promptAuthorRoleText,
-            "당신은 시민 출제자입니다.\n이번 라운드의 주제와 정답을 정하세요.");
-        RefreshPromptAuthorCategories(privateRole.EligibleCategories);
+            "당신은 시민 출제자입니다.\n이번 라운드의 주제·정답·오답 3개를 정하세요.");
         RefreshPromptAuthorInputState();
     }
 
     private void RenderSecretRole(PostItLiarPhaseState state)
     {
-        SetText(secretCategoryText, $"카테고리 · {state.PublicCategory}");
+        SetText(secretCategoryText, $"주제 · {state.PublicCategory}");
         if (!TryGetLocalPrivateRole(
                 out PostItLiarPrivateRoleData privateRole))
         {
@@ -397,7 +396,7 @@ public sealed class PostItLiarRoundUIController : MonoBehaviour
             SetText(secretRoleText, "당신은 라이어입니다");
             SetText(
                 secretAnswerText,
-                "비밀 정답 없이 카테고리만 보고 단서를 작성하세요");
+                "비밀 정답 없이 주제만 보고 단서를 작성하세요");
         }
         else
         {
@@ -408,7 +407,7 @@ public sealed class PostItLiarRoundUIController : MonoBehaviour
 
     private void RenderClueInput(PostItLiarPhaseState state)
     {
-        SetText(clueCategoryText, $"카테고리 · {state.PublicCategory}");
+        SetText(clueCategoryText, $"주제 · {state.PublicCategory}");
         if (TryGetLocalPrivateRole(
                 out PostItLiarPrivateRoleData privateRole) &&
             privateRole.Role == PostItLiarRole.Citizen)
@@ -800,114 +799,109 @@ public sealed class PostItLiarRoundUIController : MonoBehaviour
                 : string.Empty);
     }
 
-    private void RefreshPromptAuthorCategories(
-        PostItLiarCategorySet categories)
-    {
-        if (promptAuthorCategoryDropdown == null)
-            return;
-
-        string selectedCategory =
-            promptAuthorCategoryDropdown.options.Count > 0 &&
-            promptAuthorCategoryDropdown.value >= 0 &&
-            promptAuthorCategoryDropdown.value <
-            promptAuthorCategoryDropdown.options.Count
-                ? promptAuthorCategoryDropdown.options[
-                    promptAuthorCategoryDropdown.value].text
-                : string.Empty;
-
-        bool optionsChanged =
-            promptAuthorCategoryDropdown.options.Count != categories.Count;
-        if (!optionsChanged)
-        {
-            for (int index = 0; index < categories.Count; index++)
-            {
-                if (!string.Equals(
-                        promptAuthorCategoryDropdown.options[index].text,
-                        categories.Get(index).ToString(),
-                        StringComparison.Ordinal))
-                {
-                    optionsChanged = true;
-                    break;
-                }
-            }
-        }
-
-        if (!optionsChanged)
-            return;
-
-        _promptAuthorCategoryOptions.Clear();
-        int selectedIndex = 0;
-        for (int index = 0; index < categories.Count; index++)
-        {
-            string category = categories.Get(index).ToString();
-            if (string.IsNullOrEmpty(category))
-                continue;
-
-            if (string.Equals(
-                    category,
-                    selectedCategory,
-                    StringComparison.Ordinal))
-            {
-                selectedIndex = _promptAuthorCategoryOptions.Count;
-            }
-            _promptAuthorCategoryOptions.Add(category);
-        }
-
-        promptAuthorCategoryDropdown.ClearOptions();
-        promptAuthorCategoryDropdown.AddOptions(
-            _promptAuthorCategoryOptions);
-        promptAuthorCategoryDropdown.SetValueWithoutNotify(
-            Mathf.Clamp(
-                selectedIndex,
-                0,
-                Mathf.Max(0, _promptAuthorCategoryOptions.Count - 1)));
-        promptAuthorCategoryDropdown.RefreshShownValue();
-    }
-
     private void RefreshPromptAuthorInputState()
     {
+        string topic = promptAuthorTopicInputField != null
+            ? promptAuthorTopicInputField.text ?? string.Empty
+            : string.Empty;
         string answer = promptAuthorAnswerInputField != null
             ? promptAuthorAnswerInputField.text ?? string.Empty
             : string.Empty;
+        string distractor0 = GetPromptAuthorDistractorText(0);
+        string distractor1 = GetPromptAuthorDistractorText(1);
+        string distractor2 = GetPromptAuthorDistractorText(2);
+
+        TryGetTextMetrics(
+            topic,
+            PostItPromptAuthoringModule.MaxPromptTextElements,
+            PostItPromptAuthoringModule.MaxPromptUtf8Bytes,
+            out int topicTextElementCount,
+            out int topicUtf8ByteCount);
         TryGetTextMetrics(
             answer,
-            PostItPromptAuthoringModule.MaxAnswerTextElements,
-            PostItPromptAuthoringModule.MaxAnswerUtf8Bytes,
-            out int textElementCount,
-            out int utf8ByteCount);
-        SetText(
-            promptAuthorCharacterCountText,
-            $"{textElementCount}/{PostItPromptAuthoringModule.MaxAnswerTextElements} · " +
-            $"{utf8ByteCount}/{PostItPromptAuthoringModule.MaxAnswerUtf8Bytes}B");
+            PostItPromptAuthoringModule.MaxPromptTextElements,
+            PostItPromptAuthoringModule.MaxPromptUtf8Bytes,
+            out int answerTextElementCount,
+            out int answerUtf8ByteCount);
+        TryGetTextMetrics(
+            distractor0,
+            PostItPromptAuthoringModule.MaxPromptTextElements,
+            PostItPromptAuthoringModule.MaxPromptUtf8Bytes,
+            out int distractor0TextElementCount,
+            out int distractor0Utf8ByteCount);
+        TryGetTextMetrics(
+            distractor1,
+            PostItPromptAuthoringModule.MaxPromptTextElements,
+            PostItPromptAuthoringModule.MaxPromptUtf8Bytes,
+            out int distractor1TextElementCount,
+            out int distractor1Utf8ByteCount);
+        TryGetTextMetrics(
+            distractor2,
+            PostItPromptAuthoringModule.MaxPromptTextElements,
+            PostItPromptAuthoringModule.MaxPromptUtf8Bytes,
+            out int distractor2TextElementCount,
+            out int distractor2Utf8ByteCount);
+
+        _builder.Clear();
+        _builder.Append("주제 ")
+            .Append(topicTextElementCount)
+            .Append('/')
+            .Append(topicUtf8ByteCount)
+            .Append("B · 정답 ")
+            .Append(answerTextElementCount)
+            .Append('/')
+            .Append(answerUtf8ByteCount)
+            .Append("B\n오답 ")
+            .Append(distractor0TextElementCount)
+            .Append('/')
+            .Append(distractor0Utf8ByteCount)
+            .Append("B · ")
+            .Append(distractor1TextElementCount)
+            .Append('/')
+            .Append(distractor1Utf8ByteCount)
+            .Append("B · ")
+            .Append(distractor2TextElementCount)
+            .Append('/')
+            .Append(distractor2Utf8ByteCount)
+            .Append("B (각 ")
+            .Append(PostItPromptAuthoringModule.MaxPromptTextElements)
+            .Append("자/")
+            .Append(PostItPromptAuthoringModule.MaxPromptUtf8Bytes)
+            .Append("B)");
+        SetText(promptAuthorCharacterCountText, _builder.ToString());
 
         bool alreadySubmitted =
             _boundRoundManager != null &&
             _boundRoundManager.HasSubmittedLiarCustomPrompt;
-        bool hasCategory =
-            promptAuthorCategoryDropdown != null &&
-            promptAuthorCategoryDropdown.options.Count > 0;
-        bool canEdit = !alreadySubmitted && hasCategory;
-        if (promptAuthorCategoryDropdown != null)
-            promptAuthorCategoryDropdown.interactable = canEdit;
+        bool canEdit = !alreadySubmitted && _promptAuthorInputsValid;
+        if (promptAuthorTopicInputField != null)
+            promptAuthorTopicInputField.interactable = canEdit;
         if (promptAuthorAnswerInputField != null)
             promptAuthorAnswerInputField.interactable = canEdit;
+        if (promptAuthorDistractorInputFields != null)
+        {
+            for (int index = 0;
+                 index < promptAuthorDistractorInputFields.Length;
+                 index++)
+            {
+                TMP_InputField inputField =
+                    promptAuthorDistractorInputFields[index];
+                if (inputField != null)
+                    inputField.interactable = canEdit;
+            }
+        }
         if (promptAuthorSubmitButton != null)
             promptAuthorSubmitButton.interactable = canEdit;
 
         if (alreadySubmitted)
             SetText(promptAuthorErrorText, "출제 완료 · 수정할 수 없습니다");
-        else if (!hasCategory)
-            SetText(promptAuthorErrorText, "사용 가능한 카테고리가 없습니다");
+        else if (!_promptAuthorInputsValid)
+            SetText(promptAuthorErrorText, "출제 입력 UI 연결을 확인하세요");
     }
 
-    private void HandlePromptAuthorCategoryChanged(int value)
+    private void HandlePromptAuthorTextChanged(string value)
     {
-        SetText(promptAuthorErrorText, string.Empty);
-        RefreshPromptAuthorInputState();
-    }
-
-    private void HandlePromptAuthorAnswerChanged(string value)
-    {
+        _ = value;
         SetText(promptAuthorErrorText, string.Empty);
         RefreshPromptAuthorInputState();
     }
@@ -915,22 +909,31 @@ public sealed class PostItLiarRoundUIController : MonoBehaviour
     private void SubmitPromptAuthoring()
     {
         if (_boundRoundManager == null ||
-            promptAuthorCategoryDropdown == null ||
+            !_promptAuthorInputsValid ||
+            promptAuthorTopicInputField == null ||
             promptAuthorAnswerInputField == null ||
             promptAuthorSubmitButton == null ||
-            !promptAuthorSubmitButton.interactable ||
-            promptAuthorCategoryDropdown.options.Count == 0)
+            !promptAuthorSubmitButton.interactable)
         {
             return;
         }
 
-        int selectedIndex = Mathf.Clamp(
-            promptAuthorCategoryDropdown.value,
-            0,
-            promptAuthorCategoryDropdown.options.Count - 1);
         _boundRoundManager.RequestSubmitPostItCustomPrompt(
-            promptAuthorCategoryDropdown.options[selectedIndex].text,
-            promptAuthorAnswerInputField.text ?? string.Empty);
+            promptAuthorTopicInputField.text ?? string.Empty,
+            promptAuthorAnswerInputField.text ?? string.Empty,
+            GetPromptAuthorDistractorText(0),
+            GetPromptAuthorDistractorText(1),
+            GetPromptAuthorDistractorText(2));
+    }
+
+    private string GetPromptAuthorDistractorText(int index)
+    {
+        TMP_InputField inputField = GetArrayItem(
+            promptAuthorDistractorInputFields,
+            index);
+        return inputField != null
+            ? inputField.text ?? string.Empty
+            : string.Empty;
     }
 
     private void RefreshClueInputState(PostItLiarPhase phase)
@@ -1070,15 +1073,30 @@ public sealed class PostItLiarRoundUIController : MonoBehaviour
         if (_buttonListenersRegistered)
             return;
 
-        if (promptAuthorCategoryDropdown != null)
+        if (promptAuthorTopicInputField != null)
         {
-            promptAuthorCategoryDropdown.onValueChanged.AddListener(
-                HandlePromptAuthorCategoryChanged);
+            promptAuthorTopicInputField.onValueChanged.AddListener(
+                HandlePromptAuthorTextChanged);
         }
         if (promptAuthorAnswerInputField != null)
         {
             promptAuthorAnswerInputField.onValueChanged.AddListener(
-                HandlePromptAuthorAnswerChanged);
+                HandlePromptAuthorTextChanged);
+        }
+        if (promptAuthorDistractorInputFields != null)
+        {
+            for (int index = 0;
+                 index < promptAuthorDistractorInputFields.Length;
+                 index++)
+            {
+                TMP_InputField inputField =
+                    promptAuthorDistractorInputFields[index];
+                if (inputField != null)
+                {
+                    inputField.onValueChanged.AddListener(
+                        HandlePromptAuthorTextChanged);
+                }
+            }
         }
         if (promptAuthorSubmitButton != null)
             promptAuthorSubmitButton.onClick.AddListener(SubmitPromptAuthoring);
@@ -1123,15 +1141,30 @@ public sealed class PostItLiarRoundUIController : MonoBehaviour
         if (!_buttonListenersRegistered)
             return;
 
-        if (promptAuthorCategoryDropdown != null)
+        if (promptAuthorTopicInputField != null)
         {
-            promptAuthorCategoryDropdown.onValueChanged.RemoveListener(
-                HandlePromptAuthorCategoryChanged);
+            promptAuthorTopicInputField.onValueChanged.RemoveListener(
+                HandlePromptAuthorTextChanged);
         }
         if (promptAuthorAnswerInputField != null)
         {
             promptAuthorAnswerInputField.onValueChanged.RemoveListener(
-                HandlePromptAuthorAnswerChanged);
+                HandlePromptAuthorTextChanged);
+        }
+        if (promptAuthorDistractorInputFields != null)
+        {
+            for (int index = 0;
+                 index < promptAuthorDistractorInputFields.Length;
+                 index++)
+            {
+                TMP_InputField inputField =
+                    promptAuthorDistractorInputFields[index];
+                if (inputField != null)
+                {
+                    inputField.onValueChanged.RemoveListener(
+                        HandlePromptAuthorTextChanged);
+                }
+            }
         }
         if (promptAuthorSubmitButton != null)
         {
@@ -1173,7 +1206,18 @@ public sealed class PostItLiarRoundUIController : MonoBehaviour
 
     private void ConfigureInputField()
     {
+        ConfigureSingleLineInputField(promptAuthorTopicInputField);
         ConfigureSingleLineInputField(promptAuthorAnswerInputField);
+        if (promptAuthorDistractorInputFields != null)
+        {
+            for (int index = 0;
+                 index < promptAuthorDistractorInputFields.Length;
+                 index++)
+            {
+                ConfigureSingleLineInputField(
+                    promptAuthorDistractorInputFields[index]);
+            }
+        }
         ConfigureSingleLineInputField(clueInputField);
     }
 
@@ -1316,13 +1360,22 @@ public sealed class PostItLiarRoundUIController : MonoBehaviour
         _lastDeadlineSeconds = int.MinValue;
 
         ReleasePromptAuthorInputFocus();
+        if (promptAuthorTopicInputField != null)
+            promptAuthorTopicInputField.SetTextWithoutNotify(string.Empty);
         if (promptAuthorAnswerInputField != null)
             promptAuthorAnswerInputField.SetTextWithoutNotify(string.Empty);
-        if (promptAuthorCategoryDropdown != null)
+        if (promptAuthorDistractorInputFields != null)
         {
-            promptAuthorCategoryDropdown.ClearOptions();
+            for (int index = 0;
+                 index < promptAuthorDistractorInputFields.Length;
+                 index++)
+            {
+                TMP_InputField inputField =
+                    promptAuthorDistractorInputFields[index];
+                if (inputField != null)
+                    inputField.SetTextWithoutNotify(string.Empty);
+            }
         }
-        _promptAuthorCategoryOptions.Clear();
 
         if (clueInputField != null)
             clueInputField.SetTextWithoutNotify(string.Empty);
@@ -1430,11 +1483,23 @@ public sealed class PostItLiarRoundUIController : MonoBehaviour
 
     private void ReleasePromptAuthorInputFocus()
     {
-        if (promptAuthorAnswerInputField != null &&
-            promptAuthorAnswerInputField.isFocused)
+        ReleaseInputFieldFocus(promptAuthorTopicInputField);
+        ReleaseInputFieldFocus(promptAuthorAnswerInputField);
+        if (promptAuthorDistractorInputFields == null)
+            return;
+
+        for (int index = 0;
+             index < promptAuthorDistractorInputFields.Length;
+             index++)
         {
-            promptAuthorAnswerInputField.DeactivateInputField();
+            ReleaseInputFieldFocus(promptAuthorDistractorInputFields[index]);
         }
+    }
+
+    private static void ReleaseInputFieldFocus(TMP_InputField inputField)
+    {
+        if (inputField != null && inputField.isFocused)
+            inputField.DeactivateInputField();
     }
 
     private bool TryGetLocalPrivateRole(
@@ -1585,15 +1650,17 @@ public sealed class PostItLiarRoundUIController : MonoBehaviour
             case PostItLiarSubmitResult.Accepted:
                 return "출제 완료 · 수정할 수 없습니다";
             case PostItLiarSubmitResult.Empty:
-                return "정답을 입력하세요";
+                return "주제·정답·오답 3개를 모두 입력하세요";
             case PostItLiarSubmitResult.TooLong:
-                return "정답은 12자 또는 UTF-8 96B 이하여야 합니다";
+                return "각 입력은 12자 또는 UTF-8 96B 이하여야 합니다";
             case PostItLiarSubmitResult.InvalidCategory:
-                return "사용 가능한 카테고리를 선택하세요";
+                return "주제 입력을 확인하세요";
             case PostItLiarSubmitResult.AnswerMatchesCategory:
-                return "카테고리와 같은 정답은 사용할 수 없습니다";
+                return "주제와 같은 정답은 사용할 수 없습니다";
             case PostItLiarSubmitResult.InsufficientChoices:
-                return "이 카테고리의 선택지 후보가 부족합니다";
+                return "서로 다른 오답 3개를 입력하세요";
+            case PostItLiarSubmitResult.InvalidText:
+                return "입력값을 확인하고 정답·오답을 서로 다르게 작성하세요";
             default:
                 return GetSubmitResultLabel(result);
         }
@@ -1618,10 +1685,47 @@ public sealed class PostItLiarRoundUIController : MonoBehaviour
         return valid;
     }
 
-    private static bool HasCapacity<T>(T[] values)
+    private bool HasRequiredPromptAuthorInputFields()
+    {
+        bool valid =
+            promptAuthorTopicInputField != null &&
+            promptAuthorAnswerInputField != null &&
+            HasCapacity(
+                promptAuthorDistractorInputFields,
+                PostItPromptAuthoringModule.RequiredDistractorCount);
+        if (valid)
+        {
+            for (int index = 0;
+                 index < promptAuthorDistractorInputFields.Length;
+                 index++)
+            {
+                if (promptAuthorDistractorInputFields[index] == null)
+                {
+                    valid = false;
+                    break;
+                }
+            }
+        }
+
+        if (!valid)
+        {
+            Debug.LogError(
+                "[PostItLiarRoundUIController] 출제 UI에는 주제·정답·오답 3개 입력 연결이 필요합니다.",
+                this);
+        }
+
+        return valid;
+    }
+
+    private static bool HasCapacity<T>(T[] values, int capacity)
     {
         return values != null &&
-               values.Length == PostItLiarFixedSet.Capacity;
+               values.Length == capacity;
+    }
+
+    private static bool HasCapacity<T>(T[] values)
+    {
+        return HasCapacity(values, PostItLiarFixedSet.Capacity);
     }
 
     private static T GetArrayItem<T>(T[] values, int index)

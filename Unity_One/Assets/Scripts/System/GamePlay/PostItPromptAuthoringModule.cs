@@ -1,5 +1,4 @@
 using System;
-using System.Collections.Generic;
 using System.Globalization;
 using System.Text;
 
@@ -14,82 +13,42 @@ public enum PostItPromptAuthoringRejectionReason : byte
     AnswerTooLong = 6,
     InvalidAnswerText = 7,
     AnswerMatchesCategory = 8,
-    InsufficientDistractors = 9
+    InsufficientDistractors = 9,
+    EmptyTopic = 10,
+    TopicTooLong = 11,
+    InvalidTopicText = 12,
+    EmptyDistractor = 13,
+    DistractorTooLong = 14,
+    InvalidDistractorText = 15,
+    DuplicateChoice = 16
 }
 
 public sealed class PostItPromptAuthoringModule
 {
     public const int RequiredDistractorCount =
         PostItPromptDatabaseSO.RequiredChoiceCount - 1;
-    public const int MaxAnswerTextElements = 12;
-    public const int MaxAnswerUtf8Bytes = 96;
+    public const int MaxPromptTextElements = 12;
+    public const int MaxPromptUtf8Bytes = 96;
+    public const int MaxAnswerTextElements = MaxPromptTextElements;
+    public const int MaxAnswerUtf8Bytes = MaxPromptUtf8Bytes;
 
     private const string CustomAuthoringId = "citizen_author";
 
     private static readonly UTF8Encoding StrictUtf8 =
         new UTF8Encoding(false, true);
 
-    private readonly List<string> _categoryOrder = new List<string>();
-    private readonly Dictionary<string, HashSet<string>> _categoryPools =
-        new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
-    private readonly List<string> _distractorCandidates = new List<string>();
-
-    public bool TryGetEligibleCategories(
-        PostItPromptDatabaseSO database,
-        List<string> destination,
-        out PostItPromptAuthoringRejectionReason rejectionReason)
-    {
-        if (destination == null)
-            throw new ArgumentNullException(nameof(destination));
-
-        destination.Clear();
-        rejectionReason = PostItPromptAuthoringRejectionReason.None;
-
-        if (database == null)
-        {
-            rejectionReason =
-                PostItPromptAuthoringRejectionReason.DatabaseMissing;
-            return false;
-        }
-
-        BuildCategoryPools(database);
-        for (int index = 0; index < _categoryOrder.Count; index++)
-        {
-            string category = _categoryOrder[index];
-            if (_categoryPools.TryGetValue(
-                    category,
-                    out HashSet<string> candidates) &&
-                candidates.Count >= RequiredDistractorCount)
-            {
-                destination.Add(category);
-            }
-        }
-
-        if (destination.Count > 0)
-            return true;
-
-        rejectionReason =
-            PostItPromptAuthoringRejectionReason.NoEligibleCategories;
-        return false;
-    }
-
     public bool TryCreateSelection(
-        PostItPromptDatabaseSO database,
-        string rawCategory,
+        string rawPublicTopic,
         string rawAnswer,
+        string rawDistractor0,
+        string rawDistractor1,
+        string rawDistractor2,
         Random random,
         out PostItPromptSelection selection,
         out PostItPromptAuthoringRejectionReason rejectionReason)
     {
         selection = null;
         rejectionReason = PostItPromptAuthoringRejectionReason.None;
-
-        if (database == null)
-        {
-            rejectionReason =
-                PostItPromptAuthoringRejectionReason.DatabaseMissing;
-            return false;
-        }
 
         if (random == null)
         {
@@ -98,63 +57,54 @@ public sealed class PostItPromptAuthoringModule
             return false;
         }
 
-        if (!TryNormalizeSingleLine(rawCategory, out string category) ||
-            category.Length == 0)
-        {
-            rejectionReason =
-                PostItPromptAuthoringRejectionReason.InvalidCategory;
-            return false;
-        }
-
-        if (!TryValidateAnswer(
+        if (!TryValidateTopic(
+                rawPublicTopic,
+                out string publicTopic,
+                out rejectionReason) ||
+            !TryValidateAnswer(
                 rawAnswer,
-                category,
+                publicTopic,
                 out string answer,
                 out rejectionReason))
         {
             return false;
         }
 
-        BuildCategoryPools(database);
-        if (!_categoryPools.TryGetValue(
-                category,
-                out HashSet<string> categoryPool))
+        string[] rawDistractors =
         {
-            rejectionReason =
-                PostItPromptAuthoringRejectionReason.InvalidCategory;
-            return false;
-        }
-
-        _distractorCandidates.Clear();
-        foreach (string candidate in categoryPool)
-        {
-            if (!string.Equals(candidate, answer, StringComparison.Ordinal))
-                _distractorCandidates.Add(candidate);
-        }
-
-        _distractorCandidates.Sort(StringComparer.Ordinal);
-
-        if (_distractorCandidates.Count < RequiredDistractorCount)
-        {
-            rejectionReason =
-                PostItPromptAuthoringRejectionReason.InsufficientDistractors;
-            return false;
-        }
-
-        for (int index = 0; index < RequiredDistractorCount; index++)
-        {
-            int swapIndex = random.Next(
-                index,
-                _distractorCandidates.Count);
-            (_distractorCandidates[index], _distractorCandidates[swapIndex]) =
-                (_distractorCandidates[swapIndex], _distractorCandidates[index]);
-        }
+            rawDistractor0,
+            rawDistractor1,
+            rawDistractor2
+        };
 
         string[] choices =
             new string[PostItPromptDatabaseSO.RequiredChoiceCount];
         choices[0] = answer;
         for (int index = 0; index < RequiredDistractorCount; index++)
-            choices[index + 1] = _distractorCandidates[index];
+        {
+            if (!TryValidateDistractor(
+                    rawDistractors[index],
+                    out string distractor,
+                    out rejectionReason))
+            {
+                return false;
+            }
+
+            for (int choiceIndex = 0; choiceIndex <= index; choiceIndex++)
+            {
+                if (string.Equals(
+                        choices[choiceIndex],
+                        distractor,
+                        StringComparison.Ordinal))
+                {
+                    rejectionReason =
+                        PostItPromptAuthoringRejectionReason.DuplicateChoice;
+                    return false;
+                }
+            }
+
+            choices[index + 1] = distractor;
+        }
 
         for (int index = choices.Length - 1; index > 0; index--)
         {
@@ -173,7 +123,7 @@ public sealed class PostItPromptAuthoringModule
 
         selection = new PostItPromptSelection(
             CustomAuthoringId,
-            category,
+            publicTopic,
             answer,
             choices,
             Array.Empty<string>(),
@@ -181,61 +131,70 @@ public sealed class PostItPromptAuthoringModule
         return true;
     }
 
+    public static bool TryValidateTopic(
+        string rawTopic,
+        out string normalizedTopic,
+        out PostItPromptAuthoringRejectionReason rejectionReason)
+    {
+        switch (ValidatePromptText(rawTopic, out normalizedTopic))
+        {
+            case PromptTextValidationResult.Valid:
+                rejectionReason = PostItPromptAuthoringRejectionReason.None;
+                return true;
+            case PromptTextValidationResult.Empty:
+                rejectionReason =
+                    PostItPromptAuthoringRejectionReason.EmptyTopic;
+                return false;
+            case PromptTextValidationResult.TooLong:
+                rejectionReason =
+                    PostItPromptAuthoringRejectionReason.TopicTooLong;
+                return false;
+            default:
+                rejectionReason =
+                    PostItPromptAuthoringRejectionReason.InvalidTopicText;
+                return false;
+        }
+    }
+
     public static bool TryValidateAnswer(
         string rawAnswer,
-        string rawCategory,
+        string rawPublicTopic,
         out string normalizedAnswer,
         out PostItPromptAuthoringRejectionReason rejectionReason)
     {
         normalizedAnswer = string.Empty;
         rejectionReason = PostItPromptAuthoringRejectionReason.None;
 
-        if (!TryNormalizeSingleLine(rawCategory, out string category) ||
-            category.Length == 0)
+        if (!TryValidateTopic(
+                rawPublicTopic,
+                out string publicTopic,
+                out rejectionReason))
         {
-            rejectionReason =
-                PostItPromptAuthoringRejectionReason.InvalidCategory;
             return false;
         }
 
-        if (!TryNormalizeSingleLine(rawAnswer, out normalizedAnswer))
+        switch (ValidatePromptText(rawAnswer, out normalizedAnswer))
         {
-            rejectionReason =
-                PostItPromptAuthoringRejectionReason.InvalidAnswerText;
-            return false;
-        }
-
-        if (normalizedAnswer.Length == 0)
-        {
-            rejectionReason =
-                PostItPromptAuthoringRejectionReason.EmptyAnswer;
-            return false;
-        }
-
-        try
-        {
-            if (StringInfo.ParseCombiningCharacters(normalizedAnswer).Length >
-                MaxAnswerTextElements ||
-                StrictUtf8.GetByteCount(normalizedAnswer) >
-                MaxAnswerUtf8Bytes)
-            {
+            case PromptTextValidationResult.Empty:
+                normalizedAnswer = string.Empty;
+                rejectionReason =
+                    PostItPromptAuthoringRejectionReason.EmptyAnswer;
+                return false;
+            case PromptTextValidationResult.TooLong:
                 normalizedAnswer = string.Empty;
                 rejectionReason =
                     PostItPromptAuthoringRejectionReason.AnswerTooLong;
                 return false;
-            }
-        }
-        catch (ArgumentException)
-        {
-            normalizedAnswer = string.Empty;
-            rejectionReason =
-                PostItPromptAuthoringRejectionReason.InvalidAnswerText;
-            return false;
+            case PromptTextValidationResult.Invalid:
+                normalizedAnswer = string.Empty;
+                rejectionReason =
+                    PostItPromptAuthoringRejectionReason.InvalidAnswerText;
+                return false;
         }
 
         if (string.Equals(
                 normalizedAnswer,
-                category,
+                publicTopic,
                 StringComparison.Ordinal))
         {
             normalizedAnswer = string.Empty;
@@ -247,53 +206,54 @@ public sealed class PostItPromptAuthoringModule
         return true;
     }
 
-    private void BuildCategoryPools(PostItPromptDatabaseSO database)
+    private static bool TryValidateDistractor(
+        string rawDistractor,
+        out string normalizedDistractor,
+        out PostItPromptAuthoringRejectionReason rejectionReason)
     {
-        _categoryOrder.Clear();
-        _categoryPools.Clear();
-
-        IReadOnlyList<PostItPromptDatabaseSO.Entry> entries = database.Entries;
-        for (int index = 0; index < entries.Count; index++)
+        switch (ValidatePromptText(rawDistractor, out normalizedDistractor))
         {
-            PostItPromptDatabaseSO.Entry entry = entries[index];
-            if (!PostItPromptDatabaseSO.ValidateEntry(entry, index, out _))
-                continue;
-
-            if (!TryNormalizeSingleLine(
-                    entry.PublicCategory,
-                    out string category) ||
-                category.Length == 0)
-            {
-                continue;
-            }
-
-            if (!_categoryPools.TryGetValue(
-                    category,
-                    out HashSet<string> candidates))
-            {
-                candidates = new HashSet<string>(StringComparer.Ordinal);
-                _categoryPools.Add(category, candidates);
-                _categoryOrder.Add(category);
-            }
-
-            TryAddCandidate(candidates, entry.SecretAnswer);
-            for (int choiceIndex = 0;
-                 choiceIndex < entry.Choices.Length;
-                 choiceIndex++)
-            {
-                TryAddCandidate(candidates, entry.Choices[choiceIndex]);
-            }
+            case PromptTextValidationResult.Valid:
+                rejectionReason = PostItPromptAuthoringRejectionReason.None;
+                return true;
+            case PromptTextValidationResult.Empty:
+                rejectionReason =
+                    PostItPromptAuthoringRejectionReason.EmptyDistractor;
+                return false;
+            case PromptTextValidationResult.TooLong:
+                rejectionReason =
+                    PostItPromptAuthoringRejectionReason.DistractorTooLong;
+                return false;
+            default:
+                rejectionReason =
+                    PostItPromptAuthoringRejectionReason.InvalidDistractorText;
+                return false;
         }
     }
 
-    private static void TryAddCandidate(
-        HashSet<string> destination,
-        string rawCandidate)
+    private static PromptTextValidationResult ValidatePromptText(
+        string rawValue,
+        out string normalizedValue)
     {
-        if (TryNormalizeSingleLine(rawCandidate, out string candidate) &&
-            candidate.Length > 0)
+        if (!TryNormalizeSingleLine(rawValue, out normalizedValue))
+            return PromptTextValidationResult.Invalid;
+
+        if (normalizedValue.Length == 0)
+            return PromptTextValidationResult.Empty;
+
+        try
         {
-            destination.Add(candidate);
+            return StringInfo.ParseCombiningCharacters(normalizedValue).Length <=
+                       MaxPromptTextElements &&
+                   StrictUtf8.GetByteCount(normalizedValue) <=
+                       MaxPromptUtf8Bytes
+                ? PromptTextValidationResult.Valid
+                : PromptTextValidationResult.TooLong;
+        }
+        catch (ArgumentException)
+        {
+            normalizedValue = string.Empty;
+            return PromptTextValidationResult.Invalid;
         }
     }
 
@@ -320,6 +280,9 @@ public sealed class PostItPromptAuthoringModule
         for (int index = 0; index < formC.Length; index++)
         {
             char character = formC[index];
+            if (CharUnicodeInfo.GetUnicodeCategory(formC, index) == UnicodeCategory.Format)
+                return false;
+
             bool isSpace =
                 char.IsWhiteSpace(character) ||
                 char.IsControl(character);
@@ -343,5 +306,13 @@ public sealed class PostItPromptAuthoringModule
 
         normalized = builder.ToString();
         return true;
+    }
+
+    private enum PromptTextValidationResult : byte
+    {
+        Valid = 0,
+        Empty = 1,
+        TooLong = 2,
+        Invalid = 3
     }
 }
