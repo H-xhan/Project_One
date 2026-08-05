@@ -31279,7 +31279,7 @@ MonoBehaviour:
   guessingDurationSeconds: 15
   debugGuessLogs: 0
   enablePostItLiarMode: 1
-  allowTwoPlayerLiarTestMode: 0
+  allowTwoPlayerLiarTestMode: 1
   postItLiarPromptDatabase: {fileID: 11400000, guid: af1b4a74b6996bb4bb95870c9a27500c, type: 2}
   postItLiarSecretRevealSeconds: 5
   postItLiarPromptAuthoringSeconds: 20
@@ -31289,7 +31289,7 @@ MonoBehaviour:
   postItLiarGuessSeconds: 15
   postItLiarVoteSeconds: 15
   postItLiarRevealSeconds: 8
-  debugPostItLiarLogs: 0
+  debugPostItLiarLogs: 1
   worldDropGroundMask:
     serializedVersion: 2
     m_Bits: 0
