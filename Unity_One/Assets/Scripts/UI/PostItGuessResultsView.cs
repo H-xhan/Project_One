@@ -22,6 +22,7 @@ public sealed class PostItGuessResultsView : MonoBehaviour
 
     [Header("Text")]
     [SerializeField] private TMP_Text playerScoresText;
+    [SerializeField] private TMP_Text liarAnswerSummaryText;
     [SerializeField] private string scoresPendingText = "점수 집계 중...";
 
     private readonly StringBuilder _scoreBuilder = new StringBuilder(512);
@@ -43,6 +44,11 @@ public sealed class PostItGuessResultsView : MonoBehaviour
     {
         if (resultCardTemplate != null)
             resultCardTemplate.SetActive(false);
+        if (liarAnswerSummaryText != null)
+        {
+            liarAnswerSummaryText.richText = false;
+            liarAnswerSummaryText.gameObject.SetActive(false);
+        }
     }
 
     private void OnEnable()
@@ -245,6 +251,7 @@ public sealed class PostItGuessResultsView : MonoBehaviour
         }
 
         HideUnusedResultCards(0);
+        SetLiarAnswerSummaryVisible(false);
     }
 
     private bool IsResultsState()
@@ -256,7 +263,55 @@ public sealed class PostItGuessResultsView : MonoBehaviour
     private void RefreshResults()
     {
         RefreshPlayerScores();
+        RefreshLiarAnswerSummary();
         RefreshLocalCardResults();
+    }
+
+    private void RefreshLiarAnswerSummary()
+    {
+        if (liarAnswerSummaryText == null ||
+            _boundRoundManager == null ||
+            !_boundRoundManager.LiarPublicState.IsActive ||
+            !_boundRoundManager.HasLocalLiarReveal)
+        {
+            SetLiarAnswerSummaryVisible(false);
+            return;
+        }
+
+        PostItLiarRevealData reveal =
+            _boundRoundManager.LocalLiarReveal;
+        if (!reveal.IsValid ||
+            reveal.RoundRevision !=
+                _boundRoundManager.LiarPublicState.RoundRevision)
+        {
+            SetLiarAnswerSummaryVisible(false);
+            return;
+        }
+
+        string submissionLabel = reveal.UsedCustomPrompt
+            ? "라이어 입력"
+            : "라이어 선택";
+        string submittedAnswer = reveal.LiarAnswerSubmitted
+            ? reveal.LiarSelectedAnswer.ToString()
+            : "미제출";
+        string verdict = reveal.DeductionCancelled
+            ? "연결 종료로 판정 취소"
+            : reveal.LiarAnswerSubmitted
+                ? reveal.LiarAnswerCorrect ? "정답" : "오답"
+                : "미제출";
+        liarAnswerSummaryText.text =
+            $"실제 정답 · {reveal.SecretAnswer}\n" +
+            $"{submissionLabel} · {submittedAnswer} · {verdict}";
+        SetLiarAnswerSummaryVisible(true);
+    }
+
+    private void SetLiarAnswerSummaryVisible(bool visible)
+    {
+        if (liarAnswerSummaryText != null &&
+            liarAnswerSummaryText.gameObject.activeSelf != visible)
+        {
+            liarAnswerSummaryText.gameObject.SetActive(visible);
+        }
     }
 
     private void RefreshPlayerScores()

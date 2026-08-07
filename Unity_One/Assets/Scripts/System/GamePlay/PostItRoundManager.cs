@@ -2218,10 +2218,7 @@ public class PostItRoundManager : NetworkBehaviour
 
     public void RequestSubmitPostItCustomPrompt(
         string publicTopic,
-        string answer,
-        string distractor0,
-        string distractor1,
-        string distractor2)
+        string answer)
     {
         if (!TryGetLocalPostItLiarRequestContext(
                 PostItLiarPhase.PromptAuthoring,
@@ -2247,20 +2244,11 @@ public class PostItRoundManager : NetworkBehaviour
 
         FixedString128Bytes publicTopicPayload;
         FixedString128Bytes answerPayload;
-        FixedString128Bytes distractor0Payload;
-        FixedString128Bytes distractor1Payload;
-        FixedString128Bytes distractor2Payload;
         try
         {
             publicTopicPayload = new FixedString128Bytes(
                 publicTopic ?? string.Empty);
             answerPayload = new FixedString128Bytes(answer ?? string.Empty);
-            distractor0Payload = new FixedString128Bytes(
-                distractor0 ?? string.Empty);
-            distractor1Payload = new FixedString128Bytes(
-                distractor1 ?? string.Empty);
-            distractor2Payload = new FixedString128Bytes(
-                distractor2 ?? string.Empty);
         }
         catch (ArgumentException)
         {
@@ -2275,10 +2263,7 @@ public class PostItRoundManager : NetworkBehaviour
             phaseRevision,
             playerNetworkObjectId,
             publicTopicPayload,
-            answerPayload,
-            distractor0Payload,
-            distractor1Payload,
-            distractor2Payload);
+            answerPayload);
     }
 
     public void RequestSubmitLiarAnswerChoice(byte shuffledChoiceSlot)
@@ -2300,7 +2285,45 @@ public class PostItRoundManager : NetworkBehaviour
             roundRevision,
             phaseRevision,
             playerNetworkObjectId,
-            shuffledChoiceSlot);
+            shuffledChoiceSlot,
+            default);
+    }
+
+    public void RequestSubmitLiarAnswerText(string answer)
+    {
+        if (!TryGetLocalPostItLiarRequestContext(
+                PostItLiarPhase.LiarGuess,
+                out int roundRevision,
+                out int phaseRevision,
+                out ulong playerNetworkObjectId,
+                out PostItLiarSubmitResult preflightResult))
+        {
+            NotifyPostItLiarSubmissionResult(
+                PostItLiarSubmissionKind.LiarAnswer,
+                preflightResult);
+            return;
+        }
+
+        FixedString128Bytes answerPayload;
+        try
+        {
+            answerPayload = new FixedString128Bytes(
+                answer ?? string.Empty);
+        }
+        catch (ArgumentException)
+        {
+            NotifyPostItLiarSubmissionResult(
+                PostItLiarSubmissionKind.LiarAnswer,
+                PostItLiarSubmitResult.TooLong);
+            return;
+        }
+
+        SubmitPostItLiarAnswerRpc(
+            roundRevision,
+            phaseRevision,
+            playerNetworkObjectId,
+            PostItLiarFixedSet.InvalidSlot,
+            answerPayload);
     }
 
     public void RequestSubmitLiarVote(byte targetStableSlot)
@@ -2368,9 +2391,6 @@ public class PostItRoundManager : NetworkBehaviour
         ulong playerNetworkObjectId,
         FixedString128Bytes publicTopic,
         FixedString128Bytes answer,
-        FixedString128Bytes distractor0,
-        FixedString128Bytes distractor1,
-        FixedString128Bytes distractor2,
         RpcParams rpcParams = default)
     {
         ulong senderClientId = rpcParams.Receive.SenderClientId;
@@ -2401,10 +2421,6 @@ public class PostItRoundManager : NetworkBehaviour
                 if (!_postItPromptAuthoringModule.TryCreateSelection(
                              publicTopic.ToString(),
                              answer.ToString(),
-                             distractor0.ToString(),
-                             distractor1.ToString(),
-                             distractor2.ToString(),
-                             _serverPostItLiarRandom,
                              out PostItPromptSelection selection,
                              out PostItPromptAuthoringRejectionReason rejection))
                 {
@@ -2418,21 +2434,16 @@ public class PostItRoundManager : NetworkBehaviour
                 {
                     result = PostItLiarSubmitResult.InvalidText;
                 }
-                else if (!TryBuildPostItLiarChoiceSet(
-                             selection,
-                             out PostItLiarChoiceSet choices) ||
-                         !_postItDeductionModule.BeginRound(
-                             _serverPostItLiarSlot,
-                             selection.CorrectChoiceSlot,
-                             selection.ChoiceCount))
+                else if (!_postItDeductionModule.BeginFreeTextRound(
+                             _serverPostItLiarSlot))
                 {
                     RestorePostItLiarPresetFallbackPrompt();
-                    result = PostItLiarSubmitResult.InsufficientChoices;
+                    result = PostItLiarSubmitResult.InvalidText;
                 }
                 else
                 {
                     _serverPostItLiarPrompt = selection;
-                    _serverPostItLiarChoices = choices;
+                    _serverPostItLiarChoices = default;
                     _serverPostItLiarPromptFrozen = true;
                     _serverPostItLiarUsedCustomPrompt = true;
                     _serverPostItLiarUsedPresetFallback = false;
@@ -2469,6 +2480,7 @@ public class PostItRoundManager : NetworkBehaviour
         int phaseRevision,
         ulong playerNetworkObjectId,
         byte shuffledChoiceSlot,
+        FixedString128Bytes freeTextAnswer,
         RpcParams rpcParams = default)
     {
         ulong senderClientId = rpcParams.Receive.SenderClientId;
@@ -2482,9 +2494,25 @@ public class PostItRoundManager : NetworkBehaviour
                 out byte stableSlot,
                 out result))
         {
-            result = _postItDeductionModule.SubmitLiarChoice(
-                stableSlot,
-                shuffledChoiceSlot);
+            if (_serverPostItLiarUsedCustomPrompt)
+            {
+                result = _serverPostItLiarPrompt != null &&
+                         shuffledChoiceSlot ==
+                         PostItLiarFixedSet.InvalidSlot
+                    ? _postItDeductionModule.SubmitLiarText(
+                        stableSlot,
+                        freeTextAnswer.ToString(),
+                        _serverPostItLiarPrompt.SecretAnswer)
+                    : PostItLiarSubmitResult.InvalidChoice;
+            }
+            else
+            {
+                result = freeTextAnswer.IsEmpty
+                    ? _postItDeductionModule.SubmitLiarChoice(
+                        stableSlot,
+                        shuffledChoiceSlot)
+                    : PostItLiarSubmitResult.InvalidChoice;
+            }
         }
 
         SendPostItLiarSubmissionResult(
@@ -2620,8 +2648,9 @@ public class PostItRoundManager : NetworkBehaviour
             view.PhaseRevision < 0 ||
             !IsValidReceivedPostItLiarParticipantCount(
                 view.AnonymousClues.Count) ||
-            view.Choices.Count !=
-            PostItPromptDatabaseSO.RequiredChoiceCount ||
+            (view.Choices.Count != 0 &&
+             view.Choices.Count !=
+             PostItPromptDatabaseSO.RequiredChoiceCount) ||
             view.BattleScores.Count != view.AnonymousClues.Count ||
             !CanAcceptLocalPostItLiarPayload(view.RoundRevision))
         {
@@ -7961,24 +7990,17 @@ public class PostItRoundManager : NetworkBehaviour
         {
             case PostItPromptAuthoringRejectionReason.EmptyTopic:
             case PostItPromptAuthoringRejectionReason.EmptyAnswer:
-            case PostItPromptAuthoringRejectionReason.EmptyDistractor:
                 return PostItLiarSubmitResult.Empty;
             case PostItPromptAuthoringRejectionReason.TopicTooLong:
             case PostItPromptAuthoringRejectionReason.AnswerTooLong:
-            case PostItPromptAuthoringRejectionReason.DistractorTooLong:
                 return PostItLiarSubmitResult.TooLong;
             case PostItPromptAuthoringRejectionReason.InvalidCategory:
                 return PostItLiarSubmitResult.InvalidCategory;
             case PostItPromptAuthoringRejectionReason.AnswerMatchesCategory:
                 return PostItLiarSubmitResult.AnswerMatchesCategory;
-            case PostItPromptAuthoringRejectionReason.InsufficientDistractors:
-                return PostItLiarSubmitResult.InsufficientChoices;
             case PostItPromptAuthoringRejectionReason.InvalidTopicText:
             case PostItPromptAuthoringRejectionReason.InvalidAnswerText:
-            case PostItPromptAuthoringRejectionReason.InvalidDistractorText:
                 return PostItLiarSubmitResult.InvalidText;
-            case PostItPromptAuthoringRejectionReason.DuplicateChoice:
-                return PostItLiarSubmitResult.InsufficientChoices;
             default:
                 return PostItLiarSubmitResult.InvalidText;
         }

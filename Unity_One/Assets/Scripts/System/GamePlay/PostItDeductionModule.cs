@@ -17,8 +17,11 @@ public sealed class PostItDeductionModule
     private int _choiceCount;
     private bool _active;
     private bool _acceptingSubmissions;
+    private bool _usesFreeTextAnswer;
     private bool _liarAnswerSubmitted;
     private int _liarSelectedChoiceSlot = -1;
+    private FixedString128Bytes _liarSubmittedAnswer;
+    private bool _liarFreeTextAnswerCorrect;
     private bool _finalized;
     private int _finalizedRoundRevision = -1;
     private PostItLiarRevealData _cachedResult;
@@ -47,6 +50,19 @@ public sealed class PostItDeductionModule
         return true;
     }
 
+    public bool BeginFreeTextRound(byte liarSlot)
+    {
+        Reset();
+        if (liarSlot >= PostItLiarFixedSet.Capacity)
+            return false;
+
+        _liarSlot = liarSlot;
+        _usesFreeTextAnswer = true;
+        _active = true;
+        _acceptingSubmissions = true;
+        return true;
+    }
+
     public void Reset()
     {
         Array.Clear(_voteSubmitted, 0, _voteSubmitted.Length);
@@ -58,8 +74,11 @@ public sealed class PostItDeductionModule
         _choiceCount = 0;
         _active = false;
         _acceptingSubmissions = false;
+        _usesFreeTextAnswer = false;
         _liarAnswerSubmitted = false;
         _liarSelectedChoiceSlot = -1;
+        _liarSubmittedAnswer = default;
+        _liarFreeTextAnswerCorrect = false;
         _finalized = false;
         _finalizedRoundRevision = -1;
         _cachedResult = default;
@@ -81,10 +100,66 @@ public sealed class PostItDeductionModule
         if (!_acceptingSubmissions)
             return PostItLiarSubmitResult.Late;
 
+        if (_usesFreeTextAnswer)
+            return PostItLiarSubmitResult.InvalidChoice;
+
         if (choiceSlot < 0 || choiceSlot >= _choiceCount)
             return PostItLiarSubmitResult.InvalidChoice;
 
         _liarSelectedChoiceSlot = choiceSlot;
+        _liarAnswerSubmitted = true;
+        return PostItLiarSubmitResult.Accepted;
+    }
+
+    public PostItLiarSubmitResult SubmitLiarText(
+        byte requesterSlot,
+        string rawAnswer,
+        string secretAnswer)
+    {
+        if (!_active)
+            return PostItLiarSubmitResult.NotActive;
+
+        if (requesterSlot != _liarSlot)
+            return PostItLiarSubmitResult.WrongRole;
+
+        if (_liarAnswerSubmitted)
+            return PostItLiarSubmitResult.Duplicate;
+
+        if (!_acceptingSubmissions)
+            return PostItLiarSubmitResult.Late;
+
+        if (!_usesFreeTextAnswer)
+            return PostItLiarSubmitResult.InvalidChoice;
+
+        if (!PostItLiarAnswerMatcher.TryEvaluate(
+                rawAnswer,
+                secretAnswer,
+                out string displayAnswer,
+                out bool isCorrect,
+                out PostItLiarAnswerValidationResult validationResult))
+        {
+            switch (validationResult)
+            {
+                case PostItLiarAnswerValidationResult.Empty:
+                    return PostItLiarSubmitResult.Empty;
+                case PostItLiarAnswerValidationResult.TooLong:
+                    return PostItLiarSubmitResult.TooLong;
+                default:
+                    return PostItLiarSubmitResult.InvalidText;
+            }
+        }
+
+        try
+        {
+            _liarSubmittedAnswer =
+                new FixedString128Bytes(displayAnswer);
+        }
+        catch (ArgumentException)
+        {
+            return PostItLiarSubmitResult.TooLong;
+        }
+
+        _liarFreeTextAnswerCorrect = isCorrect;
         _liarAnswerSubmitted = true;
         return PostItLiarSubmitResult.Accepted;
     }
@@ -194,7 +269,11 @@ public sealed class PostItDeductionModule
             battleScores == null ||
             battleScores.Count != participantCount ||
             authoredClues.Count != participantCount ||
-            shuffledChoices.Count != _choiceCount ||
+            (_usesFreeTextAnswer
+                ? shuffledChoices.Count != 0 ||
+                  _choiceCount != 0 ||
+                  _correctChoiceSlot != -1
+                : shuffledChoices.Count != _choiceCount) ||
             secretAnswer.IsEmpty)
         {
             error = "Deduction finalize 입력이 유효하지 않습니다.";
@@ -233,7 +312,10 @@ public sealed class PostItDeductionModule
                 if (entry.StableSlot == _liarSlot)
                 {
                     if (_liarAnswerSubmitted &&
-                        _liarSelectedChoiceSlot == _correctChoiceSlot)
+                        (_usesFreeTextAnswer
+                            ? _liarFreeTextAnswerCorrect
+                            : _liarSelectedChoiceSlot ==
+                              _correctChoiceSlot))
                     {
                         deductionScore = LiarCorrectAnswerScore;
                     }
@@ -278,13 +360,17 @@ public sealed class PostItDeductionModule
         bool liarAnswerCorrect =
             !deductionCancelled &&
             _liarAnswerSubmitted &&
-            _liarSelectedChoiceSlot == _correctChoiceSlot;
+            (_usesFreeTextAnswer
+                ? _liarFreeTextAnswerCorrect
+                : _liarSelectedChoiceSlot == _correctChoiceSlot);
         FixedString128Bytes liarSelectedAnswer =
-            _liarAnswerSubmitted &&
-            _liarSelectedChoiceSlot >= 0 &&
-            _liarSelectedChoiceSlot < shuffledChoices.Count
-                ? shuffledChoices.Get(_liarSelectedChoiceSlot)
-                : default;
+            _usesFreeTextAnswer
+                ? _liarSubmittedAnswer
+                : (_liarAnswerSubmitted &&
+                   _liarSelectedChoiceSlot >= 0 &&
+                   _liarSelectedChoiceSlot < shuffledChoices.Count
+                    ? shuffledChoices.Get(_liarSelectedChoiceSlot)
+                    : default);
 
         result = new PostItLiarRevealData
         {

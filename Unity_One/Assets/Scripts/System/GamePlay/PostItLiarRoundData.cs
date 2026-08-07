@@ -637,6 +637,8 @@ public struct PostItLiarGuessViewData : INetworkSerializable
     public PostItLiarChoiceSet Choices;
     public PostItLiarPlayerResultSet BattleScores;
 
+    public bool UsesFreeTextAnswer => Choices.Count == 0;
+
     public void NetworkSerialize<T>(BufferSerializer<T> serializer)
         where T : IReaderWriter
     {

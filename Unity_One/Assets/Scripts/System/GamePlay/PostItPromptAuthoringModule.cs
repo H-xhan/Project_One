@@ -13,20 +13,13 @@ public enum PostItPromptAuthoringRejectionReason : byte
     AnswerTooLong = 6,
     InvalidAnswerText = 7,
     AnswerMatchesCategory = 8,
-    InsufficientDistractors = 9,
     EmptyTopic = 10,
     TopicTooLong = 11,
-    InvalidTopicText = 12,
-    EmptyDistractor = 13,
-    DistractorTooLong = 14,
-    InvalidDistractorText = 15,
-    DuplicateChoice = 16
+    InvalidTopicText = 12
 }
 
 public sealed class PostItPromptAuthoringModule
 {
-    public const int RequiredDistractorCount =
-        PostItPromptDatabaseSO.RequiredChoiceCount - 1;
     public const int MaxPromptTextElements = 12;
     public const int MaxPromptUtf8Bytes = 96;
     public const int MaxAnswerTextElements = MaxPromptTextElements;
@@ -40,22 +33,11 @@ public sealed class PostItPromptAuthoringModule
     public bool TryCreateSelection(
         string rawPublicTopic,
         string rawAnswer,
-        string rawDistractor0,
-        string rawDistractor1,
-        string rawDistractor2,
-        Random random,
         out PostItPromptSelection selection,
         out PostItPromptAuthoringRejectionReason rejectionReason)
     {
         selection = null;
         rejectionReason = PostItPromptAuthoringRejectionReason.None;
-
-        if (random == null)
-        {
-            rejectionReason =
-                PostItPromptAuthoringRejectionReason.RandomSourceMissing;
-            return false;
-        }
 
         if (!TryValidateTopic(
                 rawPublicTopic,
@@ -70,64 +52,13 @@ public sealed class PostItPromptAuthoringModule
             return false;
         }
 
-        string[] rawDistractors =
-        {
-            rawDistractor0,
-            rawDistractor1,
-            rawDistractor2
-        };
-
-        string[] choices =
-            new string[PostItPromptDatabaseSO.RequiredChoiceCount];
-        choices[0] = answer;
-        for (int index = 0; index < RequiredDistractorCount; index++)
-        {
-            if (!TryValidateDistractor(
-                    rawDistractors[index],
-                    out string distractor,
-                    out rejectionReason))
-            {
-                return false;
-            }
-
-            for (int choiceIndex = 0; choiceIndex <= index; choiceIndex++)
-            {
-                if (string.Equals(
-                        choices[choiceIndex],
-                        distractor,
-                        StringComparison.Ordinal))
-                {
-                    rejectionReason =
-                        PostItPromptAuthoringRejectionReason.DuplicateChoice;
-                    return false;
-                }
-            }
-
-            choices[index + 1] = distractor;
-        }
-
-        for (int index = choices.Length - 1; index > 0; index--)
-        {
-            int swapIndex = random.Next(index + 1);
-            (choices[index], choices[swapIndex]) =
-                (choices[swapIndex], choices[index]);
-        }
-
-        int correctChoiceSlot = Array.IndexOf(choices, answer);
-        if (correctChoiceSlot < 0)
-        {
-            rejectionReason =
-                PostItPromptAuthoringRejectionReason.InvalidAnswerText;
-            return false;
-        }
-
         selection = new PostItPromptSelection(
             CustomAuthoringId,
             publicTopic,
             answer,
-            choices,
             Array.Empty<string>(),
-            correctChoiceSlot);
+            Array.Empty<string>(),
+            -1);
         return true;
     }
 
@@ -139,6 +70,15 @@ public sealed class PostItPromptAuthoringModule
         switch (ValidatePromptText(rawTopic, out normalizedTopic))
         {
             case PromptTextValidationResult.Valid:
+                if (!PostItLiarAnswerMatcher.HasComparableContent(
+                        normalizedTopic))
+                {
+                    normalizedTopic = string.Empty;
+                    rejectionReason =
+                        PostItPromptAuthoringRejectionReason.InvalidTopicText;
+                    return false;
+                }
+
                 rejectionReason = PostItPromptAuthoringRejectionReason.None;
                 return true;
             case PromptTextValidationResult.Empty:
@@ -192,10 +132,21 @@ public sealed class PostItPromptAuthoringModule
                 return false;
         }
 
-        if (string.Equals(
-                normalizedAnswer,
+        if (!PostItLiarAnswerMatcher.HasComparableContent(normalizedAnswer))
+        {
+            normalizedAnswer = string.Empty;
+            rejectionReason =
+                PostItPromptAuthoringRejectionReason.InvalidAnswerText;
+            return false;
+        }
+
+        if (PostItLiarAnswerMatcher.TryEvaluate(
                 publicTopic,
-                StringComparison.Ordinal))
+                normalizedAnswer,
+                out _,
+                out bool topicWouldMatchAnswer,
+                out _) &&
+            topicWouldMatchAnswer)
         {
             normalizedAnswer = string.Empty;
             rejectionReason =
@@ -204,31 +155,6 @@ public sealed class PostItPromptAuthoringModule
         }
 
         return true;
-    }
-
-    private static bool TryValidateDistractor(
-        string rawDistractor,
-        out string normalizedDistractor,
-        out PostItPromptAuthoringRejectionReason rejectionReason)
-    {
-        switch (ValidatePromptText(rawDistractor, out normalizedDistractor))
-        {
-            case PromptTextValidationResult.Valid:
-                rejectionReason = PostItPromptAuthoringRejectionReason.None;
-                return true;
-            case PromptTextValidationResult.Empty:
-                rejectionReason =
-                    PostItPromptAuthoringRejectionReason.EmptyDistractor;
-                return false;
-            case PromptTextValidationResult.TooLong:
-                rejectionReason =
-                    PostItPromptAuthoringRejectionReason.DistractorTooLong;
-                return false;
-            default:
-                rejectionReason =
-                    PostItPromptAuthoringRejectionReason.InvalidDistractorText;
-                return false;
-        }
     }
 
     private static PromptTextValidationResult ValidatePromptText(

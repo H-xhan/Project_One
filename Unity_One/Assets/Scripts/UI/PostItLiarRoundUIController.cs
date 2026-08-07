@@ -41,8 +41,6 @@ public sealed class PostItLiarRoundUIController : MonoBehaviour
     [SerializeField] private TMP_Text promptAuthorRoleText;
     [SerializeField] private TMP_InputField promptAuthorTopicInputField;
     [SerializeField] private TMP_InputField promptAuthorAnswerInputField;
-    [SerializeField] private TMP_InputField[] promptAuthorDistractorInputFields =
-        new TMP_InputField[PostItPromptAuthoringModule.RequiredDistractorCount];
     [SerializeField] private TMP_Text promptAuthorCharacterCountText;
     [SerializeField] private Button promptAuthorSubmitButton;
     [SerializeField] private TMP_Text promptAuthorErrorText;
@@ -67,12 +65,15 @@ public sealed class PostItLiarRoundUIController : MonoBehaviour
     [SerializeField] private TMP_Text liarBattleScoreText;
     [SerializeField] private TMP_Text[] anonymousClueTexts =
         new TMP_Text[PostItLiarFixedSet.Capacity];
+    [SerializeField] private GameObject liarChoiceButtonsRoot;
     [SerializeField] private Button[] liarChoiceButtons =
         new Button[PostItLiarFixedSet.Capacity];
     [SerializeField] private TMP_Text[] liarChoiceLabels =
         new TMP_Text[PostItLiarFixedSet.Capacity];
+    [SerializeField] private TMP_InputField liarGuessAnswerInputField;
     [SerializeField] private TMP_Text liarGuessValidationText;
     [SerializeField] private Button liarGuessConfirmButton;
+    [SerializeField] private TMP_Text liarGuessConfirmButtonLabel;
 
     [Header("Citizen Waiting")]
     [SerializeField] private TMP_Text citizenBattleScoreText;
@@ -122,11 +123,14 @@ public sealed class PostItLiarRoundUIController : MonoBehaviour
     private bool _buttonListenersRegistered;
     private bool _requiredArraysValid;
     private bool _promptAuthorInputsValid;
+    private bool _liarGuessControlsValid;
+    private string _liarAnswerServerMessage = string.Empty;
 
     private void Awake()
     {
         _requiredArraysValid = HasRequiredArraySizes();
         _promptAuthorInputsValid = HasRequiredPromptAuthorInputFields();
+        _liarGuessControlsValid = HasRequiredLiarGuessControls();
         ConfigureInputField();
         ConfigureDynamicText();
         CaptureButtonBaseColors();
@@ -244,11 +248,15 @@ public sealed class PostItLiarRoundUIController : MonoBehaviour
                 break;
         }
 
-        SetText(
-            target,
-            kind == PostItLiarSubmissionKind.CustomPrompt
-                ? GetCustomPromptSubmitResultLabel(result)
-                : GetSubmitResultLabel(result));
+        string resultLabel = kind == PostItLiarSubmissionKind.CustomPrompt
+            ? GetCustomPromptSubmitResultLabel(result)
+            : kind == PostItLiarSubmissionKind.LiarAnswer
+                ? GetLiarAnswerSubmitResultLabel(result)
+                : GetSubmitResultLabel(result);
+        if (kind == PostItLiarSubmissionKind.LiarAnswer)
+            _liarAnswerServerMessage = resultLabel;
+
+        SetText(target, resultLabel);
         ApplyCurrentState();
     }
 
@@ -342,6 +350,8 @@ public sealed class PostItLiarRoundUIController : MonoBehaviour
 
         if (state.Phase != PostItLiarPhase.PromptAuthoring)
             ReleasePromptAuthorInputFocus();
+        if (state.Phase != PostItLiarPhase.LiarGuess)
+            ReleaseInputFieldFocus(liarGuessAnswerInputField);
 
         _lastDeadlineSeconds = int.MinValue;
         RefreshDeadline(true);
@@ -368,15 +378,15 @@ public sealed class PostItLiarRoundUIController : MonoBehaviour
             SetText(
                 promptAuthorWaitingRoleText,
                 privateRole.Role == PostItLiarRole.Liar
-                    ? "당신은 라이어입니다.\n시민이 주제와 선택지를 정하고 있습니다."
-                    : "당신은 시민입니다.\n출제자가 주제와 선택지를 정하고 있습니다.");
+                    ? "당신은 라이어입니다.\n시민이 주제와 정답을 정하고 있습니다."
+                    : "당신은 시민입니다.\n출제자가 주제와 정답을 정하고 있습니다.");
             return;
         }
 
         SetPromptAuthorPanelVisible(true);
         SetText(
             promptAuthorRoleText,
-            "당신은 시민 출제자입니다.\n이번 라운드의 주제·정답·오답 3개를 정하세요.");
+            "당신은 시민 출제자입니다.\n이번 라운드의 주제와 정답을 정하세요.");
         RefreshPromptAuthorInputState();
     }
 
@@ -441,6 +451,12 @@ public sealed class PostItLiarRoundUIController : MonoBehaviour
             SetText(liarBattleScoreText, "난투 점수 동기화 중...");
             ClearTextArray(anonymousClueTexts);
             ClearTextArray(liarChoiceLabels);
+            SetActive(liarChoiceButtonsRoot, false);
+            SetActive(
+                liarGuessAnswerInputField != null
+                    ? liarGuessAnswerInputField.gameObject
+                    : null,
+                false);
             SetLiarChoiceInteractable(false);
             if (liarGuessConfirmButton != null)
                 liarGuessConfirmButton.interactable = false;
@@ -489,6 +505,29 @@ public sealed class PostItLiarRoundUIController : MonoBehaviour
                 GetArrayItem(liarChoiceLabels, index),
                 view.Choices.Get(index).ToString());
         }
+
+        if (view.UsesFreeTextAnswer)
+        {
+            SetActive(liarChoiceButtonsRoot, false);
+            SetLiarChoiceInteractable(false);
+            SetActive(
+                liarGuessAnswerInputField != null
+                    ? liarGuessAnswerInputField.gameObject
+                    : null,
+                true);
+            SetText(liarGuessConfirmButtonLabel, "정답 제출");
+            RefreshLiarAnswerInputState();
+            return;
+        }
+
+        SetActive(liarChoiceButtonsRoot, true);
+        SetActive(
+            liarGuessAnswerInputField != null
+                ? liarGuessAnswerInputField.gameObject
+                : null,
+            false);
+        ReleaseInputFieldFocus(liarGuessAnswerInputField);
+        SetText(liarGuessConfirmButtonLabel, "선택 확정");
 
         bool canChoose =
             !_boundRoundManager.HasSubmittedLiarAnswer &&
@@ -641,22 +680,31 @@ public sealed class PostItLiarRoundUIController : MonoBehaviour
             _boundRoundManager.LocalLiarReveal;
         SetText(revealLiarText, $"실제 라이어 · P{reveal.LiarSlot + 1}");
         SetText(revealSecretAnswerText, $"실제 정답 · {reveal.SecretAnswer}");
+        string liarAnswerLabel = reveal.UsedCustomPrompt
+            ? "라이어 입력"
+            : "라이어 선택";
 
         if (reveal.DeductionCancelled)
         {
+            string submittedAnswer = reveal.LiarAnswerSubmitted
+                ? reveal.LiarSelectedAnswer.ToString()
+                : "미제출";
             SetText(
                 revealLiarSelectedAnswerText,
-                "연결 종료로 추리 점수가 취소되었습니다");
+                $"{liarAnswerLabel} · {submittedAnswer} · " +
+                "연결 종료로 판정 취소");
         }
         else if (!reveal.LiarAnswerSubmitted)
         {
-            SetText(revealLiarSelectedAnswerText, "라이어 선택 · 미제출");
+            SetText(
+                revealLiarSelectedAnswerText,
+                $"{liarAnswerLabel} · 미제출");
         }
         else
         {
             SetText(
                 revealLiarSelectedAnswerText,
-                $"라이어 선택 · {reveal.LiarSelectedAnswer} · " +
+                $"{liarAnswerLabel} · {reveal.LiarSelectedAnswer} · " +
                 (reveal.LiarAnswerCorrect ? "정답" : "오답"));
         }
 
@@ -807,9 +855,6 @@ public sealed class PostItLiarRoundUIController : MonoBehaviour
         string answer = promptAuthorAnswerInputField != null
             ? promptAuthorAnswerInputField.text ?? string.Empty
             : string.Empty;
-        string distractor0 = GetPromptAuthorDistractorText(0);
-        string distractor1 = GetPromptAuthorDistractorText(1);
-        string distractor2 = GetPromptAuthorDistractorText(2);
 
         TryGetTextMetrics(
             topic,
@@ -823,25 +868,6 @@ public sealed class PostItLiarRoundUIController : MonoBehaviour
             PostItPromptAuthoringModule.MaxPromptUtf8Bytes,
             out int answerTextElementCount,
             out int answerUtf8ByteCount);
-        TryGetTextMetrics(
-            distractor0,
-            PostItPromptAuthoringModule.MaxPromptTextElements,
-            PostItPromptAuthoringModule.MaxPromptUtf8Bytes,
-            out int distractor0TextElementCount,
-            out int distractor0Utf8ByteCount);
-        TryGetTextMetrics(
-            distractor1,
-            PostItPromptAuthoringModule.MaxPromptTextElements,
-            PostItPromptAuthoringModule.MaxPromptUtf8Bytes,
-            out int distractor1TextElementCount,
-            out int distractor1Utf8ByteCount);
-        TryGetTextMetrics(
-            distractor2,
-            PostItPromptAuthoringModule.MaxPromptTextElements,
-            PostItPromptAuthoringModule.MaxPromptUtf8Bytes,
-            out int distractor2TextElementCount,
-            out int distractor2Utf8ByteCount);
-
         _builder.Clear();
         _builder.Append("주제 ")
             .Append(topicTextElementCount)
@@ -851,23 +877,11 @@ public sealed class PostItLiarRoundUIController : MonoBehaviour
             .Append(answerTextElementCount)
             .Append('/')
             .Append(answerUtf8ByteCount)
-            .Append("B\n오답 ")
-            .Append(distractor0TextElementCount)
-            .Append('/')
-            .Append(distractor0Utf8ByteCount)
-            .Append("B · ")
-            .Append(distractor1TextElementCount)
-            .Append('/')
-            .Append(distractor1Utf8ByteCount)
-            .Append("B · ")
-            .Append(distractor2TextElementCount)
-            .Append('/')
-            .Append(distractor2Utf8ByteCount)
-            .Append("B (각 ")
+            .Append("B · 각 ")
             .Append(PostItPromptAuthoringModule.MaxPromptTextElements)
             .Append("자/")
             .Append(PostItPromptAuthoringModule.MaxPromptUtf8Bytes)
-            .Append("B)");
+            .Append('B');
         SetText(promptAuthorCharacterCountText, _builder.ToString());
 
         bool alreadySubmitted =
@@ -878,18 +892,6 @@ public sealed class PostItLiarRoundUIController : MonoBehaviour
             promptAuthorTopicInputField.interactable = canEdit;
         if (promptAuthorAnswerInputField != null)
             promptAuthorAnswerInputField.interactable = canEdit;
-        if (promptAuthorDistractorInputFields != null)
-        {
-            for (int index = 0;
-                 index < promptAuthorDistractorInputFields.Length;
-                 index++)
-            {
-                TMP_InputField inputField =
-                    promptAuthorDistractorInputFields[index];
-                if (inputField != null)
-                    inputField.interactable = canEdit;
-            }
-        }
         if (promptAuthorSubmitButton != null)
             promptAuthorSubmitButton.interactable = canEdit;
 
@@ -920,20 +922,7 @@ public sealed class PostItLiarRoundUIController : MonoBehaviour
 
         _boundRoundManager.RequestSubmitPostItCustomPrompt(
             promptAuthorTopicInputField.text ?? string.Empty,
-            promptAuthorAnswerInputField.text ?? string.Empty,
-            GetPromptAuthorDistractorText(0),
-            GetPromptAuthorDistractorText(1),
-            GetPromptAuthorDistractorText(2));
-    }
-
-    private string GetPromptAuthorDistractorText(int index)
-    {
-        TMP_InputField inputField = GetArrayItem(
-            promptAuthorDistractorInputFields,
-            index);
-        return inputField != null
-            ? inputField.text ?? string.Empty
-            : string.Empty;
+            promptAuthorAnswerInputField.text ?? string.Empty);
     }
 
     private void RefreshClueInputState(PostItLiarPhase phase)
@@ -1017,19 +1006,86 @@ public sealed class PostItLiarRoundUIController : MonoBehaviour
             liarGuessConfirmButton.interactable = true;
     }
 
-    private void SubmitLiarChoice()
+    private void HandleLiarAnswerTextChanged(string value)
+    {
+        _ = value;
+        _liarAnswerServerMessage = string.Empty;
+        RefreshLiarAnswerInputState();
+    }
+
+    private void RefreshLiarAnswerInputState()
+    {
+        string answer = liarGuessAnswerInputField != null
+            ? liarGuessAnswerInputField.text ?? string.Empty
+            : string.Empty;
+        bool textValid = TryGetTextMetrics(
+            answer,
+            PostItLiarAnswerMatcher.MaxTextElements,
+            PostItLiarAnswerMatcher.MaxUtf8Bytes,
+            out int textElementCount,
+            out int utf8ByteCount);
+        bool alreadySubmitted =
+            _boundRoundManager != null &&
+            _boundRoundManager.HasSubmittedLiarAnswer;
+        bool canEdit =
+            !alreadySubmitted &&
+            _liarGuessControlsValid;
+
+        if (liarGuessAnswerInputField != null)
+            liarGuessAnswerInputField.interactable = canEdit;
+        if (liarGuessConfirmButton != null)
+        {
+            liarGuessConfirmButton.interactable =
+                canEdit &&
+                textValid &&
+                !string.IsNullOrWhiteSpace(answer);
+        }
+
+        if (!string.IsNullOrEmpty(_liarAnswerServerMessage))
+        {
+            SetText(liarGuessValidationText, _liarAnswerServerMessage);
+        }
+        else if (alreadySubmitted)
+        {
+            SetText(liarGuessValidationText, "제출 완료 · 수정할 수 없습니다");
+        }
+        else
+        {
+            SetText(
+                liarGuessValidationText,
+                $"예상 정답 {textElementCount}/" +
+                $"{PostItLiarAnswerMatcher.MaxTextElements} · " +
+                $"{utf8ByteCount}/{PostItLiarAnswerMatcher.MaxUtf8Bytes}B · " +
+                "띄어쓰기·문장부호·영문 대소문자 무시");
+        }
+    }
+
+    private void SubmitLiarAnswer()
     {
         if (_boundRoundManager == null ||
             liarGuessConfirmButton == null ||
             !liarGuessConfirmButton.interactable ||
-            _selectedLiarChoice < 0 ||
-            _selectedLiarChoice >= PostItLiarFixedSet.Capacity)
+            !_boundRoundManager.HasLocalLiarGuessView)
         {
             return;
         }
 
-        _boundRoundManager.RequestSubmitLiarAnswerChoice(
-            (byte)_selectedLiarChoice);
+        if (_boundRoundManager.LocalLiarGuessView.UsesFreeTextAnswer)
+        {
+            if (liarGuessAnswerInputField == null)
+                return;
+
+            _boundRoundManager.RequestSubmitLiarAnswerText(
+                liarGuessAnswerInputField.text ?? string.Empty);
+            return;
+        }
+
+        if (_selectedLiarChoice >= 0 &&
+            _selectedLiarChoice < PostItLiarFixedSet.Capacity)
+        {
+            _boundRoundManager.RequestSubmitLiarAnswerChoice(
+                (byte)_selectedLiarChoice);
+        }
     }
 
     private void SelectVoteCandidate(int stableSlot)
@@ -1083,29 +1139,19 @@ public sealed class PostItLiarRoundUIController : MonoBehaviour
             promptAuthorAnswerInputField.onValueChanged.AddListener(
                 HandlePromptAuthorTextChanged);
         }
-        if (promptAuthorDistractorInputFields != null)
-        {
-            for (int index = 0;
-                 index < promptAuthorDistractorInputFields.Length;
-                 index++)
-            {
-                TMP_InputField inputField =
-                    promptAuthorDistractorInputFields[index];
-                if (inputField != null)
-                {
-                    inputField.onValueChanged.AddListener(
-                        HandlePromptAuthorTextChanged);
-                }
-            }
-        }
         if (promptAuthorSubmitButton != null)
             promptAuthorSubmitButton.onClick.AddListener(SubmitPromptAuthoring);
         if (clueInputField != null)
             clueInputField.onValueChanged.AddListener(HandleClueTextChanged);
         if (clueSubmitButton != null)
             clueSubmitButton.onClick.AddListener(SubmitClue);
+        if (liarGuessAnswerInputField != null)
+        {
+            liarGuessAnswerInputField.onValueChanged.AddListener(
+                HandleLiarAnswerTextChanged);
+        }
         if (liarGuessConfirmButton != null)
-            liarGuessConfirmButton.onClick.AddListener(SubmitLiarChoice);
+            liarGuessConfirmButton.onClick.AddListener(SubmitLiarAnswer);
         if (voteConfirmButton != null)
             voteConfirmButton.onClick.AddListener(SubmitVote);
 
@@ -1151,21 +1197,6 @@ public sealed class PostItLiarRoundUIController : MonoBehaviour
             promptAuthorAnswerInputField.onValueChanged.RemoveListener(
                 HandlePromptAuthorTextChanged);
         }
-        if (promptAuthorDistractorInputFields != null)
-        {
-            for (int index = 0;
-                 index < promptAuthorDistractorInputFields.Length;
-                 index++)
-            {
-                TMP_InputField inputField =
-                    promptAuthorDistractorInputFields[index];
-                if (inputField != null)
-                {
-                    inputField.onValueChanged.RemoveListener(
-                        HandlePromptAuthorTextChanged);
-                }
-            }
-        }
         if (promptAuthorSubmitButton != null)
         {
             promptAuthorSubmitButton.onClick.RemoveListener(
@@ -1175,8 +1206,13 @@ public sealed class PostItLiarRoundUIController : MonoBehaviour
             clueInputField.onValueChanged.RemoveListener(HandleClueTextChanged);
         if (clueSubmitButton != null)
             clueSubmitButton.onClick.RemoveListener(SubmitClue);
+        if (liarGuessAnswerInputField != null)
+        {
+            liarGuessAnswerInputField.onValueChanged.RemoveListener(
+                HandleLiarAnswerTextChanged);
+        }
         if (liarGuessConfirmButton != null)
-            liarGuessConfirmButton.onClick.RemoveListener(SubmitLiarChoice);
+            liarGuessConfirmButton.onClick.RemoveListener(SubmitLiarAnswer);
         if (voteConfirmButton != null)
             voteConfirmButton.onClick.RemoveListener(SubmitVote);
 
@@ -1208,16 +1244,7 @@ public sealed class PostItLiarRoundUIController : MonoBehaviour
     {
         ConfigureSingleLineInputField(promptAuthorTopicInputField);
         ConfigureSingleLineInputField(promptAuthorAnswerInputField);
-        if (promptAuthorDistractorInputFields != null)
-        {
-            for (int index = 0;
-                 index < promptAuthorDistractorInputFields.Length;
-                 index++)
-            {
-                ConfigureSingleLineInputField(
-                    promptAuthorDistractorInputFields[index]);
-            }
-        }
+        ConfigureSingleLineInputField(liarGuessAnswerInputField);
         ConfigureSingleLineInputField(clueInputField);
     }
 
@@ -1253,6 +1280,7 @@ public sealed class PostItLiarRoundUIController : MonoBehaviour
         SetRichTextDisabled(clueValidationText);
         SetRichTextDisabled(liarBattleScoreText);
         SetRichTextDisabled(liarGuessValidationText);
+        SetRichTextDisabled(liarGuessConfirmButtonLabel);
         SetRichTextDisabled(citizenBattleScoreText);
         SetRichTextDisabled(citizenWaitingText);
         SetRichTextDisabled(voteValidationText);
@@ -1358,24 +1386,16 @@ public sealed class PostItLiarRoundUIController : MonoBehaviour
         _selectedLiarChoice = -1;
         _selectedVoteSlot = -1;
         _lastDeadlineSeconds = int.MinValue;
+        _liarAnswerServerMessage = string.Empty;
 
         ReleasePromptAuthorInputFocus();
+        ReleaseInputFieldFocus(liarGuessAnswerInputField);
         if (promptAuthorTopicInputField != null)
             promptAuthorTopicInputField.SetTextWithoutNotify(string.Empty);
         if (promptAuthorAnswerInputField != null)
             promptAuthorAnswerInputField.SetTextWithoutNotify(string.Empty);
-        if (promptAuthorDistractorInputFields != null)
-        {
-            for (int index = 0;
-                 index < promptAuthorDistractorInputFields.Length;
-                 index++)
-            {
-                TMP_InputField inputField =
-                    promptAuthorDistractorInputFields[index];
-                if (inputField != null)
-                    inputField.SetTextWithoutNotify(string.Empty);
-            }
-        }
+        if (liarGuessAnswerInputField != null)
+            liarGuessAnswerInputField.SetTextWithoutNotify(string.Empty);
 
         if (clueInputField != null)
             clueInputField.SetTextWithoutNotify(string.Empty);
@@ -1397,6 +1417,7 @@ public sealed class PostItLiarRoundUIController : MonoBehaviour
         SetText(clueValidationText, string.Empty);
         SetText(liarBattleScoreText, string.Empty);
         SetText(liarGuessValidationText, string.Empty);
+        SetText(liarGuessConfirmButtonLabel, string.Empty);
         SetText(citizenBattleScoreText, string.Empty);
         SetText(citizenWaitingText, string.Empty);
         SetText(voteValidationText, string.Empty);
@@ -1485,15 +1506,6 @@ public sealed class PostItLiarRoundUIController : MonoBehaviour
     {
         ReleaseInputFieldFocus(promptAuthorTopicInputField);
         ReleaseInputFieldFocus(promptAuthorAnswerInputField);
-        if (promptAuthorDistractorInputFields == null)
-            return;
-
-        for (int index = 0;
-             index < promptAuthorDistractorInputFields.Length;
-             index++)
-        {
-            ReleaseInputFieldFocus(promptAuthorDistractorInputFields[index]);
-        }
     }
 
     private static void ReleaseInputFieldFocus(TMP_InputField inputField)
@@ -1650,17 +1662,33 @@ public sealed class PostItLiarRoundUIController : MonoBehaviour
             case PostItLiarSubmitResult.Accepted:
                 return "출제 완료 · 수정할 수 없습니다";
             case PostItLiarSubmitResult.Empty:
-                return "주제·정답·오답 3개를 모두 입력하세요";
+                return "주제와 정답을 모두 입력하세요";
             case PostItLiarSubmitResult.TooLong:
                 return "각 입력은 12자 또는 UTF-8 96B 이하여야 합니다";
             case PostItLiarSubmitResult.InvalidCategory:
                 return "주제 입력을 확인하세요";
             case PostItLiarSubmitResult.AnswerMatchesCategory:
                 return "주제와 같은 정답은 사용할 수 없습니다";
-            case PostItLiarSubmitResult.InsufficientChoices:
-                return "서로 다른 오답 3개를 입력하세요";
             case PostItLiarSubmitResult.InvalidText:
-                return "입력값을 확인하고 정답·오답을 서로 다르게 작성하세요";
+                return "주제와 정답 입력값을 확인하세요";
+            default:
+                return GetSubmitResultLabel(result);
+        }
+    }
+
+    private static string GetLiarAnswerSubmitResultLabel(
+        PostItLiarSubmitResult result)
+    {
+        switch (result)
+        {
+            case PostItLiarSubmitResult.Accepted:
+                return "제출 완료 · 수정할 수 없습니다";
+            case PostItLiarSubmitResult.Empty:
+                return "예상 정답을 입력하세요";
+            case PostItLiarSubmitResult.TooLong:
+                return "12자 또는 UTF-8 96B 제한을 초과했습니다";
+            case PostItLiarSubmitResult.InvalidText:
+                return "입력 문자열을 확인하세요";
             default:
                 return GetSubmitResultLabel(result);
         }
@@ -1689,28 +1717,29 @@ public sealed class PostItLiarRoundUIController : MonoBehaviour
     {
         bool valid =
             promptAuthorTopicInputField != null &&
-            promptAuthorAnswerInputField != null &&
-            HasCapacity(
-                promptAuthorDistractorInputFields,
-                PostItPromptAuthoringModule.RequiredDistractorCount);
-        if (valid)
-        {
-            for (int index = 0;
-                 index < promptAuthorDistractorInputFields.Length;
-                 index++)
-            {
-                if (promptAuthorDistractorInputFields[index] == null)
-                {
-                    valid = false;
-                    break;
-                }
-            }
-        }
+            promptAuthorAnswerInputField != null;
 
         if (!valid)
         {
             Debug.LogError(
-                "[PostItLiarRoundUIController] 출제 UI에는 주제·정답·오답 3개 입력 연결이 필요합니다.",
+                "[PostItLiarRoundUIController] 출제 UI에는 주제와 정답 입력 연결이 필요합니다.",
+                this);
+        }
+
+        return valid;
+    }
+
+    private bool HasRequiredLiarGuessControls()
+    {
+        bool valid =
+            liarChoiceButtonsRoot != null &&
+            liarGuessAnswerInputField != null &&
+            liarGuessConfirmButton != null &&
+            liarGuessConfirmButtonLabel != null;
+        if (!valid)
+        {
+            Debug.LogError(
+                "[PostItLiarRoundUIController] 라이어 선택·자유 입력 UI 연결을 확인하세요.",
                 this);
         }
 
